@@ -16,6 +16,7 @@
 | **ADR** | `docs/adr/ADR-<n>-<slug>.md` | A decision already made, with the alternative it beat and what it costs. | Permanent once accepted. |
 | **RFC** | `docs/rfc/RFC-<n>-<slug>.md` | A change proposed and not yet built: required behaviour, acceptance contract, open confirmations. | Created on proposal; when built + reviewed, fold the settled part into the spec and strike the RFC. |
 | **research / audit** | `docs/research/`, `docs/audits/` | Dated "as of" evidence. | Immutable. Superseded claims stay in the file; superseded designs are struck by the RFC that replaces them. |
+| **release notes** | `docs/releases.md` | What changed before a manifest version is pinned: one section per version, an entry per PR or commit, plus any deploy step it needs. | Appended while a version is built; closed when `pnpm update-protocol <version>` pins it (`config/<version>.json` is the machine record). |
 | **scratch** | `.work/` — gitignored | Working notes for a task in flight: investigation output, probe results, a per-task pick-up contract if the session needs one. | Deleted freely. Never cited, never durable, per-machine. |
 
 ## Routing rule

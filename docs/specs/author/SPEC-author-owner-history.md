@@ -484,9 +484,11 @@ instead and reports that it did: the height that would make this a historical qu
 recorded, and the present tense is the only one left to ask. Such a version opens for a current
 owner, not for the owner it was written under.
 
-`canAuthor` in `src/shared/src/gates` is that gate, and `canRead` asks it as its ownership half:
-it takes the height from the drafts log's `blocksOf` and puts `isOwnerAt` in place of the live read
-on the append-block path, so a signer who has since been removed still reads what they wrote. The
+`canAuthor` in `src/shared/src/gates` is that gate, and the author is one of the two ways into
+`canRead`: it takes the height from the drafts log's `blocksOf` and puts `isOwnerAt` in place of the
+live read on the append-block path, so a signer who has since been removed still reads what they
+wrote. The other way is live ownership of the reader Safe, for the publication Safe and reviewers,
+which run no drafts log. The
 write gates keep the live read, because a write is admitted now: `canPublish` and `canReset` ask
 who owns the Safe today, which is why an old version is readable but not rewritable.
 
@@ -559,9 +561,9 @@ whoever made the proxy named that Safe. The rules:
 ## Open questions
 
 1. **The gate's shape.** Settled: `canAuthor` in `src/shared/src/gates` takes the author Safe,
-   the signer and no block, reads the height from the drafts log itself, and is the ownership
-   half of `canRead`. `canPublish` and `canReset` keep the live `isOwner`, because a write is
-   admitted now.
+   the signer and no block, reads the height from the drafts log itself, and is the author half
+   of `canRead`; the other half is live ownership of the reader Safe the publication admitted.
+   `canPublish` and `canReset` keep the live `isOwner`, because a write is admitted now.
 2. **Which package owns the read helper?** Settled: the gate is in `@s2s/soul2soul-shared`
    (`src/shared/src/gates`), beside the other gates, which is where the trust-anchor rule above
    belongs. This package owns the ABI, the module and the deploy script.

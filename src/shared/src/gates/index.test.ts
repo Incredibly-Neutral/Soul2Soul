@@ -221,9 +221,13 @@ describe('canRead', () => {
   });
 
   it('refuses a signer who only became an owner after the version was appended', async () => {
-    const { read, readValue } = makeChain({ isOwnerAt: false, isOwner: true });
+    // The Safe is the genesis author, so the append-block answer is the whole
+    // answer: the live owner set is never asked, and owning it today is not a
+    // way back in.
+    const { read, readValue, asked } = makeChain({ isOwnerAt: false, isOwner: true });
 
     expect(await canRead(read, readValue, HEX32, SAFE, PUBLICATION, SIGNER)).toBe(false);
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
   });
 
   it('refuses when the publication answers no for this reader, even for its owner', async () => {
@@ -232,16 +236,43 @@ describe('canRead', () => {
     expect(await canRead(read, readValue, HEX32, SAFE, PUBLICATION, SIGNER)).toBe(false);
   });
 
-  it('refuses when the Safe s modules cannot be resolved, rather than asking the live owner set', async () => {
-    // No drafts log means no `authorOf` and no height: the ownership half has
-    // nothing to answer, and a live `isOwner` would answer a different question.
-    const { read, readValue, asked } = makeChain({ modules: false, isOwner: true });
+  it('asks the live owner set of a Safe that runs no drafts module, never a block', async () => {
+    // The publication Safe has no drafts log and no history: the author half has
+    // nothing to answer there, and ownership is the plain live question.
+    const { read, readValue, asked } = makeChain({ modules: false, isOwner: false });
 
     expect(await canRead(read, readValue, HEX32, SAFE, PUBLICATION, SIGNER)).toBe(false);
 
-    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
     expect(asked.some((a) => a.fn === 'isOwnerAt')).toBe(false);
     expect(asked.some((a) => a.fn === 'blocksOf')).toBe(false);
+    expect(asked.find((a) => a.fn === 'isOwner')!.target).toBe(SAFE);
+  });
+
+  it('admits the publication Safe s owner under an agreement it does not author', async () => {
+    // GATES-4: a holder may ask for a build of a publication whose manuscripts
+    // they do not own. The reader is the publication Safe, admitted as such.
+    const { read, readValue, asked } = makeChain({ modules: false, isOwner: true });
+
+    expect(await canRead(read, readValue, HEX32, PUBLICATION, PUBLICATION, SIGNER)).toBe(true);
+
+    expect(asked.find((a) => a.fn === 'canRead')!.args).toEqual([HEX32, PUBLICATION]);
+    expect(asked.find((a) => a.fn === 'isOwner')!.target).toBe(PUBLICATION);
+    expect(asked.find((a) => a.fn === 'isOwner')!.args).toEqual([SIGNER]);
+  });
+
+  it('admits a reviewer s owner, whom the publication admitted as a reviewer', async () => {
+    // Reviewers are their own list on the contract; the gate asks only whether
+    // the signer owns the Safe the contract named.
+    const { read, readValue, asked } = makeChain({ modules: false, isOwner: true });
+
+    expect(await canRead(read, readValue, HEX32, SAFE, PUBLICATION, SIGNER)).toBe(true);
+    expect(asked.find((a) => a.fn === 'isOwner')!.target).toBe(SAFE);
+  });
+
+  it('refuses a signer who owns none of the Safe the publication admitted', async () => {
+    const { read, readValue } = makeChain({ modules: false, isOwner: false });
+
+    expect(await canRead(read, readValue, HEX32, SAFE, PUBLICATION, SIGNER)).toBe(false);
   });
 
   it('admits a version with no height on a Safe that runs no owner-history module', async () => {

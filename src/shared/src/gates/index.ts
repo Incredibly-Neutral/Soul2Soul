@@ -406,16 +406,25 @@ const authorVerdict = async (
 /**
  * May this signer read this content item?
  *
- * Two questions, both required: the publication's own `canRead(genesis, safe)`
- * — it is the contract that decides which agreements, offers and reviewer sets
- * admit a reader — and {@link canAuthor}, its ownership half. The ownership
- * question, the block it is judged at, and its live answer where the log records
- * no height are `canAuthor`'s, stated there once and not repeated here.
+ * The publication's own `canRead(genesis, reader)` decides which agreements,
+ * offers and reviewer lists admit the reader, and only three identities are ever
+ * admitted: the publication Safe, the genesis author, and a reviewer. The signer
+ * must then prove they own one of them.
+ *
+ * The genesis author's Safe is judged by {@link canAuthor}, at the append block:
+ * the author's right outlives a rotation, and does not open to a key added
+ * afterwards. Every other admitted reader, the publication Safe and a reviewer
+ * alike, is judged live: they are holders now or they are not, and neither runs
+ * the drafts or history modules the author's read needs. Refusing the holder
+ * would let `canRead` veto a build the protocol owes (GATES-4).
+ *
+ * The author half's block, its live answer where the log records no height, and
+ * its refusals are `canAuthor`'s, stated there once and not repeated here.
  *
  * `contentId` is normalised to bytes32 the same way the writes normalise it: an
  * already-hashed 0x+64hex id passes through, anything else (a raw CID, an
  * objectId) is keccak256-hashed. Pass `toId` when your host has no ethers. The
- * one normalised id answers both questions.
+ * one normalised id answers every question.
  */
 export const canRead = async (
   read: GateRead,
@@ -433,7 +442,18 @@ export const canRead = async (
     authorVerdict(read, readValue, genesis, safeAddress, signerAddress),
   ]);
 
-  return admitted && isAuthor.ok;
+  if (!admitted) return false;
+  if (isAuthor.ok) return true;
+
+  // The verdict named the genesis for the Safe we asked about: that Safe is the
+  // author's, so the append-block answer is the whole answer. A newer owner does
+  // not inherit the read.
+  if (isAuthor.author && sameAddress(isAuthor.author, safeAddress)) return false;
+
+  // Any other admitted reader is the publication Safe or a reviewer Safe, and
+  // the proof is ownership of the Safe that was named, read live. `isOwnerAt`
+  // with no block is exactly `isOwner`; the block never applies to these Safes.
+  return isOwnerAt(read, safeAddress, signerAddress);
 };
 
 /**

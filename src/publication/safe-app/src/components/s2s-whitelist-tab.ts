@@ -8,6 +8,7 @@ import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import './s2s-check.js';
+import './s2s-confirm-modal.js';
 import './s2s-sliding-add-button.js';
 import './copy-hash.js';
 import './pet-name.js';
@@ -23,6 +24,8 @@ export class S2SWhitelistTab extends LitElement {
     result: 'idle' | 'pending' | 'pass' | 'fail' | 'error';
     message: string;
   } = { result: 'idle', message: '' };
+  /** The removal waiting on the confirm modal, or null when none is open. */
+  @state() private pendingRemoval: { kind: 'author' | 'dev'; address: string } | null = null;
 
   static styles = [
     typograhyStyles,
@@ -150,21 +153,13 @@ export class S2SWhitelistTab extends LitElement {
     }
   }
 
-  private async removeAuthor(address: string) {
-    if (!confirm(`Remove ${address} from author whitelist?`)) {
-      return;
-    }
-
-    try {
-      await this.safeIntegration.removeWhitelistedAuthor(address);
-      this.showNotification('Author removed! Transaction pending approval.', 'success');
-
-      // Optimistically update
-      this.authors = this.authors.filter((a) => a !== address);
-    } catch (error) {
-      console.error('Error removing author:', error);
-      this.showNotification('Failed to remove author. Please try again.', 'error');
-    }
+  /**
+   * Ask through <s2s-confirm-modal>, never window.confirm: the Safe App runs in
+   * a cross-origin iframe, where the browser suppresses confirm() and answers
+   * false without showing anything, so the click appeared to do nothing.
+   */
+  private removeAuthor(address: string) {
+    this.pendingRemoval = { kind: 'author', address };
   }
 
   private async addDev(address: string) {
@@ -195,20 +190,41 @@ export class S2SWhitelistTab extends LitElement {
     }
   }
 
-  private async removeDev(address: string) {
-    if (!confirm(`Remove ${address} from dev whitelist?`)) {
-      return;
-    }
+  private removeDev(address: string) {
+    this.pendingRemoval = { kind: 'dev', address };
+  }
+
+  private get confirmHeadline(): string {
+    return this.pendingRemoval?.kind === 'dev' ? 'Remove developer?' : 'Remove author?';
+  }
+
+  private get confirmMessage(): string {
+    const pending = this.pendingRemoval;
+    if (!pending) return '';
+    return `${pending.address} loses permission to publish to this publication. It creates a Safe proposal you must execute.`;
+  }
+
+  /** The modal's confirm action: propose the removal for the pending address. */
+  private async applyRemoval() {
+    const pending = this.pendingRemoval;
+    if (!pending) return;
+    this.pendingRemoval = null;
+    const isAuthor = pending.kind === 'author';
 
     try {
-      await this.safeIntegration.removeWhitelistedDev(address);
-      this.showNotification('Dev removed! Transaction pending approval.', 'success');
+      if (isAuthor) await this.safeIntegration.removeWhitelistedAuthor(pending.address);
+      else await this.safeIntegration.removeWhitelistedDev(pending.address);
+      this.showNotification(
+        `${isAuthor ? 'Author' : 'Dev'} removed! Transaction pending approval.`,
+        'success',
+      );
 
       // Optimistically update
-      this.devs = this.devs.filter((d) => d !== address);
+      if (isAuthor) this.authors = this.authors.filter((a) => a !== pending.address);
+      else this.devs = this.devs.filter((d) => d !== pending.address);
     } catch (error) {
-      console.error('Error removing dev:', error);
-      this.showNotification('Failed to remove dev. Please try again.', 'error');
+      console.error(`Error removing ${pending.kind}:`, error);
+      this.showNotification(`Failed to remove ${pending.kind}. Please try again.`, 'error');
     }
   }
 
@@ -322,6 +338,16 @@ export class S2SWhitelistTab extends LitElement {
             `
           : ''}
       </div>
+
+      <s2s-confirm-modal
+        .open=${this.pendingRemoval !== null}
+        headline=${this.confirmHeadline}
+        message=${this.confirmMessage}
+        confirmLabel="Remove"
+        variant="warning"
+        @s2s-confirm=${() => void this.applyRemoval()}
+        @s2s-cancel=${() => (this.pendingRemoval = null)}
+      ></s2s-confirm-modal>
 
       <!-- Devs -->
       <div class="section">

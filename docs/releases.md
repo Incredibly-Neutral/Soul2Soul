@@ -14,18 +14,34 @@ the manifest moves.
 A change that needs a deploy step says so in its entry. An action change needs a rebuild and a
 release; a contract change needs a Safe batch; a doc or spec change needs neither.
 
+A build under test is pinned as `d.<major>.<minor>` (`d.0.1`) and gets no section here. The manifest
+module keeps that lane out of the release order: it is never the live document, so nothing unpinned
+reads it, and the next release is judged against the last release rather than against the test.
+
 ## 0.1.3 — 2026-11-19
 
-Group `s2s@0.1.3`, id `5`, seven actions, six new CIDs; `encrypt` is unchanged. Batch
+Group `s2s@0.1.3`, id `5`. Batch
 `0x509b9e7befde34cfdf110056a7e98a42834238a9e84569387a9c3c547573a1a3` (nonce 723), document
 `0x0a9657b191e6dc6fa38b1d86eef8882f6a0616b6ad95e8aff9909b14aced9916` (nonce 724, filed). Tag: the
 commit that records the pin in `config/0.1.3.json`.
 
+- `prep`: `QmaqBDoP47Hd4wfSBNneKd5KZZk5D9rNUtsipAMgdvZHxu`
+- `render`: `QmUSupjU1h5znM1CwL6TXT8LHyfZfCYpYvGZbP77ah7jKS`
+- `update`: `QmXsqXupCwVPDkMrDmrKZrgFFnUa4ERzVm3B41VMZZfy5s`
+- `maintain-cache`: `QmVuBSq8RHAy22zzcHpGpmqocPdNvT7vmCVdR3zFcHYTEz`
+- `repoint-archive`: `QmR2BDTCR69L7zQEUWWvhPvTYsFT9uupf1P3o5YxKpaFJs`
+- `encrypt`: `QmQNnefQsHQoUGyLaGJHMNhTaRtEYGfccejPsQXhJn7Rsh` (unchanged from 0.1.2)
+- `decrypt`: `Qmed1FSkLzUJa7sXAyHt3nCn5yVQqvhvBrRB9JLKoq4hQZ`
+
 - `contenthash_wrapped` is normalised to CIDv1, so a reset can no longer write `0xe3010070…`, which
   eth.limo refuses. `evm.test.ts` and `reset.test.ts` pin the bytes and the written value.
   Uncommitted, PR to follow.
-- Records already written as `0xe30100…` stay broken until rewritten; `test.soul2soul.eth` now holds
-  the v1 encoding of the same root. Anything else rendered in that window needs the same check.
+- Records already written as `0xe30100…` stay broken until rewritten. `test.soul2soul.eth` has been
+  re-rendered and now holds the v1 form of `bafybeifxybv6u74f5l6ucn53oihvirzjm22wri42x54e2jz5zy7ubrktay`,
+  a well-formed record that eth.limo still will not serve: the name carries its own resolver,
+  `0xF60CBa0C0C13b50C2ce1F83d0C2fb06C9e5AE534`, whose `baseRecordsContract` is the retired
+  `0x32D75C02008ABC920D85D9b9058582c7217d1dC3`, so it answers empty for every key. A name with no
+  resolver of its own (`s3nl.soul2soul.eth`) inherits the parent wildcard and resolves correctly.
 - `update` names an unreachable previous root and no longer reads a refused `pin/add` as success, so
   a tree the node does not hold says so and asks for `reset` (#237).
 - `author-cli publish` refuses an author whose append would be an offer, before anything is signed,

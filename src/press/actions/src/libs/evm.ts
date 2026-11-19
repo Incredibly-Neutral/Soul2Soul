@@ -303,12 +303,20 @@ export const evmGetCode = async (
 };
 
 export const toHexString = (_cid: string) => {
-    // Parse the CID string (CIDv0 Qm... or CIDv1 bafy...) into its raw bytes
-    // (version varint + codec varint + multihash) and wrap them in the EIP-1577
-    // ipfs-ns contenthash envelope (0xe3 0x01 + CID bytes). This is the same
-    // encoding decodeContenthashWrapped expects, so the value round-trips back
-    // to the identical CID. The old implementation base58-decoded the CID
-    // string as a big number (CIDv0-only), which turned a CIDv1 root into
-    // garbage on-chain.
-    return encodeContenthashWrapped(parseCID(_cid));
+    // Parse the CID string (CIDv0 Qm... or CIDv1 bafy...) and wrap it in the
+    // EIP-1577 ipfs-ns contenthash envelope (0xe3 0x01 + CID bytes).
+    //
+    // The CID is converted to v1 first, and that is the record's invariant: a
+    // CIDv0 root encoded as-is carries synthetic `00 70` version/codec bytes
+    // (`0xe30100701220…`) that no standard parser accepts — eth.limo reads the
+    // contenthash with stock multiformats, rejects the bytes, and refuses the
+    // name, which the browser shows as ERR_SSL_PROTOCOL_ERROR. Re-encoding as
+    // v1 keeps the multihash (and so the blocks) identical while producing the
+    // `0xe30101…` form that eth.limo and decodeContenthashWrapped both accept.
+    //
+    // Two root versions still reach this function: copy-forward keeps the
+    // previous root's version, and a reset / from-zero `files/mkdir` can come
+    // back CIDv0. Normalising here makes the on-chain record independent of
+    // which one ran.
+    return encodeContenthashWrapped(parseCID(_cid).toV1());
 };

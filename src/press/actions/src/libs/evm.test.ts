@@ -413,26 +413,33 @@ describe('evmGetCode fail-fast (single pass, no in-session retry)', () => {
 });
 
 // ============================================================================
-// toHexString — EIP-1577 contenthash encode (CIDv0 AND CIDv1).
+// toHexString — EIP-1577 contenthash encode. The record is ALWAYS CIDv1.
 //
-// Regression context: files/stat now returns CIDv1 (bafy...) roots, but the
-// old toHexString base58-decoded the CID string as a big number (CIDv0-only),
-// so a CIDv1 root was encoded on-chain as 0xe3 0x01 + a 44-byte misparse that
-// decodeRootCid later rendered as an invalid CID (tree sync failed with
-// 'invalid path'). toHexString now parses the CID (v0 or v1) and wraps its raw
-// bytes (version varint + codec varint + multihash) in the EIP-1577 ipfs-ns
-// envelope, so the value round-trips through decodeContenthashWrapped.
+// Two regressions live here. The old base58-big-number encode turned a CIDv1
+// root into 0xe3 0x01 + a 44-byte misparse. The replacement then wrapped a
+// CIDv0 root as-is, emitting synthetic `00 70` version/codec bytes
+// (0xe30100701220…): no standard parser accepts that, so eth.limo read the
+// contenthash, rejected it and refused the name — the reset of an older
+// publication got a CIDv0 root and wrote exactly that. toHexString now
+// normalises to v1 before encoding, so the same root version cannot change the
+// on-chain value's validity.
 // ============================================================================
 
 const TEST_V0 = 'QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco';
+const TEST_V0_AS_V1 = 'bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq';
 const TEST_V1 = 'bafybeigadpvuv4m3txrx4r3wtjclnkte5mvxb2hoyyvt4jlaqdeo6qrbwm';
 
 describe('toHexString (EIP-1577 contenthash encode)', () => {
-  it('round-trips a CIDv0 through decodeContenthashWrapped', () => {
+  it('encodes a CIDv0 root as the v1 form, not the synthetic 00 70 form', () => {
     const hex = toHexString(TEST_V0);
-    expect(hex).toMatch(/^0xe301/);
-    const decoded = decodeContenthashWrapped(hex);
-    expect(decoded.toString()).toBe(TEST_V0);
+    // e3 (ipfs-ns) 01 (contenthash version) 01 (CIDv1) 70 (dag-pb) 12 20 (sha2-256, 32)
+    expect(hex.slice(0, 14)).toBe('0xe30101701220');
+    expect(hex.slice(0, 8)).not.toBe('0xe30100');
+    expect(hex).toBe(
+      '0xe301017012208cb97a00a6c90a14ecf182d8363583d402f69919e38f0498edd9d92a5c02a7b4',
+    );
+    // Same multihash, so the same blocks — only the label and the encoding change.
+    expect(decodeContenthashWrapped(hex).toString()).toBe(TEST_V0_AS_V1);
   });
 
   it('round-trips a CIDv1 through decodeContenthashWrapped', () => {
@@ -447,8 +454,9 @@ describe('toHexString (EIP-1577 contenthash encode)', () => {
     // The old implementation turned a CIDv1 string into 0xe301 + 44 garbage
     // bytes. The fixed implementation encodes the raw CID bytes: 0x (2) +
     // e301 (4) + version 01 (2) + codec 70 (2) + multihash 12 20 (4) + 32-byte
-    // digest (64) = 78 hex chars.
+    // digest (64) = 78 hex chars, whatever the root's own version was.
     expect(toHexString(TEST_V1).length).toBe(78);
     expect(toHexString(TEST_V0).length).toBe(78);
+    expect(toHexString(TEST_V0)).toBe(toHexString(TEST_V0_AS_V1));
   });
 });

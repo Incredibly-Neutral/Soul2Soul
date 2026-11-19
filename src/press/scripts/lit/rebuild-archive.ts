@@ -38,7 +38,9 @@ const PUSH = process.argv.includes('--push');
 
 const ipfsHash = (ipfsHashPkg as any).of ?? (ipfsHashPkg as any).default?.of;
 
-const toHexString = (cid: string) => encodeContenthashWrapped(parseCID(cid));
+// Always the v1 form: a CIDv0 archive CID encoded as-is would carry the synthetic
+// `00 70` bytes that no standard parser (eth.limo included) accepts.
+const toHexString = (cid: string) => encodeContenthashWrapped(parseCID(cid).toV1());
 
 async function main() {
   console.log(`publication: ${PUBLICATION}`);

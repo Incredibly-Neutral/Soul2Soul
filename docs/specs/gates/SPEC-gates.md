@@ -27,9 +27,11 @@ at a block above 0, the Safe's live `isOwner` otherwise. `canPublish` and `canRe
 question, because a write is being admitted now. The author's own read is `canAuthor`, which takes the
 author Safe, resolves its drafts log and owner-history module from the Safe's own enabled-module
 list, requires the drafts log to name that Safe for the genesis, and answers ownership. `canAuthor`
-is the author-side half of `canRead`: `canRead` asks the publication to admit the reader and then
-asks `canAuthor`, and `canAuthor` asks only the second question, since a draft was never offered and
-no agreement is involved.
+is the author-side half of `canRead`: `canRead` asks the publication to admit the reader, then
+admits on either `canAuthor` or live ownership of the reader Safe it named, since the publication
+Safe and a reviewer Safe are holders, not authors, and a holder may ask for a build of manuscripts
+they do not own (GATES-4). `canAuthor` asks only the ownership question, since a draft was never
+offered and no agreement is involved.
 
 `canAuthor` answers at the append block. Where the drafts log's `blocksOf(genesis)` gives a finite
 block above 0, the owner history answers `isOwnerAt` there: a key rotated out still reads what it

@@ -165,6 +165,11 @@ name, because the ENS record still points at the CID.
   same transaction. There is no partial alias update in the success path.
 - **Copy-forward by default; reset is explicit and destructive.**
 - **The root is written by the PKP, never by the publication** (INV-12).
+- **The record is CIDv1 whatever the root's version.** `files/stat` can return a CIDv0 root
+  (copy-forward keeps the previous root's version; a reset starts from `mkdir`), and a CIDv0
+  encoded as-is carries synthetic `00 70` bytes that no standard parser accepts — eth.limo
+  then rejects the record and refuses the name. `toHexString` normalises with `toV1()`: same
+  multihash, readable record.
 - **Inconclusive is not lost.** No UI path may render an inconclusive probe as data loss.
 - **`/assets` is replaced atomically with the pages that reference it.**
 

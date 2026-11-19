@@ -92,7 +92,7 @@ const MANIFEST_VERSIONED_ABI = [
  * and the version asked for.
  *
  * `version` names which document to read. Absent, this reads the current one.
- * Present as `x.y.z`, it reads the snapshot published under that version, and a
+ * Present as `x.y.z` (or `d.x.y` for a dev build), it reads the snapshot published under that version, and a
  * document whose own `version` disagrees with the one named is a bad record, not
  * a fallback. The current read also checks the pair the module answers, so a
  * document and its index cannot disagree.

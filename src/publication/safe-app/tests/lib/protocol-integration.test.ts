@@ -110,6 +110,26 @@ describe('ProtocolIntegration', () => {
     expect(pi.isConnected()).toBe(true);
   });
 
+  it('load(version) reads that snapshot and keeps it as the protocol info', async () => {
+    mocks.getInfo.mockResolvedValue({ safeAddress: '0xSafe', chainId: 8453, network: 'base' });
+    mocks.getManifest.mockResolvedValueOnce(PROTOCOL_INFO);
+    const pi = new ProtocolIntegration();
+    await pi.initialize();
+
+    const pinned = { ...PROTOCOL_INFO, version: 'd.0.1' } as S2SManifest;
+    mocks.getManifest.mockResolvedValueOnce(pinned);
+    await expect(pi.load('d.0.1')).resolves.toBe(pinned);
+
+    // The version is the third argument; the clients are the first two.
+    const [, , version] = mocks.getManifest.mock.calls[1];
+    expect(version).toBe('d.0.1');
+    expect(pi.getInfo()).toBe(pinned);
+  });
+
+  it('refuses load before initialize, where there is no client to read with', async () => {
+    await expect(new ProtocolIntegration().load('d.0.1')).rejects.toThrow(/before initialize/);
+  });
+
   it('returns undefined when getManifest itself throws', async () => {
     mocks.getInfo.mockResolvedValue({ safeAddress: '0xSafe', chainId: 1, network: 'mainnet' });
     mocks.getManifest.mockRejectedValue(new Error('protocol discovery failed'));

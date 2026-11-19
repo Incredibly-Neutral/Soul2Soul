@@ -45,9 +45,12 @@ describe('manifestSchema', () => {
     });
   });
 
-  it('requires a version of the form x.y.z', () => {
-    for (const version of ['1.0', '1.0.0.1', 'v1.0.0', '', 'latest']) {
+  it('requires a version of the form x.y.z, or d.x.y on the dev lane', () => {
+    for (const version of ['1.0', '1.0.0.1', 'v1.0.0', '', 'latest', 'd.1', 'd.1.0.0']) {
       expect(() => manifestSchema.parse({ ...DOCUMENT, version })).toThrow(/version/);
+    }
+    for (const version of ['1.0.0', '0.1.4', 'd.0.1', 'd.10.2']) {
+      expect(manifestSchema.parse({ ...DOCUMENT, version }).version).toBe(version);
     }
   });
 

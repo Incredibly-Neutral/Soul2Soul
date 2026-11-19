@@ -72,12 +72,19 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 | `state/store.ts`, `observable.ts`, `*.store.ts`, `storage.ts`                                                                  | observable store, localStorage-backed                                                                            |
 | `lib/safe-integration.ts`                                                                                                      | Safe SDK wrapper: module discovery, reads, **proposal** encoding                                                 |
 | `lib/publication-init.ts`                                                                                                      | the two-batch initialisation and the teardown batch ([account child](SPEC-publication-account.md))               |
-| `lib/protocol-integration.ts`                                                                                                  | `getManifest(false, L1, L2)` via viem                                                                        |
+| `lib/protocol-integration.ts`                                                                                                  | `getManifest(L1, L2)` via viem, then `getManifest(L1, L2, pinned)` once the records are in                   |
 | `lib/cid-view/`                                                                                                                | safe-app adapter over the shared cid-view surface                                                                |
 | `lib/ens-registration.ts`                                                                                                      | L1 subname registration, NameWrapper branch                                                                      |
 
 `lib/config-builder.ts` and `lib/assets-builder.ts` **no longer exist here** — they moved to
 `shared/src/publication/` (GAP-12 consolidation). The app imports them from shared.
+
+**The document is the one the publication pinned.** `ProtocolIntegration.initialize()` reads the
+current document only because the module factory it carries is what finds the publication's records
+module at all; `runFetchFreshData` then reads `manifest_version` from those records and re-reads the
+manifest at that version. A pinned read is a snapshot and never falls back, so a pin this module does
+not hold logs and leaves the current document in place rather than running different code under the
+same name.
 
 ## On-chain interaction model
 

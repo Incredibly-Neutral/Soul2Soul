@@ -116,9 +116,13 @@ function flag(name: string): string | null {
   return idx === -1 ? null : (process.argv[idx + 1] ?? null);
 }
 
-const version = process.argv.find((a) => /^\d+\.\d+\.\d+$/.test(a)) ?? null;
+// A release (`x.y.z`) or a dev build (`d.x.y`). The manifest module keeps the
+// dev lane on its own order, so a test build never consumes a release number.
+const VERSION_PATTERN = /^(?:\d+\.\d+\.\d+|d\.\d+\.\d+)$/;
+
+const version = process.argv.find((a) => VERSION_PATTERN.test(a)) ?? null;
 if (!version) {
-  console.error('Usage: pnpm update-protocol <major.minor.patch> [--publication <ens>] [--dry-run]');
+  console.error('Usage: pnpm update-protocol <major.minor.patch|d.major.minor> [--publication <ens>] [--dry-run]');
   process.exit(1);
 }
 
@@ -242,14 +246,25 @@ async function pinActions(): Promise<Array<{ name: string; cid: string; hashedCi
   return pinned;
 }
 
-function inheritedTransfer(): { pkp: string; usageKey: string; groupIds: number[] } {
+async function inheritedTransfer(): Promise<{ pkp: string; usageKey: string; groupIds: number[] }> {
   if (!fs.existsSync(PREVIOUS_CONFIG)) throw new Error(`no ${PREVIOUS_CONFIG} to inherit the PKP from`);
   const config = loadLitConfig(PREVIOUS_CONFIG);
   const group = config.groups[0];
   const pkp = flag('--pkp') ?? group?.pkps[0];
   const usageKey = flag('--usage-key') ?? process.env.VITE_LIT_USAGE_KEY ?? group?.usage_key;
   if (!pkp || !usageKey) throw new Error('no PKP or usage key: pass --pkp and --usage-key');
-  return { pkp, usageKey, groupIds: config.groups.map((g) => g.id) };
+  // `setUsageApiKey` replaces the permission set, so the scope has to name every
+  // group that already exists — not the groups one file in the repo happens to
+  // list. Read from the account: a list built from config.json dropped every
+  // version whose group was not in it, and those actions answered 403 until the
+  // key was written again.
+  const groups = await l2.readContract({
+    address: ACCOUNT_CONFIG_ADDRESS,
+    abi: viewsFacetAbi,
+    functionName: 'listGroups',
+    args: [admin, 0n, 100n],
+  });
+  return { pkp, usageKey, groupIds: groups.map((g) => Number(g.id)) };
 }
 
 /**
@@ -340,7 +355,7 @@ async function assertActionsAddable(
  * key, widened to the new group, no removals.
  */
 async function proposeGroup(actions: Array<{ name: string; cid: string; hashedCid: string }>) {
-  const { pkp, usageKey, groupIds } = inheritedTransfer();
+  const { pkp, usageKey, groupIds } = await inheritedTransfer();
   const predicted = await nextGroupId({
     description: `${groupName} — manifest ${version}`,
     cidHashes: actions.map((a) => a.hashedCid as `0x${string}`),

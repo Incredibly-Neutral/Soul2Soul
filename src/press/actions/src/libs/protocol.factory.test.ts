@@ -137,6 +137,16 @@ describe('getManifest', () => {
     expect(read[4]).toEqual(['0.1.4']);
   });
 
+  it('accepts a dev build, which is only ever read by name', async () => {
+    mocks.manifest = JSON.stringify(document({ version: 'd.0.1' }));
+
+    const info = await getManifest(undefined, 'd.0.1');
+
+    expect(info.version).toBe('d.0.1');
+    const [read] = manifestReads();
+    expect(read[4]).toEqual(['d.0.1']);
+  });
+
   it('passes the caller’s L2 RPC URLs to the read', async () => {
     const rpcs = { L1: ['http://l1'], L2: ['http://l2'] };
 
@@ -225,8 +235,11 @@ describe('getManifest', () => {
     await expect(getManifest()).rejects.toThrow(/manifest: .*not a JSON object/);
   });
 
-  it('throws when version is absent or not x.y.z', async () => {
+  it('throws when version is absent or not x.y.z (or d.x.y)', async () => {
     mocks.manifest = JSON.stringify(document({ version: '2.1' }));
+    await expect(getManifest()).rejects.toThrow(/manifest: 'version'/);
+
+    mocks.manifest = JSON.stringify(document({ version: 'd.0.1.0' }));
     await expect(getManifest()).rejects.toThrow(/manifest: 'version'/);
 
     mocks.manifest = JSON.stringify(document({ version: undefined }));

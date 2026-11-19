@@ -8,6 +8,8 @@ import { getRpcUrl } from './evm';
 
 export class ProtocolIntegration {
   private safeSdk: SafeAppsSDK | null = null;
+  private providerL1: any = null;
+  private providerL2: any = null;
   public protocolInfo!: S2SManifest;
 
   async initialize(): Promise<S2SManifest | undefined> {
@@ -25,19 +27,19 @@ export class ProtocolIntegration {
 
         const safeData: any = await this.safeSdk!.safe.getInfo();
         
-        const providerL1 = createPublicClient({
+        this.providerL1 = createPublicClient({
           chain: undefined,
           transport: http(getRpcUrl(1)),
         });
-        const providerL2 = createPublicClient({
+        this.providerL2 = createPublicClient({
           chain: undefined,
           transport: http(getRpcUrl(8453)),
         });
 
-        this.protocolInfo  = await getManifest(
-          providerL1 as any,
-          providerL2 as any,
-        );
+        // The current document, because the module factory it carries is what
+        // finds the publication's records at all. A publication that pins a
+        // version is read again below, once the records are in (see load).
+        this.protocolInfo = await getManifest(this.providerL1, this.providerL2);
 
         return this.protocolInfo;
 
@@ -50,6 +52,19 @@ export class ProtocolIntegration {
   getInfo(): S2SManifest {
 
       return this.protocolInfo; 
+  }
+
+  /**
+   * The document a publication pinned, by version. `getManifest(version)` reads
+   * that snapshot and never falls back to the current document, so a pin at a
+   * version the module does not hold throws instead of running other code.
+   */
+  async load(version: string): Promise<S2SManifest> {
+      if (!this.providerL1 || !this.providerL2) {
+          throw new Error('ProtocolIntegration.load before initialize');
+      }
+      this.protocolInfo = await getManifest(this.providerL1, this.providerL2, version);
+      return this.protocolInfo;
   }
 
 

@@ -47,6 +47,7 @@ const MANIFEST_ABI = parseAbi([
   'function getVersionAt(uint256 index) view returns (string)',
   'function versionCount() view returns (uint256)',
   'function versionExists(string version) view returns (bool)',
+  'function upgradeTo(address newImplementation)',
   'function upgradeToAndCall(address newImplementation, bytes data)',
 ]);
 
@@ -307,6 +308,68 @@ describe('S2SManifestModuleV0_1', () => {
     assert.deepEqual(await module.read.getVersions(), ['1.0.0', '1.0.1', '1.1.0', '1.9.9', '2.0.0']);
   });
 
+  it('keeps dev versions on their own line: readable by name, never live, never in the release history', async () => {
+    const ctx = await deploy();
+    const { module } = await manifestUnder(ctx);
+
+    const publish = (version: string) =>
+      ctx.safe.write.exec([module.address, write('setManifest', [version, DOC(version)])]);
+
+    await publish('0.1.4');
+    await publish('d.0.1');
+
+    // The dev document answers to its own name and to nothing else.
+    assert.equal(await module.read.getManifest(['d.0.1']), DOC('d.0.1'));
+    assert.equal(await module.read.versionExists(['d.0.1']), true);
+    assert.equal(await module.read.manifestVersion(), '0.1.4');
+    assert.equal((await module.read.getManifest())[0], '0.1.4');
+    assert.deepEqual(await module.read.getVersions(), ['0.1.4']);
+
+    // The dev lane orders among itself only.
+    await publish('d.0.2');
+    await assert.rejects(publish('d.0.1'), /VersionExists/);
+    await assert.rejects(publish('d.0.0'), /VersionNotIncreasing/);
+
+    // And the release after a dev version is judged against the release line,
+    // not against `d.0.2`, so a dev publish never strands the next release.
+    await publish('0.1.5');
+    assert.equal(await module.read.manifestVersion(), '0.1.5');
+    assert.deepEqual(await module.read.getVersions(), ['0.1.4', '0.1.5']);
+  });
+
+  it('accepts a dev version before any release, and still refuses a live read', async () => {
+    const ctx = await deploy();
+    const { module } = await manifestUnder(ctx);
+
+    await ctx.safe.write.exec([module.address, write('setManifest', ['d.0.1', DOC('d.0.1')])]);
+    assert.equal(await module.read.getManifest(['d.0.1']), DOC('d.0.1'));
+    await assert.rejects(module.read.getManifest(), /NoManifest/);
+    await assert.rejects(module.read.manifestVersion(), /NoManifest/);
+    assert.deepEqual(await module.read.getVersions(), []);
+  });
+
+  it('refuses a malformed dev version as x.y.z, prefix and all', async () => {
+    const ctx = await deploy();
+    const { module } = await manifestUnder(ctx);
+
+    for (const version of ['d.', 'd.0', 'd.0.1.0', 'd..1', 'd.0.', 'D.0.1', 'd0.1.0', 'dev.0.1']) {
+      await assert.rejects(
+        ctx.safe.write.exec([module.address, write('setManifest', [version, DOC('d.0.1')])]),
+        /VersionNotXYZ/,
+        `expected ${JSON.stringify(version)} to be refused`,
+      );
+    }
+
+    // Leading zeros apply to the dev lane too.
+    await assert.rejects(
+      ctx.safe.write.exec([module.address, write('setManifest', ['d.01.0', DOC('d.01.0')])]),
+      /LeadingZero/,
+    );
+
+    await ctx.safe.write.exec([module.address, write('setManifest', ['d.0.1', DOC('d.0.1')])]);
+    assert.equal(await module.read.getManifest(['d.0.1']), DOC('d.0.1'));
+  });
+
   it('keeps history across a major, and answers the live version', async () => {
     const ctx = await deploy();
     const { module } = await manifestUnder(ctx);
@@ -384,10 +447,16 @@ describe('S2SManifestModuleV0_1', () => {
         args: [FACTORY_KIND, second.address],
       }),
     ]);
-    await ctx.safe.write.exec([
-      module.address,
-      write('upgradeToAndCall', [second.address, write('moduleKind', [])]),
-    ]);
+    // OZ 4.9's `upgradeToAndCall` makes the delegatecall even with empty data
+    // (forceCall is true), and this module has no `receive` or `fallback`, so the
+    // empty form reverts as `Address: low-level delegate call failed` — the
+    // revert a Safe reports as GS013. `upgradeTo` is the empty-calldata upgrade.
+    await assert.rejects(
+      ctx.safe.write.exec([module.address, write('upgradeToAndCall', [second.address, '0x'])]),
+      /low-level delegate call failed/,
+    );
+
+    await ctx.safe.write.exec([module.address, write('upgradeTo', [second.address])]);
 
     const slot = await publicClient.request({
       method: 'eth_getStorageAt',
