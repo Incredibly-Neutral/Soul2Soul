@@ -408,6 +408,8 @@ describe('addAndSignMetadata — structural invariants', () => {
     expect(schema.sdPublisher.identifier.value).toBe(PROTOCOL_INFO.litActions.render);
     expect(schema.isBasedOn.identifier).toBe('0x' + '44'.repeat(32));
     expect(schema.license.name).toBe('License via Safe Deals Module');
+    // @id carries the publication name today, not an IRI — pre-existing,
+    // untouched here.
     expect(schema.mainEntityOfPage['@id']).toBe('test.soul2soul.eth');
   });
 
