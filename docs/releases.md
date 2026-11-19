@@ -16,17 +16,26 @@ release; a contract change needs a Safe batch; a doc or spec change needs neithe
 
 ## 0.1.3 — unreleased
 
-- `fix(press): contenthash_wrapped is always CIDv1` — uncommitted, PR to follow. A tree reset or a
-  from-zero render could get a CIDv0 root back from `files/stat` and write it as-is, producing
-  `0xe3010070…`, which no standard contenthash parser accepts. eth.limo rejected the record and
-  refused the name, which the browser reported as `ERR_SSL_PROTOCOL_ERROR` (`test.soul2soul.eth.link`,
-  a publication reset in the window after 2026-08-25). `toHexString` now normalises with `toV1()`:
-  same multihash, so the same blocks, and a readable record. `reset.test.ts` pins the value the
-  reset path writes; `evm.test.ts` pins the bytes. Needs an action rebuild before it has any effect.
-- Records already written as `0xe30100…` stay broken until they are rewritten — `test.soul2soul.eth`
-  now holds
-  `0xe301017012205a3706a8f738938877ee9413b22d0de101006c11260acd8b2858952b3368dd98`, the v1
-  encoding of the same root. Anything else rendered in that window needs the same check.
+Unpinned. `pnpm update-protocol 0.1.3` creates group `s2s@0.1.3`; its id, the seven CIDs and the
+`safeTxHash` are recorded here at that run.
+
+- `contenthash_wrapped` is normalised to CIDv1, so a reset can no longer write `0xe3010070…`, which
+  eth.limo refuses. `evm.test.ts` and `reset.test.ts` pin the bytes and the written value.
+  Uncommitted, PR to follow.
+- Records already written as `0xe30100…` stay broken until rewritten; `test.soul2soul.eth` now holds
+  the v1 encoding of the same root. Anything else rendered in that window needs the same check.
+- `update` names an unreachable previous root and no longer reads a refused `pin/add` as success, so
+  a tree the node does not hold says so and asks for `reset` (#237).
+- `author-cli publish` refuses an author whose append would be an offer, before anything is signed,
+  encrypted or pinned, and points at `s2s author offer` (#238).
+- `update-protocol` signs and posts the proposal itself, so a refusal prints the service's answer
+  with the nonce, target and the proposals queued against it (48df54d, 9498e8f), and it does not
+  rebuild a version that is already pinned (5f70b23).
+- The document batch names the manifest module as its target; without one it went to the diamond
+  (#236).
+- safe-app: a deals row shows the render it owes, a failed render returns the row with its reason,
+  and the sweep covers offers (#239).
+- safe-app: actions on one line, short column headers, and dates read from the v2 shape (#240).
 
 ## 0.1.2 — 2026-11-18
 
