@@ -131,28 +131,22 @@ export const addAndSignMetadata = async (
       schema.author = author;
     }
 
-    // Publisher. Same rule as the author: the terms name the value (the
-    // signer's address, the publication Safe's address), the values are bare
-    // addresses. Its shape is not settled yet; the reader does not depend on it.
+    // Publication node (`publication`). The publication itself, mirrored on
+    // the author node: one CAIP-10 value naming the Safe that owns the ENS
+    // name, plus the name that Safe answers to. The render signer is the
+    // proof's verificationMethod and appears nowhere here. The retired key was
+    // `publisher`; old pages keep it, and nothing reads the term.
     if (contentInfo?.publisher) {
-      schema.publisher = {
+      schema.publication = {
         '@type': 'Organization',
-        identifier: [
-          {
-            '@type': 'PropertyValue',
-            propertyID: 'address',
-            value: accountAddress(contentInfo.publisher.address),
-          },
-          ...(contentInfo.publisher.safe
-            ? [
-                {
-                  '@type': 'PropertyValue',
-                  propertyID: 'address:safe',
-                  value: contentInfo.publisher.safe,
-                },
-              ]
-            : []),
-        ],
+        // Omitting an empty name rather than emitting `name: ''`.
+        ...(contentInfo.publisher.url ? { name: contentInfo.publisher.url } : {}),
+        identifier: {
+          '@type': 'PropertyValue',
+          propertyID: 'CAIP-10',
+          name: 'Safe smart account',
+          value: `eip155:${CHAIN_ID}:${accountAddress(contentInfo.publisher.address)}`,
+        },
       };
     }
 

@@ -59,7 +59,7 @@ const contentInfo = (
   },
   publisher: {
     address: '0x2222222222222222222222222222222222222222',
-    url: 'https://example.org',
+    url: 'test.soul2soul.eth',
   },
   contentCid: CID,
   licenseContract: '0x3333333333333333333333333333333333333333',
@@ -298,11 +298,28 @@ describe('addAndSignMetadata — author proof nesting', () => {
     expect(schema.author.identifier.value).toBe(
       'eip155:8453:0xabcdef0123456789012345678901234567890123',
     );
-    expect(schema.publisher.identifier[0]).toEqual({
-      '@type': 'PropertyValue',
-      propertyID: 'address',
-      value: '0x2222222222222222222222222222222222222222',
+    expect(schema.publication).toEqual({
+      '@type': 'Organization',
+      name: 'test.soul2soul.eth',
+      identifier: {
+        '@type': 'PropertyValue',
+        propertyID: 'CAIP-10',
+        name: 'Safe smart account',
+        value: 'eip155:8453:0x2222222222222222222222222222222222222222',
+      },
     });
+  });
+
+  it('omits the publication name when the publication name is empty, keeping the identifier', async () => {
+    const { schema } = await render(
+      contentInfo({
+        publisher: { address: '0x2222222222222222222222222222222222222222', url: '' },
+      }),
+    );
+    expect(schema.publication).not.toHaveProperty('name');
+    expect(schema.publication.identifier.value).toBe(
+      'eip155:8453:0x2222222222222222222222222222222222222222',
+    );
   });
 
   it('lets the page carry the item digest even without a proof.objectId', async () => {
@@ -391,7 +408,9 @@ describe('addAndSignMetadata — structural invariants', () => {
     expect(schema.sdPublisher.identifier.value).toBe(PROTOCOL_INFO.litActions.render);
     expect(schema.isBasedOn.identifier).toBe('0x' + '44'.repeat(32));
     expect(schema.license.name).toBe('License via Safe Deals Module');
-    expect(schema.mainEntityOfPage['@id']).toBe('https://example.org');
+    // @id carries the publication name today, not an IRI — pre-existing,
+    // untouched here.
+    expect(schema.mainEntityOfPage['@id']).toBe('test.soul2soul.eth');
   });
 
   it('injects the block outside the hashed region', async () => {
