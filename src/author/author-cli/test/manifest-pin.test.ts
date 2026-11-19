@@ -30,13 +30,15 @@ const PINNED = {
   litActions: { prep: 'QmPinnedPrep', render: 'QmPinnedRender', update: 'QmPinnedUpdate' },
 } as unknown as CliContext['protocolInfo'];
 
-const ctx = { l1: {}, l2: {}, protocolInfo: CURRENT } as unknown as CliContext;
+const warn = vi.fn();
+const ctx = { l1: {}, l2: {}, protocolInfo: CURRENT, out: { warn } } as unknown as CliContext;
 
 const serviceWith = (manifestVersion: string | undefined) =>
   ({ manifestVersion }) as unknown as PublicationService;
 
 describe('manifestFor', () => {
   beforeEach(() => vi.clearAllMocks());
+
 
   it('reads the version the publication pins, not the current document', async () => {
     getManifest.mockResolvedValue(PINNED);
@@ -69,5 +71,14 @@ describe('manifestFor', () => {
 
     expect(getManifest).not.toHaveBeenCalled();
     expect(manifest).toBe(CURRENT);
+  });
+
+  it('runs the current document, loudly, when the module does not carry the pin', async () => {
+    getManifest.mockRejectedValue(new Error('VersionNotFound(string version) (d.0.4)'));
+
+    const manifest = await manifestFor(ctx, serviceWith('d.0.4'));
+
+    expect(manifest).toBe(CURRENT);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("pins manifest version 'd.0.4'"));
   });
 });

@@ -135,7 +135,20 @@ export async function manifestFor(
 ): Promise<S2SManifest> {
   const version = service.manifestVersion;
   if (!version || version === ctx.protocolInfo.version) return ctx.protocolInfo;
-  service.pinnedManifest ??= await getManifest(ctx.l1, ctx.l2, version);
+  if (!service.pinnedManifest) {
+    try {
+      service.pinnedManifest = await getManifest(ctx.l1, ctx.l2, version);
+    } catch (error) {
+      // A pin the manifest module does not carry is a publication that cannot
+      // resolve its own actions; refusing every command would strand it. Say it
+      // plainly and run the current document, which is what the site does too.
+      ctx.out.warn(
+        `${service.subdomain} pins manifest version '${version}', which the manifest module does not carry ` +
+          `(${(error as Error).message}) — running the current version ${ctx.protocolInfo.version}`,
+      );
+      return ctx.protocolInfo;
+    }
+  }
   return service.pinnedManifest;
 }
 

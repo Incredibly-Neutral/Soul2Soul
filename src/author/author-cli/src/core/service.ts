@@ -119,13 +119,18 @@ export class PublicationService {
     // needs the pin to be readable.
     if (configModule) {
       try {
-        const [pinned] = (await this.options.l2.readContract({
+        const answer = (await this.options.l2.readContract({
           address: configModule,
           abi: S2SRecordsModuleV0_1,
           functionName: 'getRecord',
           args: [MANIFEST_VERSION_KEY],
-        } as never)) as unknown as [string];
-        this.manifestVersion = pinned && pinned.trim() !== '' ? pinned.trim() : undefined;
+        } as never)) as unknown;
+        // `getRecord` answers the value, not a tuple around it: destructuring a
+        // string yields its first character, which is how a pin of `d.0.4`
+        // became the version `d`.
+        const pinned = (Array.isArray(answer) ? answer[0] : answer) as unknown;
+        this.manifestVersion =
+          typeof pinned === 'string' && pinned.trim() !== '' ? pinned.trim() : undefined;
       } catch {
         this.manifestVersion = undefined;
       }
