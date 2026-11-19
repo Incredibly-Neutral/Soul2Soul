@@ -20,7 +20,6 @@ import {
   buildSignedContentItem,
   parseMarkdownNote,
   renderwithLitActions,
-  revokedPathFor,
   runFilecoinLeg,
   subdomainOf,
   toPreviewLabel,
@@ -53,7 +52,7 @@ import {
   type ResolvedDraftsModule,
 } from './drafts';
 import { ipfsUri } from '../lib/ipfs-link';
-import type { CliContext } from './context';
+import { manifestFor, type CliContext } from './context';
 import { PublicationService, type AuthorListing } from './service';
 
 // ===========================================================================
@@ -81,6 +80,8 @@ export interface RootTxOutcome {
 export interface RenderOutcome {
   cid: string;
   path: string;
+  /** The remove entries the update action was given (revoke/slug change). */
+  remove: { path: string; replacedBy?: string }[];
   /** ipfs://<rootCid>/<path> style human-readable preview link. */
   previewUrl: string;
   /** Production ENS-based link (publish only). */
@@ -157,6 +158,12 @@ export interface AuthorWriteOptions {
   /** Revocation remove entries (render path only). */
   remove?: { path: string; replacedBy?: string }[];
   /**
+   * Ids being revoked. The pipeline resolves each id's page path in prep, with
+   * the renderer's own createPath and the publication's template, and removes
+   * that. The slug travels with it because a retracted item's stored body no
+   * longer carries one.
+   */
+  revoke?: { id: string; slug?: string; locale?: string; postType?: string }[];  /**
    * Allow replacing a previously-encrypted genesis with a plaintext body
    * (`--allow-plaintext`). Without it, a republish that drops `encrypted: true`
    * is refused — see `guardEncryptionDowngrade`.
@@ -857,12 +864,18 @@ async function renderContent(
   const signature = await ctx.signer.signMessage('lit actions auth');
   const litUsageKey = requireSetting(ctx.config.lit.usageKey, 'LIT_USAGE_KEY');
 
+  // The actions this publication runs are the ones its own pin names, not the
+  // protocol's current document: a release reaches a publication only when its
+  // pin moves, so reading the current version here dispatches the previous
+  // prep after a release and looks like a fix that did nothing.
+  const protocolInfo = await manifestFor(ctx, service);
+
   const res = await renderwithLitActions(
     !opts.publish,
     ctx.lit,
     signature,
     litUsageKey,
-    ctx.protocolInfo,
+    protocolInfo,
     null,
     authorSafeAddress,
     publication,
@@ -873,6 +886,7 @@ async function renderContent(
     opts.remove !== undefined && opts.remove.length > 0 ? opts.remove : undefined,
     undefined,
     ctx.config.ipfs.primary?.key ? `Bearer ${ctx.config.ipfs.primary.key}` : undefined,
+    opts.revoke,
   );
 
   if (!res.success) {
@@ -920,7 +934,7 @@ async function renderContent(
     }
   }
 
-  return { cid, path: res.path, previewUrl, ipfsUrl, prodUrl, rootTx, trace };
+  return { cid, path: res.path, remove: (res.remove ?? []) as any, previewUrl, ipfsUrl, prodUrl, rootTx, trace };
 }
 
 // ===========================================================================
@@ -1017,10 +1031,10 @@ export interface RevokeResult {
   /** Publication ENS name (e.g. name.soul2soul.eth). */
   publication: string;
   subdomain: string;
-  /** retract transaction hash on L2. */
-  txHash: string;
-  /** The rendered path the remove entry targeted (where the page actually was). */
-  removePath: string;
+  /** retract transaction hash on L2; absent when the genesis was already ended. */
+  txHash: string | undefined;
+  /** The page paths the remove entry was given (prep-derived). */
+  removePaths: string[];
   /** Result of the remove-plumbing re-render. */
   render: RenderOutcome | undefined;
 }
@@ -1066,39 +1080,72 @@ export async function revokeContent(
 
   // 1. Retract first. Terminal: it ends the genesis as well as withdrawing the
   // version, so say so here rather than letting publish revert `Ended()` later.
-  const txHash = await service.retract(genesis);
-  ctx.out.log(`✓ retracted ${genesis.slice(0, 12)}… (tx ${txHash})`);
-  ctx.out.warn(
-    `genesis ${genesis.slice(0, 12)}… is now ENDED: this note id cannot be published again — a re-publish must be a new note (new genesis)`,
-  );
-
-  // 2. Remove-plumbing re-render so the published site stops resolving it.
-  // The path comes from the publication's own template for this post type, the
-  // same config the renderer reads: a post template at `/posts/{slug}/` writes
-  // `/posts/<slug>/`, so the standard `/{slug}` guess removed nothing.
-  const localePaths = await service.localePathsOf();
-  const templatePath = await service.templatePathOf(parsed.postType);
-  if (!templatePath) {
+  // A genesis already out of both sets was retracted by an earlier run whose
+  // site removal did not land. `retract` again would revert "not an agreement
+  // or offer" and stop the command before the removal it exists to finish, so
+  // that half runs on its own.
+  let txHash: string | undefined;
+  if (await service.isSpent(genesis)) {
     ctx.out.warn(
-      `could not read the "${parsed.postType ?? 'post'}" template path from the publication config — assuming /{slug}, which may remove nothing`,
+      `genesis ${genesis.slice(0, 12)}… is already ended on-chain — skipping retract, removing the page`,
+    );
+  } else {
+    txHash = await service.retract(genesis);
+    ctx.out.log(`✓ retracted ${genesis.slice(0, 12)}… (tx ${txHash})`);
+    ctx.out.warn(
+      `genesis ${genesis.slice(0, 12)}… is now ENDED: this note id cannot be published again — a re-publish must be a new note (new genesis)`,
     );
   }
-  const removePath = revokedPathFor(parsed.slug, parsed.locale, localePaths, templatePath);
-  ctx.out.log(`removing ${removePath} from the rendered tree…`);
 
+  // 2. Remove-plumbing re-render so the published site stops resolving it.
+  // The path is not the caller's to derive: prep resolves the page this id
+  // occupies with the renderer's own createPath and removes exactly that.
   const render = await renderContent(ctx, service, publication, genesis, authorSafeAddress, {
     render: true,
     publish: true,
     offer: false,
-    remove: [{ path: removePath }],
+    revoke: [
+      {
+        id: genesis,
+        slug: parsed.slug,
+        locale: parsed.locale,
+        postType: parsed.postType,
+      },
+    ],
   });
+
+  // The update action decides the removal after the fact: it skips the path
+  // when the page's genesis still reads as in force, and it reports the rm
+  // failure only in its trace. Both leave the page live while the tree write
+  // succeeds, so say it here rather than let a clean summary imply removal.
+  const removalRefusal = (render?.trace ?? []).find(
+    (line) =>
+      typeof line === 'string' &&
+      (line.startsWith('skip remove') || line.startsWith('✗ rm failed')),
+  );
+  if (removalRefusal) {
+    ctx.out.warn(`the page was NOT removed: ${removalRefusal}`);
+  } else if ((render?.remove ?? []).length === 0) {
+    // The removal path is prepared by the action, not here. Two things look the
+    // same from this side and mean different things: a prep deployed before it
+    // accepted revoke targets says nothing at all, and a prep that read the
+    // target but could not derive a page says why.
+    const answered = (render?.trace ?? []).find(
+      (line) => typeof line === 'string' && line.startsWith('revoke'),
+    );
+    ctx.out.warn(
+      answered
+        ? `no removal was prepared: ${answered}`
+        : 'no removal was prepared: the deployed prep action does not accept a revoke target — add and release the rebuilt action, then re-run',
+    );
+  }
 
   return {
     objectId: genesis,
     publication,
     subdomain: service.subdomain,
     txHash,
-    removePath,
+    removePaths: (render?.remove ?? []).map((entry) => entry.path),
     render,
   };
 }
