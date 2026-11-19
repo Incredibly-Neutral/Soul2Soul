@@ -6,8 +6,13 @@ import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 
 /**
  * `localePaths[locale] ?? localePaths.default ?? ''` plus the template path,
- * with `{slug}` substituted for a plaintext item. Returns `/` for a template
- * with no path.
+ * with `{slug}` substituted whenever the body carries a slug. Returns `/` for a
+ * template with no path.
+ *
+ * The encryption flag does not gate the substitution: an encrypted body that
+ * has a slug has one because the caller supplied it (a retracted item's stored
+ * body has lost it), and a substitute that refuses the caller's slug cannot
+ * name the page the site is serving.
  */
 export const createPath = (
   body: S2SBody,
@@ -19,7 +24,7 @@ export const createPath = (
 
   let path = prefix + templateConfig.path;
 
-  if (!body.encryption && body.slug && path.includes('{slug}')) {
+  if (body.slug && path.includes('{slug}')) {
     path = path.replace('{slug}', body.slug);
   }
 

@@ -1126,10 +1126,17 @@ export async function revokeContent(
   if (removalRefusal) {
     ctx.out.warn(`the page was NOT removed: ${removalRefusal}`);
   } else if ((render?.remove ?? []).length === 0) {
-    // The removal path is prepared by the action, not here. A prep that does
-    // not answer a revoke target is a prep deployed before it accepted one.
+    // The removal path is prepared by the action, not here. Two things look the
+    // same from this side and mean different things: a prep deployed before it
+    // accepted revoke targets says nothing at all, and a prep that read the
+    // target but could not derive a page says why.
+    const answered = (render?.trace ?? []).find(
+      (line) => typeof line === 'string' && line.startsWith('revoke'),
+    );
     ctx.out.warn(
-      'no removal was prepared: the deployed prep action does not accept a revoke target — rebuild and deploy the actions (`pnpm -C src/press actions:build`), then re-run',
+      answered
+        ? `no removal was prepared: ${answered}`
+        : 'no removal was prepared: the deployed prep action does not accept a revoke target — add and release the rebuilt action, then re-run',
     );
   }
 
