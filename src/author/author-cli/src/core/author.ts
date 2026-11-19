@@ -1119,6 +1119,12 @@ export async function revokeContent(
   );
   if (removalRefusal) {
     ctx.out.warn(`the page was NOT removed: ${removalRefusal}`);
+  } else if ((render?.remove ?? []).length === 0) {
+    // The removal path is prepared by the action, not here. A prep that does
+    // not answer a revoke target is a prep deployed before it accepted one.
+    ctx.out.warn(
+      'no removal was prepared: the deployed prep action does not accept a revoke target — rebuild and deploy the actions (`pnpm -C src/press actions:build`), then re-run',
+    );
   }
 
   return {
