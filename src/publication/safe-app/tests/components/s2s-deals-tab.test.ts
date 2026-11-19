@@ -91,6 +91,24 @@ const m = vi.hoisted(() => {
     ...extra,
   });
 
+  /**
+   * A v2 public part: `creationDate` / `modifiedDate` in unix seconds, and no
+   * `createdAt` at all. This is the shape the tab used to read as undefined and
+   * print as "Invalid Date".
+   */
+  const contentForV2 = (title: string, dates: Record<string, unknown> = {}) => ({
+    public: {
+      specVersion: '2',
+      author: '0xAuthor1',
+      postType: 'post',
+      position: '1',
+      tags: ['s2s'],
+      ...dates,
+    },
+    body: JSON.stringify({ title }),
+    encryption: false,
+  });
+
   const safeIntegration = {
     getAllDealsAndOffers: vi.fn<() => Promise<{ deals: unknown[]; offers: unknown[] }>>(
       async () => ({ deals: [], offers: [] }),
@@ -118,6 +136,7 @@ const m = vi.hoisted(() => {
   return {
     makeStore,
     contentFor,
+    contentForV2,
     safeIntegration,
     fetchFromIPFS,
     toBytes32Id,
@@ -258,6 +277,18 @@ function rowRenderButton(root: ShadowRoot, genesis: string): HTMLButtonElement |
     if (btn?.getAttribute('data-genesis') === genesis) return btn;
   }
   return null;
+}
+
+/** The text of a row's cells, in column order (id, author, type, created, ...). */
+function cellTexts(root: ShadowRoot, genesis: string): string[] {
+  const row = root.querySelector(`[data-genesis="${genesis}"]`);
+  if (row === null) return [];
+  return [...row.querySelectorAll('.table-cell')].map((c) => (c.textContent ?? '').trim());
+}
+
+/** A table's header cells, in order, as the tab labels them. */
+function headerLabels(table: Element): string[] {
+  return [...table.querySelectorAll('.table-header')].map((h) => (h.textContent ?? '').trim());
 }
 
 /** The render envelope renderwithLitActions resolves with (success shape). */
@@ -452,7 +483,7 @@ describe('s2s-deals-tab', () => {
     ]);
   });
 
-  it('sorts the ID / Title column by the name the row shows', async () => {
+  it('sorts the id column by the name the row shows', async () => {
     // One labelled encrypted row among the plaintext ones: a getter that
     // agreed on titles but sorted an encrypted row by its genesis id (or its
     // '-' placeholder) lands in a different order.
@@ -662,7 +693,10 @@ describe('s2s-deals-tab', () => {
       expect(args[0]).toBe(false);
       expect(args[6]).toBe('0xSafe');
       expect(args[8]).toEqual(['0xOffer1']);
-      expect(root.textContent).toContain('Published');
+      // Done offers no action of its own: the row simply stops, and says
+      // nothing it has not already said in a notice.
+      expect(rowRenderButton(root, '0xOffer1')).toBeNull();
+      expect(root.textContent).not.toContain('Published');
     });
   });
 
@@ -707,9 +741,11 @@ describe('s2s-deals-tab', () => {
       expect(args[0]).toBe(false);
       expect(args[8]).toEqual(['0xDeal1']);
       expect(args[12]).toBeUndefined();
-      // A completed removal says Removed, never Published: the page is gone.
-      expect(root.textContent).toContain('Removed');
-      expect(root.textContent).not.toContain('Published');
+      // A completed removal leaves the row with no action at all — no green
+      // "Removed" button, the same as a row that owes nothing.
+      expect(rowRenderButton(root, '0xDeal1')).toBeNull();
+      expect(root.textContent).not.toContain('Removed');
+      expect(root.textContent).not.toContain('Publish');
     });
   });
 
@@ -758,6 +794,56 @@ describe('s2s-deals-tab', () => {
       // Once its removal is rendered the row has nothing left to say.
       await flushUpdates(el);
       expect(root.querySelector('[data-genesis="0xOffer1"]')).toBeNull();
+    });
+  });
+
+  it('keeps a refused offer whose removal was skipped, with the removal still on offer', async () => {
+    let loads = 0;
+    m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
+      loads += 1;
+      const row = rawDeal('0xOffer1', '0xAuthorOffer');
+      // The same retained row as above: the chain lists it nowhere after the
+      // refusal, so only the tab's own row carries the removal. The skip branch
+      // must not release it, or the row that owes the removal disappears.
+      return loads === 1 ? { deals: [], offers: [row] } : { deals: [], offers: [] };
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(false);
+    vi.mocked(renderwithLitActions).mockResolvedValue(
+      renderResult('bafyNoChange', [
+        'skip remove posts/offer.md: another genesis is in force',
+      ]),
+    );
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="reject"][data-status="offer"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+      expect(root.textContent).toContain('Remove page');
+
+      rowRenderButton(root, '0xOffer1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      // Still there, still offering its removal: a skip removed nothing.
+      expect(root.querySelector('[data-genesis="0xOffer1"]')).not.toBeNull();
+      const again = rowRenderButton(root, '0xOffer1');
+      expect(again).not.toBeNull();
+      expect(again!.hasAttribute('disabled')).toBe(false);
+      const host = root.querySelector('s2s-button[action="render"][genesis="0xOffer1"]');
+      expect(host).not.toBeNull();
+      expect(host!.textContent).toContain('Remove page');
+      expect(notificationTexts().join(' | ')).toContain(
+        'Removal skipped: posts/offer.md: another genesis is in force',
+      );
+      expect(root.textContent).not.toContain('Removed');
     });
   });
 
@@ -1037,13 +1123,14 @@ describe('s2s-deals-tab', () => {
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
 
-      expect(root.textContent).toContain('Removed');
+      expect(rowRenderButton(root, '0xDeal1')).toBeNull();
+      expect(root.textContent).not.toContain('Removed');
       expect(notificationTexts().join(' | ')).not.toContain('Removal failed');
       expect(notificationTexts().join(' | ')).not.toContain('Removal skipped');
     });
   });
 
-  it('calls a skipped removal done and says why it was skipped', async () => {
+  it('keeps the removal on offer when the action skips it, and says why', async () => {
     let loads = 0;
     m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
       loads += 1;
@@ -1074,7 +1161,17 @@ describe('s2s-deals-tab', () => {
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
 
-      expect(root.textContent).toContain('Removed');
+      // A skip is not a done row: the page was not removed, and another
+      // genesis may still be in force at that path.
+      const again = rowRenderButton(root, '0xDeal1');
+      expect(again).not.toBeNull();
+      expect(again!.hasAttribute('disabled')).toBe(false);
+      // The label lives in the s2s-button's own light DOM, not in the button
+      // element it renders into its shadow root.
+      const host = root.querySelector('s2s-button[action="render"][genesis="0xDeal1"]');
+      expect(host).not.toBeNull();
+      expect(host!.textContent).toContain('Remove page');
+      expect(root.textContent).not.toContain('Removed');
       expect(notificationTexts().join(' | ')).toContain(
         'Removal skipped: posts/gone: Failed to read MFS path',
       );
@@ -1364,6 +1461,169 @@ describe('s2s-deals-tab', () => {
       const args = lastRenderCall();
       expect(args[0]).toBe(true);
       expect(args[8]).toEqual(['0xPlain', '0xOfferPlain']);
+    });
+  });
+
+  it('reads a v2 creationDate and modifiedDate ahead of a stray v1 createdAt', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    // 1700000000 = 2023-11-14T22:13:20Z; 2024-01-01T08:05:00Z is the modified
+    // one. The stray v1 field says 2020-09-13: if it won, created would say so.
+    m.fetchFromIPFS.mockResolvedValue(
+      m.contentForV2('V2 manuscript', {
+        creationDate: 1_700_000_000,
+        modifiedDate: 1_704_067_200 + 8 * 3600 + 5 * 60,
+        createdAt: 1_600_000_000,
+      }),
+    );
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    const cells = cellTexts(root, '0xDeal1');
+    // created is the date only; modified is date plus 24-hour time.
+    expect(cells[3]).toBe('2023-11-14');
+    expect(cells[4]).toBe('2024-01-01 08:05');
+    // The v2 fields win: nothing in either cell comes from the stray createdAt.
+    expect(cells[3]).not.toBe('2020-09-13');
+    expect(cells[4]).not.toContain('2020-09-13');
+    // Nothing in either cell is locale-shaped: no AM/PM, no 11/14/23.
+    expect(cells[4]).not.toMatch(/[AP]M/);
+    expect(cells[3]).not.toContain('/');
+  });
+
+  it('falls back to a v1 createdAt for both dates', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    // A v1 public part: createdAt only, no creationDate/modifiedDate.
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('V1 manuscript'));
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    const deal = cellTexts(root, '0xDeal1');
+    expect(deal[3]).toBe('2023-11-14');
+    // A v1 item has one date, so its modified date is that same date and time.
+    expect(deal[4]).toBe('2023-11-14 22:13');
+    expect(deal[4]).not.toMatch(/[AP]M/);
+
+    // The offers table reads the same field the same way.
+    expect(cellTexts(root, '0xOffer1')[3]).toBe('2023-11-14');
+  });
+
+  it('shows an em dash for an item with no usable date, never Invalid Date', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xUndated', '0xAuthorDeal'), rawDeal('0xGarbage', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockImplementation((_gw: string, cid: string) => {
+      const content = m.contentFor('Undated manuscript');
+      const pub = content.public as unknown as Record<string, unknown>;
+      // Neither shape's field, and then a field that is present but unparseable.
+      if (cid === 'cid-0xUndated') delete pub.createdAt;
+      else pub.createdAt = 'not-a-timestamp';
+      return Promise.resolve(content);
+    });
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (2)'));
+
+    for (const genesis of ['0xUndated', '0xGarbage']) {
+      const cells = cellTexts(root, genesis);
+      // Neither cell borrows the chain timestamp: no content date, no date.
+      expect(cells[3]).toBe('—');
+      expect(cells[4]).toBe('—');
+      expect(root.textContent).not.toContain('Invalid Date');
+    }
+  });
+
+  it('heads both tables with the short column labels', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    const tables = [...root.querySelectorAll('s2s-table')];
+    const offersTable = tables.find((t) => (t.textContent ?? '').includes('Pending Offers'))!;
+    const dealsTable = tables.find((t) => (t.textContent ?? '').includes('Active Agreements'))!;
+
+    // The offers table keeps its status column and its label.
+    expect(headerLabels(offersTable)).toEqual([
+      'id',
+      'author',
+      'type',
+      'created',
+      'tags',
+      'status',
+      'actions',
+    ]);
+    expect(headerLabels(dealsTable)).toEqual([
+      'id',
+      'author',
+      'type',
+      'created',
+      'modified',
+      'tags',
+      'actions',
+    ]);
+  });
+
+  it('lays the buttons of an actions cell out in one row, on both tables', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(true);
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    // Room for every button in each actions cell: this is about the direction
+    // the cell lays them out in, not about how little space it has.
+    el.style.width = '1600px';
+    await flushUpdates(el);
+
+    await withFakeTimers(el, async () => {
+      // Both rows get an action of their own beside their standing one: the
+      // offer keeps Accept/Refuse and gains the waiting one, the deal keeps
+      // Revoke and gains it.
+      findRowButton(root, 'button[data-action="accept"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      findRowButton(root, 'button[data-action="reject"][data-status="deal"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      for (const genesis of ['0xDeal1', '0xOffer1']) {
+        const cell = root.querySelector(`[data-genesis="${genesis}"] .row-actions`) as HTMLElement;
+        expect(cell).not.toBeNull();
+        // Same class on both cells, and a row despite .table-cell's column.
+        // It wraps rather than squeezing the fr columns when space is short.
+        expect(getComputedStyle(cell).flexDirection).toBe('row');
+        expect(getComputedStyle(cell).flexWrap).toBe('wrap');
+
+        const lefts = [...cell.querySelectorAll('s2s-button')].map(
+          (b) => b.getBoundingClientRect().left,
+        );
+        expect(lefts.length).toBeGreaterThan(1);
+        expect([...lefts].sort((a, b) => a - b)).toEqual(lefts);
+        expect(new Set(lefts).size).toBe(lefts.length);
+      }
     });
   });
 });

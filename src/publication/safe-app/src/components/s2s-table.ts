@@ -8,7 +8,7 @@
 // DESIGN NOTES
 // - Renders into LIGHT DOM (createRenderRoot() => this) so the host tab's
 //   shadow styles — the shared tableStyles/filterStyles plus per-row classes
-//   such as .offer-actions / .state-badge / .cached — keep applying to the
+//   such as .row-actions / .state-badge / .cached — keep applying to the
 //   rendered rows unchanged. No style migration is needed; `s2s-table` gets
 //   `display:block` from table-styles.ts (the single source of table CSS).
 // - The HOST owns SortState/FilterState plus the chips state (passed down as
