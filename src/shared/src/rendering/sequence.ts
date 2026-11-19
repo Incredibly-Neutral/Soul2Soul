@@ -13,6 +13,7 @@ import {
   validateSingleOutput,
 } from './action-io';
 import { S2SJob } from './types';
+import type { RevokeTarget } from '../lit/actions/types';
 import { runAction } from './helpers';
 
 // ===========================================================================
@@ -166,7 +167,7 @@ export const renderwithLitActions = async (
   /** Kubo RPC bearer token for the data gateway (token-gated writes). */
   _ipfsGatewayAuth?: string,
   /** Ids the caller is revoking: prep derives each page path and removes it. */
-  revokeIds?: string[],
+  revokeIds?: RevokeTarget[],
 ) => {
   let jobs: S2SJob[] = [];
   let cid: string | null = null;
@@ -324,7 +325,16 @@ export const renderwithLitActions = async (
 
     // Merge: auto-detected (slug-change) removals from prep + revoked-job
     // paths + caller-supplied removals (neutralpress revoke flow).
-    allRemove = [...(prepRemove ?? []), ...revokedRemove, ...(remove ?? [])];
+    //
+    // A revoked job re-renders from a stored body that has lost its slug, so its
+    // path can come back as the template itself (`/posts/{slug}/`). That names
+    // no directory: dropping it here leaves prep's own entry, which it derived
+    // with the slug the caller supplied, as the removal.
+    allRemove = [...(prepRemove ?? []), ...revokedRemove, ...(remove ?? [])].filter((entry) => {
+      if (!/\{[a-z_]+\}/i.test(entry.path)) return true;
+      console.warn(`drop remove ${entry.path}: unresolved template placeholder`);
+      return false;
+    });
 
     // Primary job path (first active rendered job = the content the user triggered)
     primaryPath = activeJobs[0]?.path ?? '';

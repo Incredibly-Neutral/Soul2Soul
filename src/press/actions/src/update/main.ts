@@ -321,6 +321,13 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     trace.push(`cp ${jobs.length} files`);
     await Promise.all(
       (jobs as any[]).map(async (job) => {
+        // A revoked item re-renders from a stored body that has lost its slug,
+        // so its path can be the template itself. There is no such directory to
+        // write; the removal entry does the work.
+        if (typeof job.path === 'string' && /\{[a-z_]+\}/i.test(job.path)) {
+          trace.push(`skip cp ${job.path}: unresolved template placeholder`);
+          return;
+        }
         const filePath = job.path === 'index.html' ? 'index.html' : `${job.path}/index.html`;
         const destPath = `${mfsPath}/${filePath}`;
         const sourceCid = job.html;

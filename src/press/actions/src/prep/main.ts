@@ -2,6 +2,7 @@ import {
   ActionResult,
   PrepData,
   PrepInput,
+  RevokeTarget,
   S2SBody,
   S2SJob,
   S2STemplateConfig,
@@ -82,6 +83,9 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
     // action independently refuses to render such a body, so no job is lost —
     // it is reported instead of aborting the invocation.
     const skipped: { genesis: string; cid: string; reason: string }[] = [];
+    // The body each content id resolved to, kept for the revoke pass: a
+    // retracted item's body is the only place its locale and postType survive.
+    const bodies = new Map<string, any>();
 
     for (const contentId of contentIds) {
       let body: any;
@@ -94,6 +98,7 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
         continue;
       }
       if (!body?.id) throw `content not found: '${contentId}'`;
+      bodies.set(body.id, body);
 
       // Slug-change detection: compare the current path with the previous
       // version's, both derived by createPath, so a moved page is removed at
@@ -167,14 +172,35 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
 
     if (skipped.length > 0) trace.push({ skipped });
 
-    // The caller names the ids it is revoking; the path comes from the job prep
-    // already built for that id, never from the caller. A caller-side guess
-    // (the old `/{slug}`) removed nothing on a publication whose post template
-    // renders elsewhere.
-    for (const id of input.revoke ?? []) {
-      const job = jobs.find((j) => j.id === id && j.path);
-      if (job?.path) remove.push({ path: job.path });
-      else trace.push(`revoke: no page path for ${id.slice(0, 12)}… — nothing to remove`);
+    // The caller names the ids it is revoking; the path comes from the
+    // publication's template for that item's post type, the same createPath the
+    // render writes with. It is never the caller's to guess: `/{slug}` removed
+    // nothing on a post template that renders `/posts/{slug}/`.
+    //
+    // A retracted item's stored body keeps its public part but has lost the
+    // slug (the version log tombstones it), so the body alone renders the path
+    // as `/posts/{slug}/` — a directory that does not exist. The caller holds
+    // the note and supplies the slug; the template still comes from the config.
+    for (const target of (input.revoke ?? []) as RevokeTarget[]) {
+      const body = bodies.get(target.id);
+      const identity: any = {
+        ...(body ?? {}),
+        slug: body?.slug || target.slug,
+        locale: body?.locale || target.locale,
+        postType: body?.postType || target.postType,
+      };
+      const { templateConfig: revokeTemplateConfig } = await getTaskConfig(config, identity);
+      const path = revokeTemplateConfig
+        ? createPath(identity, revokeTemplateConfig, config.localePaths)
+        : undefined;
+      if (path && !path.includes('{')) {
+        remove.push({ path });
+        trace.push(
+          `revoke ${target.id.slice(0, 12)}… → ${path}${body?.slug ? '' : ' (slug from the caller: the stored body has none)'}`,
+        );
+      } else {
+        trace.push(`revoke: no page path for ${target.id.slice(0, 12)}… — nothing to remove`);
+      }
     }
 
     // dedup by id, first occurrence wins

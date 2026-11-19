@@ -60,7 +60,7 @@ const FORGED_PLAINTEXT = JSON.stringify({ content: 'FORGED', slug: 'hello', titl
  * author signature). `body` is swappable so the hash check can be exercised
  * without touching the signed `public` block.
  */
-const item = (body: string) => {
+const item = (body: string, hash = PLAINTEXT_HASH) => {
   const pub = {
     specVersion: '1',
     author: AUTHOR,
@@ -72,7 +72,7 @@ const item = (body: string) => {
     locale: 'en',
     createdAt: 1700000000,
     tags: [] as string[],
-    plaintextHash: PLAINTEXT_HASH,
+    plaintextHash: hash,
   };
   const digest = ethers.utils._TypedDataEncoder.hash(
     S2S_DOMAIN as never,
@@ -218,11 +218,35 @@ describe('prep — revoke removal targets the page the template renders', () => 
       rippleConfigs: [],
     } as never);
 
-    const result = await main({ ...input([genesis]), revoke: [genesis] });
+    const result = await main({ ...input([genesis]), revoke: [{ id: genesis }] });
 
     if (!result.ok) throw new Error(result.error);
     expect(result.data.jobs[0].path).toBe('/posts/hello/');
     expect(result.data.remove).toEqual([{ path: '/posts/hello/' }]);
+  });
+
+  it('falls back to the slug the caller supplies when the body has none', async () => {
+    // A retracted item's stored body survives without its slug — the version
+    // log tombstones it. Left to the body alone the path comes out as the
+    // template itself, `/posts/{slug}/`, which no tree contains.
+    vi.mocked(getTaskConfig).mockResolvedValue({
+      templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+      rippleConfigs: [],
+    } as never);
+    const noSlug = JSON.stringify({ content: 'Hello', slug: '', title: 'Hello' });
+    vi.mocked(catFile).mockImplementation((() =>
+      Promise.resolve(
+        JSON.stringify(item(noSlug, ethers.utils.keccak256(ethers.utils.toUtf8Bytes(noSlug)))),
+      )) as never);
+
+    const result = await main({
+      ...input([genesis]),
+      revoke: [{ id: genesis, slug: 'test2', locale: 'en', postType: 'post' }],
+    });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.jobs[0].path).toBe('/posts/{slug}/');
+    expect(result.data.remove).toEqual([{ path: '/posts/test2/' }]);
   });
 
   it('removes nothing, and says so, when the id rendered no page', async () => {
@@ -232,7 +256,7 @@ describe('prep — revoke removal targets the page the template renders', () => 
     } as never);
     const absent = '0x' + '33'.repeat(32);
 
-    const result = await main({ ...input([genesis]), revoke: [absent] });
+    const result = await main({ ...input([genesis]), revoke: [{ id: absent }] });
 
     if (!result.ok) throw new Error(result.error);
     expect(result.data.remove).toBeUndefined();

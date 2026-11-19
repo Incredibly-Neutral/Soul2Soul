@@ -159,10 +159,11 @@ export interface AuthorWriteOptions {
   remove?: { path: string; replacedBy?: string }[];
   /**
    * Ids being revoked. The pipeline resolves each id's page path in prep, with
-   * the renderer's own createPath, and removes that: a caller-side path guess
-   * (`/{slug}`) misses a publication whose post template renders elsewhere.
+   * the renderer's own createPath and the publication's template, and removes
+   * that. The slug travels with it because a retracted item's stored body no
+   * longer carries one.
    */
-  revoke?: string[];  /**
+  revoke?: { id: string; slug?: string; locale?: string; postType?: string }[];  /**
    * Allow replacing a previously-encrypted genesis with a plaintext body
    * (`--allow-plaintext`). Without it, a republish that drops `encrypted: true`
    * is refused — see `guardEncryptionDowngrade`.
@@ -1097,7 +1098,14 @@ export async function revokeContent(
     render: true,
     publish: true,
     offer: false,
-    revoke: [genesis],
+    revoke: [
+      {
+        id: genesis,
+        slug: parsed.slug,
+        locale: parsed.locale,
+        postType: parsed.postType,
+      },
+    ],
   });
 
   // The update action decides the removal after the fact: it skips the path
