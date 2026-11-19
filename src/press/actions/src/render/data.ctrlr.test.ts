@@ -179,16 +179,8 @@ describe('createPath: {slug} substitution (unchanged)', () => {
     ).toBe('/en/hi/');
   });
 
-  // An encrypted body only has a slug when someone supplied one, and the one
-  // caller that does is a revoke: the stored body of a retracted item has lost
-  // its slug, so the note the author holds names the page instead. Substituting
-  // it is the only way prep can name the page the site is serving.
-  it('substitutes a slug an encrypted body carries', () => {
-    expect(createPath(body({ encryption: true, slug: 'secret' }), tpl(SLUG_PATH))).toBe('/secret/');
-  });
-
-  it('leaves the placeholder when an encrypted body has no slug', () => {
-    expect(createPath(body({ encryption: true, slug: undefined }), tpl(SLUG_PATH))).toBe(SLUG_PATH);
+  it('does NOT substitute {slug} when body.encryption is true', () => {
+    expect(createPath(body({ encryption: true, slug: 'secret' }), tpl(SLUG_PATH))).toBe(SLUG_PATH);
   });
 
   it('does NOT substitute when slug is missing', () => {

@@ -2,7 +2,6 @@ import {
   ActionResult,
   PrepData,
   PrepInput,
-  RevokeTarget,
   S2SBody,
   S2SJob,
   S2STemplateConfig,
@@ -20,22 +19,21 @@ import { getConfig, getTaskConfig } from '../render/config.ctrl';
 import { requireFields, setRpcAuth } from '../libs/helpers';
 import { catFile } from '../libs/ipfs.factory';
 import { storedBody } from '../libs/item-integrity';
-import { createPath } from '../libs/paths';
 import { rippleFiresForBody } from './ripple-gate';
 
 const ACTION = 'prep';
 
 /**
- * For a content genesis, read the previous version's body from IPFS.
- * The body carries slug, locale and postType, which is what the page path is
- * derived from, so the whole body comes back rather than just the slug.
+ * For a content genesis, check the on-chain version log for the previous version.
+ * Fetch its content item from IPFS and extract the old slug.
+ * Returns the old slug, or null if this is the first version.
  */
-async function getOldBody(
+async function getOldSlug(
   genesis: string,
   publicationModule: string,
   rpcs: string[] | undefined,
   gateway: string | undefined,
-): Promise<any | null> {
+): Promise<string | null> {
   const version = await getVersion(genesis, publicationModule, rpcs);
   if (!version || !version.cid) return null;
 
@@ -43,7 +41,8 @@ async function getOldBody(
   const body = storedBody(item);
   if (!body) return null;
 
-  return JSON.parse(body);
+  const parsed = JSON.parse(body);
+  return parsed.slug || null;
 }
 
 async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
@@ -83,9 +82,6 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
     // action independently refuses to render such a body, so no job is lost —
     // it is reported instead of aborting the invocation.
     const skipped: { genesis: string; cid: string; reason: string }[] = [];
-    // The body each content id resolved to, kept for the revoke pass: a
-    // retracted item's body is the only place its locale and postType survive.
-    const bodies = new Map<string, any>();
 
     for (const contentId of contentIds) {
       let body: any;
@@ -98,34 +94,18 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
         continue;
       }
       if (!body?.id) throw `content not found: '${contentId}'`;
-      bodies.set(body.id, body);
 
-      // Slug-change detection: compare the current path with the previous
-      // version's, both derived by createPath, so a moved page is removed at
-      // the path it actually had.
-      const oldBody = await getOldBody(contentId, publicationModule, rpcs?.L2, gateway!);
-      if (oldBody?.slug && body.slug && oldBody.slug !== body.slug) {
-        const oldTemplateConfig = getTaskConfig(config, oldBody).templateConfig;
-        const oldPath = oldTemplateConfig
-          ? createPath(oldBody, oldTemplateConfig, config.localePaths)
-          : `/${oldBody.slug}`;
-        remove.push({ path: oldPath, replacedBy: contentId });
-        trace.push(`slug change: ${oldBody.slug} → ${body.slug} (${contentId.slice(0, 12)}…)`);
+      // Slug-change detection: compare current slug with the first-version slug
+      const oldSlug = await getOldSlug(contentId, publicationModule, rpcs?.L2, gateway!);
+      if (oldSlug && body.slug && oldSlug !== body.slug) {
+        remove.push({ path: oldSlug, replacedBy: contentId });
+        trace.push(`slug change: ${oldSlug} → ${body.slug} (${contentId.slice(0, 12)}…)`);
       }
 
       const { templateConfig, rippleConfigs } = await getTaskConfig(config, body);
 
       if (templateConfig && templateConfig.file != null) {
-        jobs.push({
-          id: body.id,
-          templateConfig,
-          // The page this item will occupy, from the same createPath the
-          // render action writes with. The orchestrator turns it into the
-          // remove entry for a revoke, so the removal names a page that exists.
-          path: createPath(body, templateConfig, config.localePaths),
-          templateData: undefined,
-          html: '',
-        });
+        jobs.push({ id: body.id, templateConfig, templateData: undefined, html: '' });
       }
 
       if (contentIds.length === 1) {
@@ -171,37 +151,6 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
     }
 
     if (skipped.length > 0) trace.push({ skipped });
-
-    // The caller names the ids it is revoking; the path comes from the
-    // publication's template for that item's post type, the same createPath the
-    // render writes with. It is never the caller's to guess: `/{slug}` removed
-    // nothing on a post template that renders `/posts/{slug}/`.
-    //
-    // A retracted item's stored body keeps its public part but has lost the
-    // slug (the version log tombstones it), so the body alone renders the path
-    // as `/posts/{slug}/` — a directory that does not exist. The caller holds
-    // the note and supplies the slug; the template still comes from the config.
-    for (const target of (input.revoke ?? []) as RevokeTarget[]) {
-      const body = bodies.get(target.id);
-      const identity: any = {
-        ...(body ?? {}),
-        slug: body?.slug || target.slug,
-        locale: body?.locale || target.locale,
-        postType: body?.postType || target.postType,
-      };
-      const { templateConfig: revokeTemplateConfig } = await getTaskConfig(config, identity);
-      const path = revokeTemplateConfig
-        ? createPath(identity, revokeTemplateConfig, config.localePaths)
-        : undefined;
-      if (path && !path.includes('{')) {
-        remove.push({ path });
-        trace.push(
-          `revoke ${target.id.slice(0, 12)}… → ${path}${body?.slug ? '' : ' (slug from the caller: the stored body has none)'}`,
-        );
-      } else {
-        trace.push(`revoke: no page path for ${target.id.slice(0, 12)}… — nothing to remove`);
-      }
-    }
 
     // dedup by id, first occurrence wins
     const seen = new Set<string>();

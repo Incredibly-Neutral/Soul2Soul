@@ -10,12 +10,10 @@
 // ============================================================================
 
 import {
-  MANIFEST_VERSION_KEY,
   resolvePublicationModules,
   resolvePublicationSafe,
   subdomainOf,
   toBytes32Id,
-  type S2SManifest,
   type S2SIPFSMethods,
 } from '@s2s/soul2soul-shared';
 import { S2SRecordsModuleV0_1, S2SPublicationModuleV0_1 } from '@s2s/publication-contracts';
@@ -75,18 +73,6 @@ export class PublicationService {
   safeAddress: Address | undefined;
   configModule: Address | undefined;
   publicationModule: Address | undefined;
-  /**
-   * The manifest version this publication pins (`manifest_version` on its
-   * records module), or undefined when it pins none.
-   *
-   * The protocol's current document is not the publication's: a release goes
-   * live for a publication when that publication's pin moves, and an action CID
-   * is only what this publication runs if its pin names the version carrying it.
-   */
-  manifestVersion: string | undefined;
-
-  /** The document `manifestVersion` names. Read once, by `manifestFor`. */
-  pinnedManifest: S2SManifest | undefined;
 
   private constructor(options: PublicationServiceOptions, subdomain: string) {
     this.options = options;
@@ -112,28 +98,6 @@ export class PublicationService {
       throw new Error(
         `No S2S publication module found on Safe ${address} (${this.subdomain}). Is the publication created and its modules enabled?`,
       );
-    }
-
-    // A publication that pins no version runs the protocol's current document;
-    // an unreadable record is the same answer, not a failure — nothing downstream
-    // needs the pin to be readable.
-    if (configModule) {
-      try {
-        const answer = (await this.options.l2.readContract({
-          address: configModule,
-          abi: S2SRecordsModuleV0_1,
-          functionName: 'getRecord',
-          args: [MANIFEST_VERSION_KEY],
-        } as never)) as unknown;
-        // `getRecord` answers the value, not a tuple around it: destructuring a
-        // string yields its first character, which is how a pin of `d.0.4`
-        // became the version `d`.
-        const pinned = (Array.isArray(answer) ? answer[0] : answer) as unknown;
-        this.manifestVersion =
-          typeof pinned === 'string' && pinned.trim() !== '' ? pinned.trim() : undefined;
-      } catch {
-        this.manifestVersion = undefined;
-      }
     }
   }
 
@@ -197,27 +161,6 @@ export class PublicationService {
 
     await this.simulateAuthorWrite(module, author, 'retract', [id]);
     return author.runner.genericTx(module, JSON.stringify(S2SPublicationModuleV0_1), 'retract', [id], false);
-  }
-
-  /**
-   * Is this genesis already out of both sets on-chain?
-   *
-   * `retract` removes the agreement (or the offer) and nothing outside the
-   * module can put it back, so both false means the retract already happened.
-   * A revoke that stopped at the retract (site removal failed, process killed)
-   * is re-runnable from the removal half: sending `retract` again reverts with
-   * "not an agreement or offer", which is a dead end for the caller, not a
-   * permission problem.
-   */
-  async isSpent(genesis: string): Promise<boolean> {
-    const module = this.requirePublicationModule();
-    const id = toBytes32Id(genesis) as Hex;
-    const abi = JSON.stringify(S2SPublicationModuleV0_1);
-    const [agreement, offer] = await Promise.all([
-      this.options.l2Runner.genericRead(module, abi, 'hasAgreement', [id]) as Promise<boolean>,
-      this.options.l2Runner.genericRead(module, abi, 'hasOffer', [id]) as Promise<boolean>,
-    ]);
-    return agreement === false && offer === false;
   }
 
   private requirePublicationModule(): Address {
@@ -287,5 +230,65 @@ export class PublicationService {
           '  and it must be the genesis author of anything it edits.',
       );
     }
+  }
+
+  /**
+   * The publication config document (Records module `getRecord('config')` →
+   * config CID → fetched JSON), read once per service and cached, so the
+   * revoke path derivation and the locale map come from the same fetch the
+   * renderer uses. Returns undefined when the config can't be resolved.
+   */
+  private configDocumentPromise: Promise<any | undefined> | null = null;
+  private configDocument(): Promise<any | undefined> {
+    if (!this.configDocumentPromise) {
+      this.configDocumentPromise = (async () => {
+        if (!this.configModule) return undefined;
+        try {
+          const configCid = (await this.options.l2Runner.genericRead(
+            this.configModule,
+            JSON.stringify(S2SRecordsModuleV0_1),
+            'getRecord',
+            ['config'],
+          )) as string;
+          if (!configCid) return undefined;
+
+          const config = (await this.options.ipfs.fetchFromKubo(configCid)) as any;
+          if (!config || config.Type === 'error') return undefined;
+          return config;
+        } catch {
+          return undefined;
+        }
+      })();
+    }
+    return this.configDocumentPromise;
+  }
+
+  /**
+   * Read the publication's real on-chain `localePaths` (Records module
+   * `getRecord('config')` → config CID → fetched mapping) so the revoke
+   * remove-path reproduces the renderer's `createPath` prefix exactly.
+   * Returns undefined when the config can't be resolved (caller falls back to
+   * the legacy scheme + caveat rather than aborting the revoke).
+   */
+  async localePathsOf(): Promise<Record<string, string> | undefined> {
+    const config = await this.configDocument();
+    if (!config) return undefined;
+    return config.localePaths ?? config.mapping?.localePaths;
+  }
+
+  /**
+   * The publication's template path for one post type, as the renderer's
+   * `createPath` reads it (`config.mapping.templateConfig[reference].path`).
+   * This is what makes a revoke remove the page where it was actually written:
+   * a post template at `/posts/{slug}/` is not the `/{slug}` the standard
+   * scheme assumes. Returns undefined when the config or the template can't be
+   * resolved, so the caller falls back to the standard scheme and says so.
+   */
+  async templatePathOf(postType: string | undefined): Promise<string | undefined> {
+    const config = await this.configDocument();
+    if (!config) return undefined;
+    const templates: any[] = config.mapping?.templateConfig ?? config.templates ?? [];
+    const entry = templates.find((t) => t?.reference === (postType ?? 'post'));
+    return typeof entry?.path === 'string' ? entry.path : undefined;
   }
 }

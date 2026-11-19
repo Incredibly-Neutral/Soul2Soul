@@ -25,7 +25,6 @@ import { jcs, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
-import { createPath } from '../libs/paths';
 import {
   S2SBodyEncrypted,
   S2SBodyPlain,
@@ -33,10 +32,22 @@ import {
   type AnyS2SContentItem,
 } from '../../../../shared/dist/manuscript/types';
 
-// Re-exported so existing consumers and tests keep importing it from here;
-// the implementation is in libs/paths, shared with the prep action, which must
-// report the same page path a removal will target.
-export { createPath };
+export const createPath = (
+  body: S2SBody,
+  templateConfig: S2STemplateConfig,
+  localePaths?: Record<string, string>,
+): string => {
+  if (templateConfig.path == null) return '/';
+  const prefix = localePaths ? (localePaths[body.locale] ?? localePaths.default ?? '') : '';
+
+  let path = prefix + templateConfig.path;
+
+  if (!body.encryption && body.slug && path.includes('{slug}')) {
+    path = path.replace('{slug}', body.slug);
+  }
+
+  return path;
+};
 
 /**
  * Identity fields that belong to the signed content item and must survive the
