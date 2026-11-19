@@ -21,7 +21,7 @@ export interface S2SContentInfo {
     };
   };
   publisher?: {
-    /** The publisher's bare 0x address. */
+    /** The publication Safe (the Safe that owns the ENS name), not the render signer. */
     address: string;
     /** The publication Safe's 0x address. */
     safe?: string;

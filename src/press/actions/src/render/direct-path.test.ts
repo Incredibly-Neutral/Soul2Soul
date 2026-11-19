@@ -317,9 +317,11 @@ describe('render action — plaintext integrity (direct read path)', () => {
     const item = contentItem();
     expect(metadata?.author?.proof).toEqual({ ...item.proof, objectId: item.objectId });
     expect(metadata?.objectId).toBe(item.objectId);
-    expect(metadata?.publisher?.address).toBe(SIGNER);
+    // The page names the publication: the Safe that owns the ENS name, not
+    // the render signer and not the author's Safe.
+    expect(metadata?.publisher?.address).toBe('0xms');
     expect(metadata?.publisher?.url).toBe(PUBLICATION);
-    expect(metadata?.publisher?.safe).toBe(AUTHOR_SAFE);
+    expect(metadata?.publisher).not.toHaveProperty('safe');
     expect(metadata?.licenseContract).toBe('0xpub');
 
     const data = (result as { data?: { job?: { html?: string } } }).data;
