@@ -16,7 +16,7 @@
 //
 // The archive is platform-neutral on purpose: it needs node 20 or newer and
 // nothing else, which is why the name says `-node` rather than an OS. Upload
-// both files to the release tagged `v<version>`; `install.sh` fetches by that
+// both files to the release tagged `<version>`; `install.sh` fetches by that
 // tag and verifies the checksum before unpacking.
 
 import { spawnSync } from 'node:child_process';
@@ -94,8 +94,8 @@ process.stdout.write(
     `packed ${names.tarball}  (${(bytes / 1024 / 1024).toFixed(2)} MB)`,
     `       ${names.checksum}  sha256 ${hash.slice(0, 16)}…`,
     '',
-    `upload both to the release tagged v${version}:`,
-    `  gh release create v${version} ${join(outDir, names.tarball)} ${join(outDir, names.checksum)} --title v${version}`,
+    `upload both to the release tagged ${version}:`,
+    `  gh release create ${version} ${join(outDir, names.tarball)} ${join(outDir, names.checksum)} --title ${version}`,
     '',
   ].join('\n'),
 );

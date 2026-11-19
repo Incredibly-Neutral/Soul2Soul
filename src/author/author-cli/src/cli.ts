@@ -34,7 +34,7 @@ import {
 import { findConfigCommand, runConfigGroup } from './commands/config';
 import { setup, setupHelp } from './commands/setup';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.3';
 
 const TOP_HELP = `s2s — Soul2Soul headless authoring CLI (v${VERSION})
 

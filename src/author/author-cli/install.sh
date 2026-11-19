@@ -111,7 +111,7 @@ elif [ "$local_file" = "$name.tar.gz" ]; then
   base="file://$PWD"
   printf 'install: using %s from %s\n' "$local_file" "$PWD"
 else
-  base="https://github.com/$REPO/releases/download/v${VERSION}"
+  base="https://github.com/$REPO/releases/download/${VERSION}"
 fi
 
 tmp=$(mktemp -d)
