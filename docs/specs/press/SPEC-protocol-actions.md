@@ -581,6 +581,31 @@ Lens `fetchByQuery` → `module.factory` (`getAgreements` / `fetchByPublication`
 cascade/ripple expansion logic in `prep` needs re-confirmation against current code before this
 section is relied upon.
 
+### Collection bundles
+
+A folder collection is a signed manuscript, not a template `collections[]` declaration: its
+`public.mediaType` is `application/vnd.s2s.collection+json` and its body carries `collection.items[]`.
+Render decrypts the bundle once per job, expands it with shared's `expandCollection`
+([SPEC-shared](../system/SPEC-shared.md)), and lays out the member that job is for. A member's id is
+`<bundleGenesis>:<key>`, a render-time identity the chain never records; its path comes from the
+template for the member's own postType, and a member whose postType has no template is not rendered.
+An empty `items[]` expands to nothing: the bundle's own page still renders and does not list itself
+as a member.
+
+Prep emits one job per member, so a 40-member folder produces 40 jobs. On update, a member that
+disappeared or changed path produces a `remove` entry, and a deleted member's page comes off the
+tree. A revoke of the folder carries a target per member, plus the bundle, so the member pages are
+removed with the index.
+
+`fetchCollections` keeps a container in its results even when the container's own postType or tags do
+not match the filter, because the members are what gets filtered; dropping the container would drop
+every member with it.
+
+The press is stateless, so one decrypt serves one member page: a full rerender of a 40-member folder
+costs about 40 decrypts. The bundle removes per-item signing and per-item deals, not the per-page
+render. One bundle is one access unit, so everyone who can read one member can read all, and a
+revoke takes the whole folder.
+
 ---
 
 ## Library I/O (boundary descriptions for unit tests)
