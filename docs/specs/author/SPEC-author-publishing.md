@@ -178,7 +178,9 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
 - **Publication creation:** integration (chain fork + Lens testnet) — assert L1==L2 Safe address,
   both modules enabled + discoverable by NAME, feed created, records set, temp signer removed.
 - `renderCalls`: drive `renderwithLitActions` in `dev` mode through the Bun runner with fixtures
-  (the free path; the author host's `preview` command passes `dev` internally) — the sequence test
+  (the free path; the author host's `preview` command uses `dev` for a plaintext published version,
+  and for an encrypted one falls back to it when that version cannot be read, the preview gate
+  refuses, or the pinned render action cannot run unsigned) — the sequence test
   from SPEC-protocol-actions.
 
 ## Test coverage status (2026-10-12)

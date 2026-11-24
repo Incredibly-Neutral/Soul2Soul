@@ -1083,7 +1083,7 @@ lists the env names; every one is also settable in a config file as a dotted pat
 | `S2S_KUBO_TOKEN` | token-gated | — | Kubo bearer token (renders use it as `_ipfsGatewayAuth`). |
 | `S2S_PINATA_JWT` / `S2S_PINATA_GATEWAY` | backups | — | Pinata pinning leg. |
 | `S2S_FILEBASE_TOKEN` | backups | — | Filebase pinning leg. |
-| `S2S_RUNNER_URL` | preview (dev mode) | `https://run.transport-union.dev/run` | Lit-action runner (the `preview` command renders through it, in `dev` mode). |
+| `S2S_RUNNER_URL` | preview in `dev` mode | `https://run.transport-union.dev/run` | Lit-action runner. A preview renders through it when the publication's current version is plaintext, cannot be read, is refused by the gate, or belongs to a publication whose pinned render action cannot run unsigned. |
 | `S2S_RPC_L1` / `S2S_RPC_L2` | — | fallback chain | Explicit comma-separated L1/L2 RPC lists. Set **both** ⇒ they replace the derived chains; one alone heads its own chain and keeps the failover behind it. |
 | `MAINNET_RPC_URL` / `BASE_RPC_URL` | — | fallback chain | Not aliases of the two above: they take the head of their own chain (the DRPC slot of shared `buildFallbackRpcs`), so an explicit endpoint never costs the Alchemy/Infura/public fallbacks. |
 | `S2S_ENS_REGISTRY` | — | protocolInfo | Override the ENS OpenSubdomainRegistry address. |
@@ -1105,8 +1105,8 @@ lists the env names; every one is also settable in a config file as a dotted pat
 src/
   cli.ts            top-level dispatch (s2s <group> <action>), json/help/version, error envelope
   lib/              args parser, command spec, errors, output contract, frontmatter write-back
-  core/             configschema (the nested shape + field registry), config (the merger), configfile (config-file IO), defaults (the shipped layer — S2S_DEFAULTS_FILE seam), authors (the multi-identity store), context (clients), service, author write/revoke, encrypt seam
-  adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), safe-tx (Safe Transaction Service + the signed struct), ipfs, lit, rpc, filecoin
+  core/             configschema (the nested shape + field registry), config (the merger), configfile (config-file IO), defaults (the shipped layer — S2S_DEFAULTS_FILE seam), authors (the multi-identity store), context (clients), service, author write/revoke, encrypt seam, preview-mode (the render mode decision, pure)
+  adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), safe-tx (Safe Transaction Service + the signed struct), ipfs, lit, rpc, filecoin, gate-read (viem view calls behind shared's gate predicates)
   commands/         upload / offer / preview / publish / revoke (author), new / switch / list / rm (author store), new (publication), config set/get/unset/list/path, setup
 ```
 
@@ -1114,7 +1114,8 @@ Reused from shared (only): `parseMarkdownNote`, `extractFrontmatter`, `buildSign
 `noOpEncrypt`, `renderwithLitActions`, `revokedPathFor`, `runFilecoinLeg`,
 `toPreviewLabel`, `resolvePublicationSafe`, `resolvePublicationModules`, `subdomainOf`,
 `newPublicationSafe` + `buildNewPublicationDeps`, `S2SPublication`, `TxRunner`, `buildFallbackRpcs`,
-the protocol generated ABIs, and `toBytes32Id`.
+the protocol generated ABIs, `toBytes32Id`, and `canPreview` (the `gates` subpath — the preview
+admission is asked, never re-derived).
 
 Written fresh (nothing imported from neutralpress/0xobsidian):
 
@@ -1145,8 +1146,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   gates (which then check `isOwner(authorSafe, recovered)`), and owns the Safe. Sending an author
   write from the EOA reverts `OnlySafe()` on a genesis's first version and would permanently
   write `genesisAuthor = EOA`, locking the Safe and 0xobsidian out of that document.
-  (`preview` is **off-chain** — it never touches the chain. `upload`'s one chain write is the drafts
-  append, sent by the author Safe; it makes no offer.)
+  (`preview` writes nothing on chain; a preview of an encrypted published version reads the
+  publication module only to ask `canPreview` for this signer. `upload`'s one chain write is the
+  drafts append, sent by the author Safe; it makes no offer.)
 - **Identity everywhere else** — the item's `public.author`, frontmatter `author`, the render action's
   `authorSafeAddress`, and the Filecoin piece attribution (`[publicationSafe, authorSafe]`) all
   carry the author Safe. `s2s author info`/`config` print the EOA only as the Safe's owner.
@@ -1274,9 +1276,29 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   moves the document back to the offer set. A failed listing read warns and continues;
   `simulateAuthorWrite` still guards the write.
 - **Render gate**: `authorSafeAddress` = `service.getMultiSig()` (ENS-resolved, like neutralpress);
-  signature = `signMessage('lit actions auth')`; `litUsageKey` required; the `preview` command passes
-  `dev` (all stages on the Bun runner, unsigned), `publish` passes `publish` (render and update on
-  Lit nodes); kuboToken passed as Bearer `_ipfsGatewayAuth`.
+  signature = `signMessage('lit actions auth')`; `litUsageKey` required; kuboToken passed as Bearer
+  `_ipfsGatewayAuth`.
+- **Which mode a run uses** (`core/preview-mode.ts`, a pure function). The encryption state it
+  reads is the state of the version the renderer will read. `publish` renders this run's upload, so
+  it takes the local note's flag and passes `publish` (render and update on Lit nodes). A preview
+  makes no offer, so the renderer reads the publication's **current** version for the genesis: the
+  flag comes from that recorded item, fetched the way the downgrade guard fetches it, not from the
+  local note. From there: a plaintext version passes `dev` and keeps the cheap runner; an encrypted
+  version asks shared's `canPreview` whether this signer may decrypt the genesis, and the
+  **pinned** manifest whether `capabilities.unsignedRender` is advertised. Admitted with the
+  capability passes `preview`, costing one render stage on Lit, unsigned (the only runtime that
+  opens the body). Admitted without it passes `dev` with the pin line: the pinned action predates
+  unsigned previews, and the fix is a newer release (no version is named, because no release notes
+  entry records one yet). Refused passes `dev` with a line naming the refused address and the three
+  identities the gate admits: a listed reviewer, the manuscript's author, an owner of the
+  publication Safe. A published version whose state cannot be read is never guessed at: `dev` with
+  a line saying so, and the gate is not asked. A `canPreview` that throws means the gate could not
+  be asked at all, which is its own line, not a refusal. No mode writes on chain, and the mode
+  decision makes one chain read at most: the gate call, for an encrypted preview. Admission is
+  asked through `canPreview`, not re-derived here, so the CLI and the decrypt action read the same
+  predicate; the gate's three paths and their expiry are [SPEC-gates](../gates/SPEC-gates.md)'s.
+- **The retract re-render** goes through the same function with `publish: true`, so it is
+  unaffected by encryption, admission or the pin.
 - **Durability** (upload and publish only, never preview): fire-and-forget
   `backupToProviders` (filebase + pinata) plus the Filecoin leg (`runFilecoinLeg`) with
   `onFilecoinMismatch` CID reporting. The Filecoin leg needs the publication's Safe for the CAR
@@ -1373,7 +1395,11 @@ directory, never cwd), the `privateKey` file fallback (env and store still
 win; one stderr warning per file; `config unset privateKey` removing it, refusing to create an empty
 file, and naming a copy left in the legacy file), `s2s setup` (`--accept-defaults` writing nothing
 on a non-TTY, pasted values landing only in `custom.json`, never asking about lit/ens/github/
-privateKey), and the author store
+privateKey), the preview-mode decision (`test/preview-mode.test.ts`: plaintext on `dev`, an admitted
+encrypted preview on `preview` when the pin advertises the capability, the pin line when it does
+not, the address-specific refusal, the unreadable-published-version line, and `publish` ignoring
+all of it; `test/preview-mode-wiring.test.ts`: which mode reaches the renderer, that the gate is
+asked only for an encrypted preview, and the unreadable fallback), and the author store
 (`test/authors.test.ts`: file round-trip at mode 0600, XDG path resolution, tolerant reads of
 missing/corrupt/malformed files, pet-name validation and case-insensitive uniqueness, one key one
 name, switch, active-slot reassignment on `rm`, Safe write-back, the `env > project > store > user`
