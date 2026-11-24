@@ -519,9 +519,11 @@ const answeredTrue = async (question: () => Promise<boolean>): Promise<boolean> 
  *
  * The reads are ordered: `canReview` and `safe()` in parallel, `isOwnerAt` only
  * when the reviewer answer is false, and `hasAgreement`/`hasOffer` only when
- * the owner read passed. A read failure is never a way in: a throw or a
- * non-boolean answer refuses, and a `safe()` that is not a usable address (or
- * is the zero address) refuses the owner path.
+ * the owner read passed. A reviewer yes is the admission on its own, so a
+ * `safe()` that fails does not refuse a listed reviewer; that read feeds the
+ * owner path alone. A read failure is never a way in: a throw or a non-boolean
+ * answer refuses the question it was asked, and a `safe()` that is not a
+ * usable address (or is the zero address) refuses the owner path.
  *
  * `contentId` is normalised as {@link canRead} normalises it; pass `toId` when
  * your host has no ethers.
@@ -536,20 +538,21 @@ export const canPreview = async (
 ): Promise<boolean> => {
   const genesis = toId(contentId);
 
-  let reviewer: unknown;
-  let publicationSafe: unknown;
-  try {
-    [reviewer, publicationSafe] = await Promise.all([
-      read(publicationModule, CAN_REVIEW_ABI, 'canReview', [genesis, signerAddress]),
-      readValue(publicationModule, SAFE_ABI, 'safe', []),
-    ]);
-  } catch {
-    return false;
-  }
-  if (reviewer === true) return true;
+  const [reviewerAnswer, safeAnswer] = await Promise.allSettled([
+    read(publicationModule, CAN_REVIEW_ABI, 'canReview', [genesis, signerAddress]),
+    readValue(publicationModule, SAFE_ABI, 'safe', []),
+  ]);
 
-  // The owner path needs a real Safe to ask. A module that answers nothing, a
-  // non-address or the zero address cannot make its answer an owner's.
+  // A reviewer yes is the admission on its own. The Safe read is for the owner
+  // path only, so a module whose `safe()` reverts must not refuse a reviewer the
+  // contract already admitted.
+  if (reviewerAnswer.status === 'fulfilled' && (reviewerAnswer.value as unknown) === true)
+    return true;
+
+  // The owner path needs a real Safe to ask. A module that answers nothing or
+  // whose read failed, a non-address, or the zero address cannot make its
+  // answer an owner's.
+  const publicationSafe = safeAnswer.status === 'fulfilled' ? safeAnswer.value : undefined;
   if (typeof publicationSafe !== 'string' || !ADDRESS.test(publicationSafe)) return false;
   if (ZERO_ADDRESS.test(publicationSafe)) return false;
 

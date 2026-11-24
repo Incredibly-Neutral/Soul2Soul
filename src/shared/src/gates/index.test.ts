@@ -376,6 +376,7 @@ describe('canPreview', () => {
     hasAgreement?: boolean;
     hasOffer?: boolean;
     reviewerThrows?: boolean;
+    safeThrows?: boolean;
     agreementThrows?: boolean;
   }
 
@@ -398,7 +399,10 @@ describe('canPreview', () => {
     };
     const readValue: GateValueRead = async (target, _abi, fn, args) => {
       asked.push({ target, fn, args });
-      if (fn === 'safe') return options.publicationSafe ?? PUB_SAFE;
+      if (fn === 'safe') {
+        if (options.safeThrows) throw new Error('safe read down');
+        return options.publicationSafe ?? PUB_SAFE;
+      }
       throw new Error(`unexpected value read ${fn}:${target}`);
     };
     return { read, readValue, asked };
@@ -473,6 +477,24 @@ describe('canPreview', () => {
     const { read, readValue } = makePreviewChain({ reviewer: 'true' as unknown as boolean });
 
     expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+  });
+
+  it('admits a listed reviewer even when safe() reverts', async () => {
+    // The Safe read feeds the owner path only. A module that cannot name its
+    // Safe must not refuse a reviewer the contract already admitted.
+    const { read, readValue } = makePreviewChain({ reviewer: true, safeThrows: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+  });
+
+  it('admits the publication Safe s owner when canReview fails but safe() answers', async () => {
+    const { read, readValue } = makePreviewChain({
+      reviewerThrows: true,
+      owner: true,
+      hasOffer: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
   });
 
   it('refuses an owner path when the module names no usable Safe', async () => {
