@@ -85,7 +85,7 @@ const MANIFEST_VERSIONED_ABI = [
  *   version, gateway, ensRegistry, ensRecords, publicationFactory,
  *   recordsFactory, pkp, litActions{prep, render, update,
  *   maintainCache?, repointArchive?, encrypt?, decrypt?},
- *   capabilities?{unsignedRender?}
+ *   capabilities?{unsignedRender?, offerPreview?}
  *
  * Optional action CIDs are omitted when the action was never written, never
  * present as an empty string. There is no fallback: an empty module, unparsable

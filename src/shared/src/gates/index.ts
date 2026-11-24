@@ -40,6 +40,13 @@
 // agreements, offers and reviewer sets count — and then asks `canAuthor`, its
 // ownership half. A caller that wants the reviewer path alone asks `canReview`.
 //
+// `canPreview` is the gate for opening a manuscript before the offer is
+// accepted: it admits the reader who may review (the contract's `canReview`,
+// which already requires an agreement or an offer) and the owner of the
+// publication Safe, while that genesis is under an agreement or an offer. It
+// does not ask `canAuthor`: a preview admits the reader who may review, not the
+// reader who wrote.
+//
 // Runtime note: the Lit Action runtime supplies ethers (an action's `require`
 // resolves it, and a bare global is also present), which is what the default
 // genesis normaliser uses. A host without ethers — a browser plugin, the
@@ -91,8 +98,13 @@ const AUTHOR_OF_ABI = ['function authorOf(bytes32 genesis) view returns (address
 const BLOCKS_OF_ABI = ['function blocksOf(bytes32 genesis) view returns (uint64[] blocks)'];
 /** S2SPublicationModuleV0_1 — whether an agreement on this genesis is in force. */
 const HAS_AGREEMENT_ABI = ['function hasAgreement(bytes32 genesis) view returns (bool)'];
+/** S2SPublicationModuleV0_1 — whether an offer on this genesis is still open. */
+const HAS_OFFER_ABI = ['function hasOffer(bytes32 genesis) view returns (bool)'];
+/** S2SPublicationModuleV0_1 — the publication Safe this module serves. */
+const SAFE_ABI = ['function safe() view returns (address)'];
 
 const ZERO_ADDRESS = /^0x0{40}$/i;
+const ADDRESS = /^0x[0-9a-f]{40}$/i;
 
 const sameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
@@ -472,6 +484,85 @@ export const canReview = async (
 ): Promise<boolean> => {
   const genesis = toId(contentId);
   return read(publicationModule, CAN_REVIEW_ABI, 'canReview', [genesis, signerAddress]);
+};
+
+/** A boolean answer read defensively: a throw or any non-`true` refuses. */
+const answeredTrue = async (question: () => Promise<boolean>): Promise<boolean> => {
+  try {
+    return ((await question()) as unknown) === true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * May this signer open this manuscript as a preview, before the offer is
+ * accepted?
+ *
+ * A preview is the step between an offer and an agreement: the reader wants to
+ * see the manuscript, and the author has not accepted yet. Two identities are
+ * admitted:
+ *
+ *   - A listed reviewer. The contract's `canReview(genesis, who)` answers this,
+ *     and it already requires the genesis to sit under an agreement or an
+ *     offer. No ownership read: a reviewer is an address on the publication.
+ *   - An owner of the publication Safe. The module names that Safe in its own
+ *     `safe()` getter; ownership is asked live, because a preview is asked for
+ *     now. The genesis must also be under an agreement or an offer, so a
+ *     publication owner cannot open a manuscript that was never offered to
+ *     them.
+ *
+ * The difference from {@link canRead}: `canRead` admits the reader who wrote
+ * (the author Safe's owner, judged at the append block); `canPreview` admits
+ * the reader who may review. It never asks `canAuthor`, so the genesis author's
+ * own right is not what opens a preview.
+ *
+ * The reads are ordered: `canReview` and `safe()` in parallel, `isOwnerAt` only
+ * when the reviewer answer is false, and `hasAgreement`/`hasOffer` only when
+ * the owner read passed. A read failure is never a way in: a throw or a
+ * non-boolean answer refuses, and a `safe()` that is not a usable address (or
+ * is the zero address) refuses the owner path.
+ *
+ * `contentId` is normalised as {@link canRead} normalises it; pass `toId` when
+ * your host has no ethers.
+ */
+export const canPreview = async (
+  read: GateRead,
+  readValue: GateValueRead,
+  contentId: string,
+  publicationModule: string,
+  signerAddress: string,
+  toId: IdNormaliser = toBytes32Id,
+): Promise<boolean> => {
+  const genesis = toId(contentId);
+
+  let reviewer: unknown;
+  let publicationSafe: unknown;
+  try {
+    [reviewer, publicationSafe] = await Promise.all([
+      read(publicationModule, CAN_REVIEW_ABI, 'canReview', [genesis, signerAddress]),
+      readValue(publicationModule, SAFE_ABI, 'safe', []),
+    ]);
+  } catch {
+    return false;
+  }
+  if (reviewer === true) return true;
+
+  // The owner path needs a real Safe to ask. A module that answers nothing, a
+  // non-address or the zero address cannot make its answer an owner's.
+  if (typeof publicationSafe !== 'string' || !ADDRESS.test(publicationSafe)) return false;
+  if (ZERO_ADDRESS.test(publicationSafe)) return false;
+
+  const isOwner = await answeredTrue(() => isOwnerAt(read, publicationSafe, signerAddress));
+  if (!isOwner) return false;
+
+  // Offered or agreed, never neither. Either answer being `true` is enough;
+  // a failed read answers false, so a transport error cannot open the door.
+  const [hasAgreement, hasOffer] = await Promise.all([
+    answeredTrue(() => read(publicationModule, HAS_AGREEMENT_ABI, 'hasAgreement', [genesis])),
+    answeredTrue(() => read(publicationModule, HAS_OFFER_ABI, 'hasOffer', [genesis])),
+  ]);
+  return hasAgreement || hasOffer;
 };
 
 export * from './modules';

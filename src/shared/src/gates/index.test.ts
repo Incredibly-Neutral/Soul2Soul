@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, vi } from 'vitest';
 import {
   canAuthor,
   canAuthorVerdict,
+  canPreview,
   canPublish,
   canRead,
   canReset,
@@ -361,6 +362,127 @@ describe('canReview', () => {
     };
     await canReview(read, 'bafyrawwcid', PUBLICATION, SIGNER, (ref) => `hashed:${ref}`);
     expect(seen).toEqual(['hashed:bafyrawwcid', SIGNER]);
+  });
+});
+
+describe('canPreview', () => {
+  const PUB_SAFE = '0x' + 'bb'.repeat(20);
+
+  interface PreviewOptions {
+    reviewer?: boolean;
+    /** The module's own `safe()` answer. */
+    publicationSafe?: unknown;
+    owner?: boolean;
+    hasAgreement?: boolean;
+    hasOffer?: boolean;
+    reviewerThrows?: boolean;
+    agreementThrows?: boolean;
+  }
+
+  /** One preview chain: the module answers canReview and safe(), then the Safe. */
+  const makePreviewChain = (options: PreviewOptions = {}) => {
+    const asked: { target: string; fn: string; args: unknown[] }[] = [];
+    const read: GateRead = async (target, _abi, fn, args) => {
+      asked.push({ target, fn, args });
+      if (fn === 'canReview') {
+        if (options.reviewerThrows) throw new Error('rpc down');
+        return options.reviewer ?? false;
+      }
+      if (fn === 'isOwner') return options.owner ?? false;
+      if (fn === 'hasAgreement') {
+        if (options.agreementThrows) throw new Error('rpc down');
+        return options.hasAgreement ?? false;
+      }
+      if (fn === 'hasOffer') return options.hasOffer ?? false;
+      throw new Error(`unexpected boolean read ${fn}:${target}`);
+    };
+    const readValue: GateValueRead = async (target, _abi, fn, args) => {
+      asked.push({ target, fn, args });
+      if (fn === 'safe') return options.publicationSafe ?? PUB_SAFE;
+      throw new Error(`unexpected value read ${fn}:${target}`);
+    };
+    return { read, readValue, asked };
+  };
+
+  it('admits a listed reviewer, asking only the contract', async () => {
+    const { read, readValue, asked } = makePreviewChain({ reviewer: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+
+    expect(asked.find((a) => a.fn === 'canReview')!.args).toEqual([HEX32, SIGNER]);
+    // `safe()` is read alongside the reviewer question; no owner, agreement or
+    // offer read follows a reviewer yes.
+    expect(asked.some((a) => a.fn === 'safe')).toBe(true);
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
+    expect(asked.some((a) => a.fn === 'hasAgreement')).toBe(false);
+    expect(asked.some((a) => a.fn === 'hasOffer')).toBe(false);
+  });
+
+  it('admits the publication Safe s owner while an offer is open', async () => {
+    const { read, readValue, asked } = makePreviewChain({ owner: true, hasOffer: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+
+    const ownership = asked.find((a) => a.fn === 'isOwner')!;
+    expect(ownership.target).toBe(PUB_SAFE);
+    expect(ownership.args).toEqual([SIGNER]);
+    expect(asked.find((a) => a.fn === 'safe')!.target).toBe(PUBLICATION);
+    expect(asked.find((a) => a.fn === 'hasAgreement')!.args).toEqual([HEX32]);
+    expect(asked.find((a) => a.fn === 'hasOffer')!.args).toEqual([HEX32]);
+  });
+
+  it('admits the publication Safe s owner under an agreement', async () => {
+    const { read, readValue } = makePreviewChain({ owner: true, hasAgreement: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+  });
+
+  it('refuses the publication Safe s owner when neither an agreement nor an offer holds the genesis', async () => {
+    const { read, readValue } = makePreviewChain({
+      owner: true,
+      hasAgreement: false,
+      hasOffer: false,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+  });
+
+  it('refuses a signer who neither reviews nor owns the publication Safe', async () => {
+    const { read, readValue, asked } = makePreviewChain({ owner: false });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+
+    // The owner read failed, so the offer/agreement reads are never spent.
+    expect(asked.some((a) => a.fn === 'hasAgreement')).toBe(false);
+    expect(asked.some((a) => a.fn === 'hasOffer')).toBe(false);
+  });
+
+  it('refuses when a read throws — a transport error never opens the preview', async () => {
+    const reviewerDown = makePreviewChain({ reviewerThrows: true, owner: true });
+    expect(
+      await canPreview(reviewerDown.read, reviewerDown.readValue, HEX32, PUBLICATION, SIGNER),
+    ).toBe(false);
+
+    const offerDown = makePreviewChain({ owner: true, agreementThrows: true });
+    expect(await canPreview(offerDown.read, offerDown.readValue, HEX32, PUBLICATION, SIGNER)).toBe(
+      false,
+    );
+  });
+
+  it('refuses a non-boolean answer', async () => {
+    const { read, readValue } = makePreviewChain({ reviewer: 'true' as unknown as boolean });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+  });
+
+  it('refuses an owner path when the module names no usable Safe', async () => {
+    const { read, readValue, asked } = makePreviewChain({
+      owner: true,
+      publicationSafe: '0x0',
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
   });
 });
 
