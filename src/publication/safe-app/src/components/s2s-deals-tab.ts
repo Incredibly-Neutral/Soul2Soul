@@ -1,7 +1,7 @@
 // s2s-deals-tab.ts
 import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { LitService, renderwithLitActions, toBytes32Id } from '@s2s/soul2soul-shared';
+import { LitService, previewLink, renderwithLitActions, toBytes32Id } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -206,6 +206,13 @@ export class S2SDealsTab extends LitElement {
     message: string;
   } = { result: 'idle', message: '' };
   @state() private rowPhase: Record<string, RowPhase> = {};
+  /**
+   * Previews in flight and popup-blocked preview URLs, both keyed by genesis.
+   * Separate from rowPhase: a preview renders the cache, it decides nothing
+   * about the agreement, so it must not move the row's publish/remove step.
+   */
+  @state() private previewing: Record<string, boolean> = {};
+  @state() private previewReady: Record<string, string> = {};
   /** Bumped on every phase change, handed to <s2s-table> as its revision. */
   @state() private rowRevision = 0;
   /**
@@ -279,6 +286,15 @@ export class S2SDealsTab extends LitElement {
         to {
           transform: rotate(360deg);
         }
+      }
+
+      /* A preview the popup blocker refused. The link is the user's second
+         gesture, so it sits beside the button rather than replacing it. */
+      .preview-ready {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        color: var(--color-purple, #d8b4fe);
+        text-decoration: underline;
       }
     `,
   ];
@@ -741,6 +757,81 @@ export class S2SDealsTab extends LitElement {
     }
   }
 
+  // ---- per-row preview ----------------------------------------------------
+
+  /**
+   * Preview one row's page and open it in a new tab. The window is opened
+   * here, inside the click gesture, before any await: a popup raised after the
+   * render returns is blocked, and Safe's iframe makes that worse.
+   */
+  private async previewRow(genesis: string) {
+    if (this.previewing[genesis]) return;
+
+    // A new attempt supersedes the link the last blocked one left behind.
+    this.setPreviewReady(genesis, null);
+    this.setPreviewing(genesis, true);
+
+    const tab = window.open('', '_blank');
+    try {
+      const res = await this.performRender(true, [genesis]);
+      // A preview without a CID wrote nothing to look at; say why rather than
+      // sending the tab to an empty page.
+      if (!res.success || !res.cid) {
+        throw new Error(res.error ?? 'the update action returned no preview CID');
+      }
+      const url = previewLink(res.cid, res.path || '/');
+      if (tab) {
+        // Sever the opener so the preview cannot reach back into the Safe app.
+        tab.opener = null;
+        tab.location.href = url;
+      } else {
+        this.setPreviewReady(genesis, url);
+      }
+    } catch (error: any) {
+      tab?.close();
+      this.showNotification(`Preview failed: ${error.message}`, 'error');
+    } finally {
+      this.setPreviewing(genesis, false);
+    }
+  }
+
+  /** Immutable copy-on-write, so Lit sees a new map and re-renders the row. */
+  private setPreviewing(genesis: string, busy: boolean) {
+    this.previewing = { ...this.previewing, [genesis]: busy };
+  }
+
+  private setPreviewReady(genesis: string, url: string | null) {
+    const next = { ...this.previewReady };
+    if (url === null) delete next[genesis];
+    else next[genesis] = url;
+    this.previewReady = next;
+  }
+
+  /**
+   * The Preview control every row carries, off in no mode toggle: `previewMode`
+   * only changes what the bulk Sync site call does. An encrypted manuscript has
+   * no key here, so its button is rendered but cannot fire.
+   */
+  private renderPreview(deal: Deal): TemplateResult {
+    const busy = this.previewing[deal.genesis] ?? false;
+    const sealed = deal.encryption === true;
+    const ready = this.previewReady[deal.genesis];
+    return html`
+      <s2s-button action="preview" genesis="${deal.genesis}" type="secondary"
+        ?disabled=${busy || sealed}
+        title=${sealed ? 'Encrypted manuscripts cannot be previewed' : nothing}
+        @click=${() => void this.previewRow(deal.genesis)}>
+        ${busy
+          ? html`<span class="row-spinner" aria-hidden="true"></span> Previewing`
+          : 'Preview'}
+      </s2s-button>
+      ${ready
+        ? html`<a class="preview-ready" href=${ready} target="_blank"
+            rel="noopener noreferrer">Open preview</a>`
+        : nothing}
+    `;
+  }
+
   // ---- render calls -------------------------------------------------------
 
   /**
@@ -876,6 +967,7 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
         <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
         <div class="table-cell row-actions">
+          ${this.renderPreview(offer)}
           ${this.isRetained(offer.genesis)
             ? nothing
             : html`<s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
@@ -898,6 +990,7 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${formatDateTime(deal.modifiedDate)}</div>
         <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
         <div class="table-cell row-actions">
+          ${this.renderPreview(deal)}
           <s2s-button action="reject" genesis="${deal.genesis}" status="deal" type="secondary"
             @click=${() => this.reject(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
           </s2s-button>

@@ -155,6 +155,11 @@ vi.mock('@s2s/soul2soul-shared', async () => {
     renderwithLitActions: vi.fn(),
     toBytes32Id: m.toBytes32Id,
     authorAddress,
+    // Stands in for shared's previewLink; the tab's assertion matches the
+    // string this builds, so the gateway's real host shape is not duplicated
+    // here.
+    previewLink: (cid: string, path = '/') =>
+      `https://${cid}.preview.transport-union.dev${path}`,
   };
 });
 
@@ -291,12 +296,44 @@ function headerLabels(table: Element): string[] {
   return [...table.querySelectorAll('.table-header')].map((h) => (h.textContent ?? '').trim());
 }
 
+/**
+ * The Preview control one row carries. Returns the inner <button> (where
+ * data-action/data-genesis live) and the host (where the title attribute is).
+ */
+function previewControl(root: ShadowRoot, genesis: string) {
+  const host = [...root.querySelectorAll('s2s-button')].find(
+    (h) =>
+      h.shadowRoot
+        ?.querySelector('button[data-action="preview"]')
+        ?.getAttribute('data-genesis') === genesis,
+  );
+  const btn = host?.shadowRoot?.querySelector<HTMLButtonElement>('button[data-action="preview"]');
+  return { host, btn };
+}
+
+/**
+ * A stand-in for the tab window.open returns. `location.href` is writable and
+ * readable, so navigation is observable without a real second tab.
+ */
+function fakeTab() {
+  return { opener: window as unknown, close: vi.fn(), location: { href: '' } };
+}
+
+/** window.open spies, restored before every test so none leaks into the next. */
+const openSpies: Array<{ mockRestore(): void }> = [];
+function stubWindowOpen(returns: Window | null) {
+  const spy = vi.spyOn(window, 'open').mockReturnValue(returns);
+  openSpies.push(spy);
+  return spy;
+}
+
 /** The render envelope renderwithLitActions resolves with (success shape). */
 function renderResult(cid: string, trace?: unknown[]) {
   return {
     success: true,
     cid,
     path: `/ipfs/${cid}`,
+    remove: [] as Array<{ path: string; replacedBy?: string }>,
     trace,
     error: undefined,
     maintainCache: undefined,
@@ -315,6 +352,7 @@ function renderFailure(error?: string) {
     success: false,
     cid: null,
     path: '',
+    remove: [] as Array<{ path: string; replacedBy?: string }>,
     trace: ['update action failed'],
     error,
     maintainCache: undefined,
@@ -338,6 +376,7 @@ async function withFakeTimers<T>(el: LitElement, body: () => Promise<T>): Promis
 
 describe('s2s-deals-tab', () => {
   beforeEach(() => {
+    for (const spy of openSpies.splice(0)) spy.mockRestore();
     (store as unknown as { reset: () => void }).reset();
     vi.clearAllMocks();
     document.body.replaceChildren();
@@ -1462,6 +1501,123 @@ describe('s2s-deals-tab', () => {
       expect(args[0]).toBe(true);
       expect(args[8]).toEqual(['0xPlain', '0xOfferPlain']);
     });
+  });
+
+  it('previews one deal through the existing render flow and opens the result in a new tab', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    vi.mocked(renderwithLitActions).mockResolvedValue({
+      ...renderResult('bafyNew'),
+      path: '/posts/hello',
+    });
+    seedRenderPrerequisites();
+
+    const tab = fakeTab();
+    const open = stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    const { btn } = previewControl(root, '0xDeal1');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    await flushUpdates(el);
+
+    // Opened inside the gesture, then navigated once the render answered.
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(renderwithLitActions).toHaveBeenCalledTimes(1);
+    const args = lastRenderCall();
+    expect(args[0]).toBe(true);
+    expect(args[8]).toEqual(['0xDeal1']);
+
+    expect(tab.opener).toBeNull();
+    expect(tab.location.href).toBe('https://bafyNew.preview.transport-union.dev/posts/hello');
+    expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it('renders the Preview button disabled on an encrypted row, and it fires nothing', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xSealed', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(encryptedItem('Sealed field notes'));
+    seedRenderPrerequisites();
+
+    const open = stubWindowOpen(fakeTab() as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    const { host, btn } = previewControl(root, '0xSealed');
+    expect(btn).not.toBeNull();
+    expect(btn!.disabled).toBe(true);
+    expect(host!.getAttribute('title')).toBe('Encrypted manuscripts cannot be previewed');
+
+    btn!.click();
+    await flushUpdates(el);
+    expect(open).not.toHaveBeenCalled();
+    expect(renderwithLitActions).not.toHaveBeenCalled();
+  });
+
+  it('closes the preview tab and reports the real error when the render fails', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    vi.mocked(renderwithLitActions).mockResolvedValue(renderFailure('render action exploded'));
+    seedRenderPrerequisites();
+
+    const tab = fakeTab();
+    stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    previewControl(root, '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    expect(tab.close).toHaveBeenCalled();
+    // Not navigated, and the failure the action gave is the one shown.
+    expect(tab.location.href).toBe('');
+    expect(notificationTexts()).toContain('Preview failed: render action exploded');
+    expect(root.querySelector('.preview-ready')).toBeNull();
+  });
+
+  it('leaves an Open preview link when the popup is blocked', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    vi.mocked(renderwithLitActions).mockResolvedValue({
+      ...renderResult('bafyNew'),
+      path: '/posts/hello',
+    });
+    seedRenderPrerequisites();
+
+    stubWindowOpen(null);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    previewControl(root, '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    const anchor = root.querySelector<HTMLAnchorElement>('.preview-ready');
+    expect(anchor).not.toBeNull();
+    expect(anchor!.getAttribute('href')).toBe(
+      'https://bafyNew.preview.transport-union.dev/posts/hello',
+    );
+    expect(anchor!.getAttribute('target')).toBe('_blank');
+    expect(anchor!.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
   it('reads a v2 creationDate and modifiedDate ahead of a stray v1 createdAt', async () => {

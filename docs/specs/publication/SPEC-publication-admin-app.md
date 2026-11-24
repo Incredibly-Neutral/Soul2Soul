@@ -62,7 +62,7 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 | path                                                                                                                           | role                                                                                                             |
 | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `components/s2s-app.ts`                                                                                                        | root element; five tabs; reads the site root via `getText(node, "contenthash_wrapped")`; boots `FilecoinStorage` |
-| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions, Bulk Render + preview                                    |
+| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions, Bulk Render + preview, per-row Preview in a new tab      |
 | `components/s2s-whitelist-tab.ts`                                                                                              | author/dev lists                                                                                                 |
 | `components/s2s-records-tab.ts`                                                                                                | view/edit records; config + asset build entry; alias editing                                                     |
 | `components/s2s-storage-tab.ts`                                                                                                | CID inventory + Filecoin storage/Data-Sets tables, piece delete, dataset terminate                               |
@@ -136,6 +136,14 @@ verb set.
 encrypted items, and the result is `console.log`ged — no root is set, no header refresh. Details in
 [the storage child](SPEC-publication-storage.md#rendering-and-what-it-leaves-behind) and
 [the front door §render](SPEC-publication.md).
+
+**Per-row preview:** every offer and deal row carries its own Preview button, independent of the preview
+toggle (which changes only what the bulk Sync site call does). It renders that one genesis with
+`preview` true and opens `previewLink(cid, path)` in a new browser tab: the tab is opened inside the
+click gesture and navigated once the render answers, because a popup raised after the awaits is blocked,
+with an "Open preview" link left beside the button when the browser blocks it anyway. A failed render
+closes the tab and names the error. An encrypted row's button is rendered but disabled — the render has
+no key, and `renderIds()` already drops those items from a preview.
 
 **Config build:** `AssetsBuilder` (GitHub → `assetsCid`) → `ConfigBuilder.buildConfig(...)` → one
 `setRecord('config')` proposal. The build itself belongs to
