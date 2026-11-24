@@ -171,18 +171,6 @@ type RemovalOutcome =
   | { kind: 'skipped'; line: string }
   | { kind: 'silent' };
 
-/**
- * The capability flags the row's Preview reads. shared's manifest type carries
- * `unsignedRender`; `offerPreview` is the sibling release's flag, added beside
- * it, and an absent flag reads as false. A local view, not a cast: the
- * manifest's `capabilities` is assignable to it and the field is read without
- * widening the manifest.
- */
-type ManifestCapabilities = {
-  unsignedRender?: boolean;
-  offerPreview?: boolean;
-};
-
 /** How often a waiting row asks `hasAgreement`, and how long it keeps asking. */
 const POLL_INTERVAL_MS = 6_000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -805,7 +793,7 @@ export class S2SDealsTab extends LitElement {
    * predates it, and the UI must not offer what throws.
    */
   private previewUnavailable(row: Deal | undefined): string | null {
-    const capabilities: ManifestCapabilities = store.protocolInfo?.capabilities ?? {};
+    const capabilities = store.protocolInfo?.capabilities ?? {};
     if (capabilities.unsignedRender !== true) {
       return 'The pinned render action predates unsigned renders; pin a newer release to enable preview';
     }
