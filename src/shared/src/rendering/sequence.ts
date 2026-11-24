@@ -180,6 +180,20 @@ export const renderwithLitActions = async (
   const preview = mode !== 'publish';
   const unsigned = mode !== 'publish';
 
+  // Preview renders on Lit and asks the render action to run unsigned. A
+  // render action that predates the `unsigned` input ignores it and signs the
+  // page, so refuse the run unless the manifest advertises that its pinned
+  // action reads it. This is the only way to keep a decrypting preview off a
+  // deployment that would sign.
+  if (mode === 'preview' && protocolInfo.capabilities?.unsignedRender !== true) {
+    throw new Error(
+      "preview requires an unsigned render: this publication's manifest does not " +
+        'advertise capabilities.unsignedRender, so its pinned render action predates ' +
+        'the `unsigned` input and a Lit render would sign the page. ' +
+        'Release the render action that reads `unsigned` and pin it to this publication.',
+    );
+  }
+
   // A reset-only run (reset:true with zero contentIds) skips prep + render —
   // prep rejects empty contentIds (prep/main.ts) — and drives the update action
   // directly with jobs:[] + reset:true so the tree is rebuilt fresh. See

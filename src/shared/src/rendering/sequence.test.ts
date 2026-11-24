@@ -1084,6 +1084,7 @@ describe('renderwithLitActions — stage transport by render mode', () => {
   const protocolInfo = {
     gateway: 'https://ipfs.transport-union.dev',
     litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },
+    capabilities: { unsignedRender: true },
   } as any;
   const SIGNATURE = '0x' + '00'.repeat(64);
   const renderedJob = { ...sampleJob, html: 'QmRendered', path: sampleJob.path };
@@ -1164,5 +1165,58 @@ describe('renderwithLitActions — stage transport by render mode', () => {
     const render = calls.find((c) => c.cid === 'cid-render')!;
     expect(render.inputs.preview).toBe(false);
     expect(render.inputs.unsigned).toBe(false);
+  });
+});
+
+// ============================================================================
+// Preview needs an unsigned-capable render action.
+//
+// A render action pinned before the `unsigned` input ignores it and signs the
+// page. The manifest advertises capabilities.unsignedRender once the render
+// action reads the input; until then a preview must refuse to run rather than
+// dispatch a Lit render that would sign.
+// ============================================================================
+
+describe('renderwithLitActions — preview requires capabilities.unsignedRender', () => {
+  const protocolInfo = {
+    gateway: 'https://ipfs.transport-union.dev',
+    litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },
+    // No capabilities: the document predates the unsigned input.
+  } as any;
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  afterAll(() => {
+    vi.mocked(runAction).mockRestore();
+  });
+
+  it('refuses preview when the manifest does not advertise an unsigned render', async () => {
+    let thrown: any;
+    try {
+      await renderwithLitActions(
+        'preview',
+        mockLit,
+        '0x' + '00'.repeat(64),
+        'usage',
+        protocolInfo,
+        null,
+        '0x0000...0001',
+        'test.soul2soul.eth',
+        ['0xcontent-id-1'],
+        undefined,
+        sampleEndpoints.rpcs,
+      );
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toContain('unsignedRender');
+    expect(thrown.message).toContain('predates the `unsigned` input');
+    expect(thrown.message).toContain('Release the render action');
+    // Nothing was dispatched: no prep, no render, no update.
+    expect(runAction).not.toHaveBeenCalled();
   });
 });
