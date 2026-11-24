@@ -21,7 +21,13 @@ import {
 // The verdict itself lives in its own module now (shared with the direct read
 // path); the archive module re-exports it, but consumers import the source.
 import { inspectItemIntegrity, judgeRefetchedItem, skipReason } from '../libs/item-integrity';
-import { jcs, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
+import {
+  expandCollection,
+  isCollectionContainer,
+  jcs,
+  verifyBodyHash,
+  type S2SExpandedCollectionMember,
+} from '@s2s/soul2soul-shared/lit-actions';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
@@ -115,6 +121,10 @@ export const mergeDecrypted = (
     publication: body.publication,
     ...copyIdentity(body),
     ...(label !== undefined ? { label } : {}),
+    // A folder bundle opens into its members here: the plaintext's collection
+    // document rides onto the flat body so the render path can expand it. A
+    // page has no collection, and then no key is emitted.
+    ...(decrypted.collection ? { collection: decrypted.collection } : {}),
     base: decrypted.base || undefined,
     encryption: false as const,
     content: decrypted.content,
@@ -284,7 +294,7 @@ export const initTemplateData = async (
   publicationModule: string,
   rpcs?: string[],
   localePaths?: Record<string, string>,
-  options: { preview?: boolean } = {},
+  options: { preview?: boolean; collectionKey?: string } = {},
 ) => {
   if (body.encryption) {
     const decrypted = await decryptRaw(
@@ -349,6 +359,24 @@ export const initTemplateData = async (
     }
 
     body = mergeDecrypted(body, decrypted.parsed);
+  }
+
+  // A member job names one member of a folder bundle. The bundle is the only
+  // signed thing, so pick the member out of the (now plaintext) bundle. No
+  // fallback to the bundle page: a prep job that named a member the signed
+  // bundle no longer contains must fail the job, not serve the folder page at
+  // a member's URL.
+  if (options.collectionKey) {
+    const member = expandCollection(body).find(
+      (b): b is S2SExpandedCollectionMember =>
+        'collectionKey' in b && b.collectionKey === options.collectionKey,
+    );
+    if (!member) {
+      throw new Error(
+        `collection member "${options.collectionKey}" not found in ${String(body.id)}`,
+      );
+    }
+    body = member;
   }
 
   return buildTemplateData(body, templateConfig, protocolInfo, localePaths);
@@ -722,8 +750,15 @@ export const fetchCollections = async (
   }
 
   for (const collection of templateConfig.collections || []) {
+    // A collection container is a BOX, not a member: its own public
+    // postType/tags need not match the mapping's filters while the members
+    // inside it may. Keep it past this filter so it reaches the expansion
+    // stage; the render action re-filters after expansion, where only the
+    // members are judged. Every non-container keeps today's filter exactly.
     collections[collection.slug] = sortCollection(
-      filterCollection(allDeals, collection),
+      allDeals.filter(
+        (item) => isCollectionContainer(item) || filterCollection([item], collection).length > 0,
+      ),
       collection,
     );
   }

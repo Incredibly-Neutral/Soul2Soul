@@ -435,10 +435,13 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
     return { ...base, encryption: true, content: body };
   }
 
-  const parsed = JSON.parse(body as string); // { title, slug, content, custom? }
+  const parsed = JSON.parse(body as string); // { title, slug, content, custom?, collection? }
   return {
     ...base,
     encryption: false,
+    // A folder manuscript carries its member list inside the body. Carry it
+    // onto the flat body for the render path's expander; absent on a page.
+    ...(parsed.collection ? { collection: parsed.collection } : {}),
     content: parsed.content,
     title: parsed.title,
     slug: parsed.slug,

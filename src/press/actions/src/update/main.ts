@@ -332,12 +332,19 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         const destPath = `${mfsPath}/${filePath}`;
         const sourceCid = job.html;
 
+        // A collection member's job id is synthetic (`bundle:key`); the signed
+        // on-chain item — and the identifier addAndSignMetadata writes — is the
+        // bundle genesis. Everything that compares against the page's written
+        // identifier or asks the chain about the item uses it.
+        const signerId = job.sourceId ?? job.id;
+
         // Per-page gate: classify the job by the page already at its
         // destination. The same identifier means this is a REFRESH — a new
         // render of the content item that owns the path — which needs no
         // permission: it can neither introduce a path nor displace another
         // author's page, and the provenance verification below requires a PKP
-        // signature over the genesis named in job.id and over the digest of the
+        // signature over the genesis named in job.sourceId (or job.id for a plain
+        // page) and over the digest of the
         // body, so a refresh can only write the press's own render of that
         // genesis. Anything else is an ADD, and adding content to the
         // publication needs canPublish — unless the request is a reset, which
@@ -348,7 +355,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         // The identity read here is the one the path gate below needs, so it is
         // handed over rather than read twice.
         const existingPage = preview ? undefined : await readPageIdentity(gateway!, destPath);
-        const isRefresh = !preview && existingPage?.identifier === job.id;
+        const isRefresh = !preview && existingPage?.identifier === signerId;
         if (isRefresh) {
           trace.push(`refresh: ${filePath}`);
         } else if (!reset && !(await mayPublish())) {
@@ -365,7 +372,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           try {
             incomingPageIdentity = await verifyProvenance(
               sourceCid,
-              job.id,
+              signerId,
               protocolInfo.pkp!,
               gateway!,
               trace,
@@ -403,7 +410,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           await verifyPathAvailable(
             gateway!,
             destPath,
-            job.id,
+            signerId,
             publicationModule,
             rpcs?.L2,
             incomingPageIdentity,

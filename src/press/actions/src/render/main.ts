@@ -15,12 +15,15 @@ import { evmRead } from '../libs/evm';
 import { fetchById, verifyDecryptedBody } from '../libs/module.factory';
 
 import { getConfig } from './config.ctrl';
+import { expandCollection, isCollectionContainer } from '@s2s/soul2soul-shared/lit-actions';
 import {
+  filterCollection,
   initTemplateData,
   fetchCollections,
   mergeDecrypted,
   pathsForCollections,
   shouldWriteBackCache,
+  sortCollection,
 } from './data.ctrlr';
 import { addAndSignMetadata, type S2SContentInfoWithDates } from './metadata';
 import { renderHTML } from '../renderer/html.ctrlr';
@@ -281,8 +284,14 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     if (multisig == null || configModule == null || publicationModule == null)
       throw MODULES_UNRESOLVED;
 
+    // The synthetic member id (`bundle:key`) is not an on-chain id. Anything
+    // that must resolve on chain — the fetched bundle, the revoke check, the
+    // provenance genesis and the metadata signature — uses the signed bundle
+    // genesis. job.id stays the job's identity; job.path stays the member path.
+    const signerId = job.sourceId ?? job.id;
+
     let body: any | undefined | null = await fetchById(
-      job.id,
+      signerId,
       publicationModule,
       rpcs?.L2,
       gateway,
@@ -317,7 +326,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       publicationModule,
       rpcs?.L2,
       config.localePaths,
-      { preview },
+      { preview, collectionKey: job.collectionKey },
     );
     trace.push(templateData);
 
@@ -354,10 +363,10 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     //      the orchestrator's runRenderActionWithRetry handles transient RPC
     //      failures.
     const triggeredIds: string[] = triggeredContentIds ?? [];
-    if (triggeredIds.includes(job.id) && !templateData.revoked && templateData.path) {
-      if (await isRevokedByAgreementState(job.id, publicationModule, rpcs?.L2, preview)) {
+    if (triggeredIds.includes(signerId) && !templateData.revoked && templateData.path) {
+      if (await isRevokedByAgreementState(signerId, publicationModule, rpcs?.L2, preview)) {
         console.log(
-          `${preview ? 'canRead' : 'hasAgreement'} false for ${job.id.slice(0, 12)}… — treating as revoked`,
+          `${preview ? 'canRead' : 'hasAgreement'} false for ${signerId.slice(0, 12)}… — treating as revoked`,
         );
         templateData.revoked = true;
       }
@@ -488,7 +497,26 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             }
           }),
         );
-        decryptedCollections[key] = decrypted.filter(Boolean);
+        decryptedCollections[key] = (() => {
+          const items = decrypted.filter(Boolean);
+          // A bundle is a box, not a member: expand it after the one decrypt,
+          // then judge the members with this collection's own filter and order.
+          // The container itself never enters the list.
+          const expanded = items.flatMap((item) =>
+            isCollectionContainer(item) ? expandCollection(item) : [item],
+          );
+          const cfg = (job.templateConfig.collections || []).find((c) => c.slug === key);
+          return cfg ? sortCollection(filterCollection(expanded, cfg), cfg) : expanded;
+        })();
+        // Members carry no path of their own: give each expanded member the
+        // page path its postType resolves to. Only an expanded member is
+        // touched — a plain item already set its path above and keeps exactly
+        // today's behaviour; a pathless encrypted item stays pathless.
+        for (const item of decryptedCollections[key]) {
+          if ('collectionKey' in item) {
+            item.path = item.path ?? pathsForCollections(item, config);
+          }
+        }
       }
 
       let t4 = Date.now();
@@ -510,7 +538,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         const reason = e instanceof Error ? e.message : String(e);
         availability.push({
           kind: 'template',
-          genesis: job.id,
+          genesis: signerId,
           reason: `template render failed: ${reason || 'unknown error'}`,
           fatal: true,
         });
@@ -550,7 +578,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             // the page's mainEntityOfPage @id.
             url: body.publication || '',
           },
-          contentGenesis: job.id,
+          contentGenesis: signerId,
           // The page's two signed dates: genesis signing time and this
           // version's. On a v1 item both are the item's single createdAt.
           creationDate: body.creationDate || '',
@@ -581,7 +609,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         // keeps the signing attempt; the Bun shim throws inside
         // addAndSignMetadata and its own catch returns the unsigned page,
         // which is the longstanding preview behavior.
-        html = await addAndSignMetadata(job.id, html, protocolInfo, metadata, { unsigned });
+        html = await addAndSignMetadata(signerId, html, protocolInfo, metadata, { unsigned });
 
         if (unsigned) {
           trace.push('provenance unsigned: colophon kept, no signature');
@@ -624,7 +652,12 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       // revoked job — the update action deletes the path from the MFS tree.
       // An empty path would make the orchestrator unable to construct the
       // remove entry, requiring the caller (neutralpress) to supply it.
-      job.path = templateData.path || '';
+      //
+      // A member job already carries its prep-assigned member path. The revoked
+      // templateData was built from the bundle, whose path is the folder path;
+      // overwriting with it would make every member report the same path and
+      // leave the member pages in the tree. Only fill a path that is absent.
+      if (!job.path) job.path = templateData.path || '';
       job.html = '';
       html = '';
     }

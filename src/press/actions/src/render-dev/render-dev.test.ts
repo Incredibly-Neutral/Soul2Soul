@@ -167,6 +167,62 @@ describe('render-dev: collections', () => {
     expect(res.ok).toBe(true);
     expect((res as any).html).toContain('<ul>Alpha|Mike|Zulu|</ul>');
   });
+  it('expands a collection bundle into its members before filtering', async () => {
+    // The bundle is a box: its own tags do not match the collection filter, but
+    // the members inside it do. The container itself must never be listed.
+    const res = await main({
+      ...baseInput,
+      config: {
+        ...baseInput.config,
+        mapping: { templateConfig: [{ reference: 'post', path: '/{slug}/' }] },
+      },
+      templateConfig: {
+        ...baseInput.templateConfig,
+        collections: [{ slug: 'chapters', filters: [{ tags: 'chapters' }], sortBy: 'position' }],
+      },
+      allDeals: [
+        {
+          id: 'bundle-dev',
+          mediaType: 'application/vnd.s2s.collection+json',
+          postType: 'folder',
+          title: 'Chapters',
+          slug: 'chapters',
+          tags: ['box'],
+          collection: {
+            slug: 'chapters',
+            items: [
+              {
+                key: 'one',
+                title: 'One',
+                slug: 'one',
+                content: 'c1',
+                postType: 'post',
+                tags: ['chapters'],
+                position: 2,
+              },
+              {
+                key: 'two',
+                title: 'Two',
+                slug: 'two',
+                content: 'c2',
+                postType: 'post',
+                tags: ['chapters'],
+                position: 1,
+              },
+            ],
+          },
+        },
+        { id: 'plain', title: 'Plain', slug: 'plain', postType: 'post', tags: ['chapters'] },
+      ],
+      templateSource: `<ul>{{#each collections.chapters}}<li>{{title}}@{{path}}</li>{{/each}}</ul>`,
+    });
+    expect(res.ok).toBe(true);
+    const html = (res as any).html as string;
+    // Members in position order, each with its page path; the plain item follows
+    // (missing position sorts last). The container is absent.
+    expect(html).toContain('<ul><li>Two@/two/</li><li>One@/one/</li><li>Plain@/plain/</li></ul>');
+    expect(html).not.toContain('Chapters@');
+  });
 });
 
 describe('render-dev: output shape', () => {
