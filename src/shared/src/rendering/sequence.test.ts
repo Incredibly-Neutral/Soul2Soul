@@ -1075,8 +1075,8 @@ describe('renderwithLitActions — the revoke target reaches prep', () => {
 //   update  — runner for dev and preview, Lit for publish
 //
 // The action inputs keep the `preview` boolean (true for dev and preview) for
-// the deployed actions, and carry `unsigned` (true for dev and preview) for the
-// render action released in wave 2. runAction is the vi.mocked spy from the top
+// the deployed actions, and carry `unsigned` (true for dev and preview) read by
+// the render action released in 0.1.4. runAction is the vi.mocked spy from the top
 // of this file, so the transport is read from its first argument.
 // ============================================================================
 
@@ -1134,13 +1134,18 @@ describe('renderwithLitActions — stage transport by render mode', () => {
     vi.mocked(runAction).mockRestore();
   });
 
-  it('dev: prep, render and update all run on the runner', async () => {
+  it('dev: prep, render and update all run on the runner, unsigned true', async () => {
     const calls = await run('dev');
     expect(calls.map((c) => [c.cid, c.transport])).toEqual([
       ['cid-prep', 'runner'],
       ['cid-render', 'runner'],
       ['cid-update', 'runner'],
     ]);
+    // dev is unsigned like preview: the page keeps its colophon, loses the
+    // signature, and nothing reaches the ledger.
+    const render = calls.find((c) => c.cid === 'cid-render')!;
+    expect(render.inputs.preview).toBe(true);
+    expect(render.inputs.unsigned).toBe(true);
   });
 
   it('preview: render runs on Lit, prep and update on the runner, unsigned true', async () => {
@@ -1162,9 +1167,10 @@ describe('renderwithLitActions — stage transport by render mode', () => {
       ['cid-render', 'lit'],
       ['cid-update', 'lit'],
     ]);
+    // publish signs: unsigned is false (or absent for a caller that predates it).
     const render = calls.find((c) => c.cid === 'cid-render')!;
     expect(render.inputs.preview).toBe(false);
-    expect(render.inputs.unsigned).toBe(false);
+    expect(render.inputs.unsigned ?? false).toBe(false);
   });
 });
 

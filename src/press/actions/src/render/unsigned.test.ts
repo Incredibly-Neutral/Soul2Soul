@@ -1,12 +1,13 @@
 /**
  * `unsigned` input tests for render/main.ts.
  *
- * Contract: a run with `unsigned: true` skips provenance entirely — no PKP
- * signature, no addAndSignMetadata call — and uploads the HTML exactly as the
- * template produced it. Every other step still runs, including decryptRaw for
- * encrypted collection items. Absent or false keeps today's behavior: the
- * signing step is attempted (and the Bun shim's own catch inside
- * addAndSignMetadata decides what an unsigned runtime gets back).
+ * Contract: a run with `unsigned: true` skips the signature and nothing else.
+ * `addAndSignMetadata` still runs, so the JSON-LD colophon is built and
+ * inserted; the action passes `{ unsigned: true }` and the function skips only
+ * the PKP key read, emitting the same proof-without-proofValue the signing
+ * catch emits. Every other step still runs: decryptRaw for encrypted
+ * collection items, the plaintext integrity check, the template render and the
+ * upload. Absent or false keeps today's behavior: the signing attempt is made.
  *
  * All chain/IPFS interactions are mocked — no live RPC required.
  */
@@ -192,25 +193,42 @@ beforeEach(() => {
 // ============================================================================
 
 describe('render action — the `unsigned` input', () => {
-  it('skips provenance and uploads the HTML as rendered when unsigned is true', async () => {
+  it('asks for an unsigned colophon and uploads the rendered page when unsigned is true', async () => {
     const result = await main({ ...baseInput, unsigned: true });
 
     expect(result.ok).toBe(true);
-    expect(addAndSignMetadata).not.toHaveBeenCalled();
-    expect(uploadFile).toHaveBeenCalledWith(sampleEndpoints.ipfsGateway, RENDERED);
+    // The colophon is still built; only the signature is skipped.
+    expect(addAndSignMetadata).toHaveBeenCalledTimes(1);
+    expect(addAndSignMetadata).toHaveBeenCalledWith(
+      sampleJob.id,
+      RENDERED,
+      expect.anything(),
+      expect.anything(),
+      { unsigned: true },
+    );
+    expect(uploadFile).toHaveBeenCalledWith(sampleEndpoints.ipfsGateway, SIGNED);
     expect((result as any).data.job.html).toBe('QmUploaded');
     expect(
       result.trace.some(
-        (line: any) => typeof line === 'string' && line.includes('provenance skipped'),
+        (line: any) =>
+          typeof line === 'string' &&
+          line.includes('provenance unsigned: colophon kept, no signature'),
       ),
     ).toBe(true);
   });
 
-  it('attempts signing when unsigned is false', async () => {
+  it('asks for a signed colophon when unsigned is false', async () => {
     const result = await main({ ...baseInput, unsigned: false });
 
     expect(result.ok).toBe(true);
     expect(addAndSignMetadata).toHaveBeenCalledTimes(1);
+    expect(addAndSignMetadata).toHaveBeenCalledWith(
+      sampleJob.id,
+      RENDERED,
+      expect.anything(),
+      expect.anything(),
+      { unsigned: false },
+    );
     expect(uploadFile).toHaveBeenCalledWith(sampleEndpoints.ipfsGateway, SIGNED);
   });
 
@@ -225,7 +243,7 @@ describe('render action — the `unsigned` input', () => {
     expect(uploadFile).toHaveBeenCalledWith(sampleEndpoints.ipfsGateway, SIGNED);
   });
 
-  it('still decrypts encrypted collection items when unsigned is true', async () => {
+  it('still decrypts and verifies encrypted collection items, renders and uploads when unsigned is true', async () => {
     vi.mocked(fetchCollections).mockResolvedValue({
       collections: {
         posts: [
@@ -256,8 +274,19 @@ describe('render action — the `unsigned` input', () => {
     const result = await main({ ...baseInput, unsigned: true });
 
     expect(result.ok).toBe(true);
+    // The unsigned run is a full render: decrypt, integrity verdict, template,
+    // colophon, upload. Only the signature is skipped.
     expect(decryptRaw).toHaveBeenCalledTimes(1);
-    expect(addAndSignMetadata).not.toHaveBeenCalled();
-    expect(uploadFile).toHaveBeenCalledWith(sampleEndpoints.ipfsGateway, RENDERED);
+    expect(verifyDecryptedBody).toHaveBeenCalledTimes(1);
+    expect(renderHTML).toHaveBeenCalledTimes(1);
+    expect(addAndSignMetadata).toHaveBeenCalledTimes(1);
+    expect(addAndSignMetadata).toHaveBeenCalledWith(
+      sampleJob.id,
+      RENDERED,
+      expect.anything(),
+      expect.anything(),
+      { unsigned: true },
+    );
+    expect(uploadFile).toHaveBeenCalledWith(sampleEndpoints.ipfsGateway, SIGNED);
   });
 });

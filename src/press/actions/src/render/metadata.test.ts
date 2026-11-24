@@ -14,7 +14,7 @@
  *   - signing uses JCS-RFC8785, and the emitted page verifies byte-for-byte
  *     against the same canonicalisation (and NOT against the legacy one)
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as ethers from 'ethers5';
 import {
   canonicalizeProofPayload,
@@ -32,8 +32,9 @@ import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/dist/manuscript/identit
 const PRIV = ethers.utils.keccak256(ethers.utils.toUtf8Bytes('s2s-metadata-test-key'));
 const PKP = ethers.utils.computeAddress(new ethers.utils.SigningKey(PRIV).publicKey);
 (globalThis as unknown as { ethers: unknown }).ethers = ethers;
+const getPrivateKey = vi.fn(async () => PRIV);
 (globalThis as unknown as { Lit: unknown }).Lit = {
-  Actions: { getPrivateKey: async () => PRIV },
+  Actions: { getPrivateKey },
 };
 
 const GENESIS = '0x' + '55'.repeat(32);
@@ -104,8 +105,9 @@ function recover(toSign: string, signature: string): string {
 async function render(
   info: S2SContentInfoWithDates,
   html: string = PAGE,
+  options: { unsigned?: boolean } = {},
 ): Promise<{ html: string; schema: JsonLd }> {
-  const out = await addAndSignMetadata(GENESIS, html, PROTOCOL_INFO, info);
+  const out = await addAndSignMetadata(GENESIS, html, PROTOCOL_INFO, info, options);
   return { html: out, schema: jsonLdOf(out) };
 }
 
@@ -157,6 +159,36 @@ describe('addAndSignMetadata — identity, encoding and signing', () => {
     expect(tampered.identifier).toBe(schema.identifier);
     // …and only the nested value changed.
     expect(payloadOf({ ...schema, sdContent: schema.sdContent })).toBe(before);
+  });
+});
+
+describe('addAndSignMetadata — unsigned', () => {
+  it('skips only the key read: colophon inserted, proof present, no proofValue', async () => {
+    getPrivateKey.mockClear();
+
+    const { html, schema } = await render(contentInfo(), PAGE, { unsigned: true });
+
+    expect(getPrivateKey).not.toHaveBeenCalled();
+    // The whole colophon is there, in the same place as a signed page.
+    expect(extractHashableHtml(html)).toBe(extractHashableHtml(PAGE));
+    expect(schema.identifier).toBe(GENESIS);
+    expect(schema.encoding.sha256).toBe(sha256Of(extractHashableHtml(PAGE)));
+    expect(schema.proof).toBeDefined();
+    expect(schema.proof).not.toHaveProperty('proofValue');
+    // Exactly the options object the catch emits: canonicalisation is still
+    // recorded, so the page says how it would have been signed.
+    expect(schema.proof).toEqual(proofOptionsOf(schema.proof));
+    expect(schema.proof.canonicalization).toBe('JCS-RFC8785');
+    expect(schema.proof.verificationMethod).toBe(`did:pkh:eip155:8453:${PKP}`);
+  });
+
+  it('still signs and carries proofValue when unsigned is absent', async () => {
+    getPrivateKey.mockClear();
+
+    const { schema } = await render(contentInfo());
+
+    expect(getPrivateKey).toHaveBeenCalledTimes(1);
+    expect(schema.proof.proofValue).toMatch(/^0x[0-9a-f]+$/i);
   });
 });
 
