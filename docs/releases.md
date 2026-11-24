@@ -18,6 +18,16 @@ A build under test is pinned as `d.<major>.<minor>` (`d.0.1`) and gets no sectio
 module keeps that lane out of the release order: it is never the live document, so nothing unpinned
 reads it, and the next release is judged against the last release rather than against the test.
 
+## 0.1.4 — 2026-11-24
+
+- `render` honors the `unsigned` input: an unsigned run skips provenance and uploads the page as
+  rendered. Absent or false keeps the PKP signing attempt.
+- `preview` runs the render stage on Lit, the only runtime with `Lit.Actions.Decrypt`, so a gated
+  body decrypts; `dev` stays on the runner.
+- The manifest advertises `capabilities.unsignedRender`, so the shared layer will run a preview on a
+  publication pinned to this build.
+- Pinning the release to a publication is a separate human step.
+
 ## 0.1.3 — 2026-11-19
 
 Group `s2s@0.1.3`, id `5`. Batch

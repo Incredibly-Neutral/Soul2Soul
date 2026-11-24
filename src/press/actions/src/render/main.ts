@@ -163,6 +163,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       configCid,
       publication,
       preview,
+      unsigned,
       endpoints,
       maintainCache,
       triggeredContentIds,
@@ -521,10 +522,19 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             : undefined,
         };
 
-        html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
+        // Provenance is the PKP signature. An unsigned run (dev or preview)
+        // has no signing key, so skip the whole signing step and upload the
+        // page as rendered. Absent or false keeps the signing attempt: the
+        // Bun shim throws inside addAndSignMetadata and its own catch returns
+        // the unsigned page, which is the longstanding preview behavior.
+        if (unsigned) {
+          trace.push('provenance skipped: unsigned render');
+        } else {
+          html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
 
-        let t6 = Date.now();
-        trace.push(`signed: ${((t6 - t0) / 1000).toFixed(3)} seconds`);
+          let t6 = Date.now();
+          trace.push(`signed: ${((t6 - t0) / 1000).toFixed(3)} seconds`);
+        }
 
         const htmlCid = await uploadFile(gateway!, html!);
         job.html = htmlCid;
