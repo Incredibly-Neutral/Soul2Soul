@@ -30,12 +30,22 @@ import { requireFields, setRpcAuth } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
 
 /**
- * On-chain revoke check: is `jobId`'s genesis currently NOT under an agreement?
+ * On-chain revoke check: is `jobId`'s genesis currently out of force?
  *
- * Conservative by design (reviewer C/G): this returns true ONLY when
- * hasAgreement is definitively false — a genuine on-chain revoke. On any RPC
- * failure it returns false (treat as still active) so a transport error can
- * never turn a live page into a revoked-and-removed one; the orchestrator's
+ * A publish run asks only `hasAgreement`: the published tree is built from the
+ * agreements in force, so agreement false is a revoke. A preview run asks the
+ * module's own `canRead(genesis, safe)` instead: it answers true only while an
+ * agreement or an offer holds the genesis, so offer false alone is not a
+ * revoke. That one call is the whole answer, evaluated at one block — reading
+ * `hasAgreement` and `hasOffer` as two calls could see a deal that moves from
+ * offer to agreement between them as false for both, and drop a page the gate
+ * admitted. `safe()` is fixed for the module's lifetime, so reading it first
+ * opens no window.
+ *
+ * Conservative by design (reviewer C/G): revoked is answered ONLY on
+ * definitive `false` answers — a genuine on-chain revoke. On any RPC failure it
+ * returns false (treat as still active) so a transport error can never turn a
+ * live page into a revoked-and-removed one; the orchestrator's
  * runRenderActionWithRetry handles transient RPC failures. Mirrors the
  * established evmRead pattern in libs/gates.ts (canRead).
  */
@@ -43,11 +53,11 @@ export async function isRevokedByAgreementState(
   jobId: string,
   publicationModule: string,
   rpcs?: string[],
+  preview = false,
 ): Promise<boolean> {
   const genesis = toBytes32Id(jobId);
-  let agreementActive = true;
-  try {
-    agreementActive = await evmRead(
+  const hasAgreement = () =>
+    evmRead(
       'L2',
       publicationModule,
       ['function hasAgreement(bytes32 genesis) view returns (bool)'],
@@ -55,12 +65,49 @@ export async function isRevokedByAgreementState(
       [genesis],
       rpcs,
     );
+
+  if (!preview) {
+    let agreementActive = true;
+    try {
+      agreementActive = await hasAgreement();
+    } catch (e) {
+      console.log(
+        `hasAgreement read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    return !agreementActive;
+  }
+
+  // Preview: an open offer is live too, and the module's canRead is the one
+  // answer that covers both. It reads the genesis's deal state and compares the
+  // reader to `safe` in a single execution, so it cannot observe a deal
+  // mid-transition. `safe()` never changes for a deployed module, so the read
+  // before it is not part of the race. A failure on either read keeps the page
+  // live rather than revoke it.
+  try {
+    const safe = await evmRead(
+      'L2',
+      publicationModule,
+      ['function safe() view returns (address)'],
+      'safe',
+      [],
+      rpcs,
+    );
+    const readable = await evmRead(
+      'L2',
+      publicationModule,
+      ['function canRead(bytes32 genesis, address reader) view returns (bool)'],
+      'canRead',
+      [genesis, safe],
+      rpcs,
+    );
+    return readable === false;
   } catch (e) {
     console.log(
-      `hasAgreement read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
+      `safe/canRead read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
     );
+    return false;
   }
-  return !agreementActive;
 }
 
 // ENS records contract ABI (getText only) — local mirror of update/main.ts;
@@ -270,27 +317,30 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       publicationModule,
       rpcs?.L2,
       config.localePaths,
+      { preview },
     );
     trace.push(templateData);
 
     // Revoke detection via on-chain agreement state: the decrypt-path
     // `revoked` flag only covers decrypt failures, not a takedown on chain —
     // the author's terminal `retract` or the publication's `reject`.
-    // Check hasAgreement so a revoked plaintext item also renders
+    // Check hasAgreement (publish) or the module's canRead (preview) so a
+    // revoked plaintext item also renders
     // as revoked (empty html + preserved path for the orchestrator's
     // remove entry). The path is kept so the orchestrator can derive the
     // remove entry from the revoked job itself (no separate caller-supplied
     // remove entry required).
     //
-    // Guard (reviewer C/G): hasAgreement=false must only mark GENUINELY-revoked
-    // items as revoked, never a live page that merely isn't under an agreement
-    // or a transient RPC failure. Three conservative guards:
+    // Guard (reviewer C/G): hasAgreement=false (or canRead=false in a preview)
+    // must only mark GENUINELY-revoked items as revoked, never a live page that
+    // merely isn't under an agreement or a transient RPC failure. Three
+    // conservative guards:
     //   a. TRIGGERED-CONTENT SCOPE: the check runs ONLY for the id(s) the
     //      caller rendered (input.triggeredContentIds, threaded through by the
     //      orchestrator from its contentIds). A cascade/ripple destination
     //      (e.g. home) is re-rendered as a consequence of the trigger and is
-    //      NEVER hasAgreement-checked — a destination pinned via query.genesis
-    //      may never have been under an agreement, so hasAgreement=false there would falsely
+    //      NEVER agreement-checked — a destination pinned via query.genesis
+    //      may never have been under an agreement, so an agreement false there would falsely
     //      revoke-and-remove a live page (publish-path regression, acceptance
     //      4; breaks 1(b) in production). A revoke is always about the id the
     //      caller rendered, never a destination.
@@ -298,15 +348,17 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     //      revoked item was previously rendered, so it has a path to remove.
     //      A pathless job (never rendered, nothing to remove) is never
     //      misclassified as revoked.
-    //   c. isRevokedByAgreementState wraps the evmRead defensively: on RPC failure
-    //      it defaults to NOT revoked (treat as still active). A transport
+    //   c. isRevokedByAgreementState wraps the evmRead calls defensively: on RPC
+    //      failure it defaults to NOT revoked (treat as still active). A transport
     //      failure must never turn a live page into a revoked-and-removed one;
     //      the orchestrator's runRenderActionWithRetry handles transient RPC
     //      failures.
     const triggeredIds: string[] = triggeredContentIds ?? [];
     if (triggeredIds.includes(job.id) && !templateData.revoked && templateData.path) {
-      if (await isRevokedByAgreementState(job.id, publicationModule, rpcs?.L2)) {
-        console.log(`hasAgreement false for ${job.id.slice(0, 12)}… — treating as revoked`);
+      if (await isRevokedByAgreementState(job.id, publicationModule, rpcs?.L2, preview)) {
+        console.log(
+          `${preview ? 'canRead' : 'hasAgreement'} false for ${job.id.slice(0, 12)}… — treating as revoked`,
+        );
         templateData.revoked = true;
       }
     }
@@ -368,6 +420,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
                   publicationModule,
                   signerAddress,
                   rpcs?.L2,
+                  { preview },
                 );
                 if (!d) {
                   const errorMsg = `Failed to decrypt item ${item.id || 'unknown'}`;

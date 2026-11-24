@@ -1,4 +1,4 @@
-import { canRead } from './gates';
+import { canPreview, canRead } from './gates';
 
 /**
  * Plaintext as produced by the decryptor — the RAW STRING is kept because it is
@@ -20,6 +20,19 @@ export interface DecryptedPlaintext {
 }
 
 /**
+ * Which gate admits this decryption.
+ *
+ * `preview` opens the manuscript before the offer is accepted, so it asks
+ * `canPreview` instead of `canRead`: a listed reviewer, the manuscript's author,
+ * or an owner of the publication Safe. All three paths require the genesis to sit
+ * under an agreement or an offer, so a preview never outlives the deal. Every
+ * other run asks `canRead`, the author's own right. Nothing else changes.
+ */
+export interface DecryptOptions {
+  preview?: boolean;
+}
+
+/**
  * Decrypt a gated body, keeping the plaintext bytes.
  *
  * Returns undefined when the caller is not allowed to read the body or when
@@ -32,12 +45,15 @@ export const decryptRaw = async (
   publicationModule: string,
   signerAddress: string,
   rpcs?: string[],
+  options: DecryptOptions = {},
 ): Promise<DecryptedPlaintext | undefined> => {
   const ciphertext = JSON.parse(body.content);
 
-  if (!(await canRead(body.id, authorSafeAddress, publicationModule, signerAddress, rpcs ?? []))) {
-    return undefined;
-  }
+  const admitted = options.preview
+    ? await canPreview(body.id, publicationModule, signerAddress, rpcs ?? [])
+    : await canRead(body.id, authorSafeAddress, publicationModule, signerAddress, rpcs ?? []);
+
+  if (!admitted) return undefined;
 
   let res;
 
@@ -73,6 +89,7 @@ export const decrypt = async (
   publicationModule: string,
   signerAddress: string,
   rpcs?: string[],
+  options: DecryptOptions = {},
 ): Promise<any> => {
   const decrypted = await decryptRaw(
     pkpId,
@@ -81,6 +98,7 @@ export const decrypt = async (
     publicationModule,
     signerAddress,
     rpcs,
+    options,
   );
   return decrypted?.parsed;
 };

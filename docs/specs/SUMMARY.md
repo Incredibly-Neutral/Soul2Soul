@@ -153,8 +153,17 @@ attempt. A render action pinned before that input would ignore it and sign the L
 manifest advertises `capabilities.unsignedRender`, and `renderwithLitActions` refuses `preview`
 without it, before dispatching anything. The preview gateway host stays
 `preview.transport-union.dev` for both dev and preview: it names what you are looking at, not the
-mode. An offer cannot be rendered in either non-publishing mode, because the render action treats
-a genesis with no agreement as revoked.
+mode. A preview renders an offer: its revoke check reads the offer as well as the agreement, and
+revokes only when neither holds, while a publish still treats a genesis with no agreement as
+revoked. The manifest advertises `capabilities.offerPreview` beside `unsignedRender`; the press
+ignores it and the safe-app requires it for an offer row.
+
+**Decrypt gate.** A publish decrypts through `canRead`, unchanged. A preview decrypts through
+`canPreview`, which requires the genesis to sit under an agreement or an offer on every path: a
+listed reviewer; an owner of the publication Safe; or the manuscript's author, whom the module's
+`authorOf` records and whose drafts log names the same Safe, with `canAuthor` admitting the signer at
+the append block. Every read is fail-closed. Details in
+[gates](gates/SPEC-gates.md) and [publication review](publication/SPEC-publication-review.md).
 
 **I/O contract (every action returns one shape):** `ActionResult<T> = { ok:true, action, data, trace } |
 { ok:false, action, error, trace }`, discriminated on `ok`; `trace` is on **both** branches (survives

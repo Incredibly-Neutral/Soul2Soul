@@ -53,8 +53,8 @@ by CID, executed on Lit nodes or on the Bun runner by the render mode. Globals: 
 | `libs/module.factory.ts`   | `getLatestEntry` / `getAgreements` / `fetchById` / `fetchByPublication` — reads latest cid from the publication module + IPFS cat (replaces `lens.factory`, GAP-10 ✅). The module's published set is `getAgreements(offset, limit)`; the helper asks for it by that name from bundle **0.1.2**, and earlier bundles ask for `getDeals`, which the module does not expose | live on **0.1.2**; dead on 0.1.0/0.1.1                                           |
 | `libs/evm.ts`              | `evmRead` (catch-all failover + aggregated error), `evmGetCode` (one `eth_getCode`, same failover), `evmWrite`, `toHexString`                                      | live ⚠ GAP-15 (partly addressed)                                                   |
 | `libs/ipfs.factory.ts`     | IPFS cat/add/dag/MFS + `contenthashToIPFS`                                                                                                                        | live (dag/cbor helpers mostly dead)                                                |
-| `libs/gates.ts`            | `canPublish`, `canRead`, `canAuthorVerdict`, `isOutOfForce`, `canReset`, `canReview`, `extractSignerAddress`                                                      | live                                                                               |
-| `libs/decrypt.ts`          | `decrypt` (gated `Lit.Actions.Decrypt`)                                                                                                                           | live                                                                               |
+| `libs/gates.ts`            | `canPublish`, `canRead`, `canPreview`, `canAuthorVerdict`, `isOutOfForce`, `canReset`, `canReview`, `extractSignerAddress`                                                      | live                                                                               |
+| `libs/decrypt.ts`          | `decrypt` (`Lit.Actions.Decrypt`, behind `canRead`, or `canPreview` when the run is a preview)                                                                                                                           | live                                                                               |
 | `decrypt/main.ts`          | GATES-1 — open an author's draft: one `canAuthorVerdict` call for modules, `authorOf` and the owner answer, entry read at the block the verdict names, cat, decrypt, `plaintextHash` check (decisions in `libs/author-draft.ts`) | live                                                                               |
 | `encrypt/main.ts`          | seal a body under the PKP, `Lit.Actions.Encrypt`                                                                                                                  | live                                                                               |
 | `libs/author-draft.ts`     | `decryptAuthorDraft` — the draft decision with injected reads, cat, decryptor and signature recovery                                                              | live                                                                               |
@@ -144,11 +144,19 @@ The runner wrapper exists on the Bun path only; `runAction` absorbs it so caller
 
 **The two boolean inputs.** The per-action inputs keep `preview` (true for `dev` and `preview`, false
 for `publish`) because the deployed actions read it: render uses it in the cache-refresh gate
-(`shouldWriteBackCache`), update uses it to skip the on-chain write. The render action released in
-0.1.4 also reads `unsigned`
-(true for `dev` and `preview`); absent or false keeps the signing attempt. A pinned render action
-that predates `unsigned` would ignore it on Lit and sign the page, so `renderwithLitActions` refuses
-`preview` unless the manifest advertises `capabilities.unsignedRender`, before dispatching anything.
+(`shouldWriteBackCache`), update uses it to skip the on-chain write. From 0.1.4 the render also uses
+it to pick the decrypt gate and the revoke rule (see §A2). The render action released in 0.1.4 also
+reads `unsigned` (true for `dev` and `preview`); absent or false keeps the signing attempt. A pinned
+render action that predates `unsigned` would ignore it on Lit and sign the page, so
+`renderwithLitActions` refuses `preview` unless the manifest advertises
+`capabilities.unsignedRender`, before dispatching anything.
+
+The same release writes a second capability into the document it files, `capabilities.offerPreview`:
+the render action it pins gates decryption on `canPreview` and keeps an offer-only genesis live in
+its revoke guard by asking the module's `canRead(genesis, safe)`, so an offer may be previewed before
+it is accepted. Nothing in the press reads the flag; the safe-app
+requires it for an offer row, beside `unsignedRender`, which every preview still needs. The two
+arrive together because 0.1.4 is unfiled, so one pin enables the whole preview.
 
 ## Action contracts (= test fixtures)
 
@@ -219,9 +227,11 @@ location. The `remove` array flows through `renderwithLitActions` unchanged into
 | `configCid`         | `string?`                                      | caller      |                                               |
 | `publication`       | ENS name                                       | caller      |                                               |
 | `unsigned`          | `boolean?`                                     | caller      | true for `dev` and `preview`; skips only the PKP key read inside `addAndSignMetadata`, so the colophon is embedded with its proof options and no `proofValue`. Absent/false keeps the signing attempt. Read by the render action released in 0.1.4; older actions ignore it. |
+| `preview`           | `boolean?`                                     | caller      | true for `dev` and `preview`, false for `publish`. Every deployed render reads it for the cache-refresh gate; the 0.1.4 render also uses it to ask `canPreview` instead of `canRead`, and to keep an offer-only genesis live in its revoke guard, which reads the module's `canRead(genesis, safe)`. |
 
 **Produces** `{ success, timestamp, job, html, logz, errors? }` where `job.html` = CID of the
-uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt/permission failed.
+uploaded page, `job.path` = interpolated slug path, `job.revoked` set when the gate refused the
+decryption, or when the genesis is out of force for this mode.
 
 **Sequence (each step is an assertion point for tests):**
 
@@ -235,10 +245,15 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
 5. `getConfig(configCid, configModule)` → config
 6. `initTemplateData(...)` → decrypts body if `body.encryption` (gated `canRead`: the publication's
    admission, then ownership of the author Safe at the append block, or live ownership of the
-   reader Safe it named); sets `revoked`
-7. if not revoked: `fetchCollections` → per-item `decrypt` (gated) → `renderHTML` → `addAndSignMetadata`
-   (the colophon; PKP sign unless `unsigned`, INV-5) → `uploadFile` → CID
-8. else: `job.revoked = true`, empty html/path
+   reader Safe it named; a preview gates on `canPreview` instead, see below); sets `revoked`
+7. if not revoked: `fetchCollections` → per-item `decrypt` (the same gate as the run) → `renderHTML` →
+   `addAndSignMetadata` (the colophon; PKP sign unless `unsigned`, INV-5) → `uploadFile` → CID
+8. if the job is a triggered id and the page has a path: `isRevokedByAgreementState(job.id,
+   publicationModule, rpcs, preview)`. A publish revokes when `hasAgreement` is false. A preview
+   reads the module's `safe()` and then one `canRead(genesis, safe)`, which answers
+   agreement-or-offer in a single execution, and revokes on a definitive false. A failed read
+   revokes nothing
+9. a revoked job: `job.revoked = true`, empty html/path
 
 **Network/chain:** ETHEREUM+BASE reads (modules, config, gates), Lens testnet (body/collections),
 IPFS add/cat, **PKP** for `Lit.Actions.Decrypt` and the metadata signature. **Runs on Lit for
@@ -252,9 +267,19 @@ author Safe's drafts module; a Safe whose modules cannot be resolved is refused 
 with no height is answered against the Safe's live owner set, and a positive block with no
 owner-history module on the Safe is refused with that module named. The other admitted Safes run no
 drafts module, so their half is `isOwner(readerSafe, signer)`, read only after the author half
-refuses, and a Safe the verdict named as the genesis author never falls back to it. `genesis =
-toBytes32Id(contentId)` — `toBytes32Id` lives in `@s2s/soul2soul-shared` and is imported at the top of
-`gates.ts`. **Gotchas:** GAP-1 (provenance is now built from real signed data in `render/main.ts`, not literals — only the `S2SContentInfo` type-rename tail remains; see the A3 trust TODO for the planned genesis-as-explicit-signed-field addition); the `assets_gateway` shape mismatch (see Gotchas); **GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, so a `dev` render cannot open an encrypted body and the app does not offer it for one. A `preview` render runs on Lit for exactly that reason and passes `unsigned: true`, so it decrypts without signing. Encrypted-content editorial review also runs through a separate, real Lit decrypt action (SPEC-00 OPEN-TASK-4/GAP-13).
+refuses, and a Safe the verdict named as the genesis author never falls back to it. **Preview changes
+the decrypt gate and the revoke rule, and nothing else.** With `preview` true the render asks
+`canPreview`, which requires an agreement or an offer on every path: `hasAgreement` and `hasOffer`
+are read first, and when neither is true the render refuses before any author or Safe read. It then
+admits the contract's `canReview(genesis, signer)`, a listed reviewer, which already requires an
+agreement or an offer; or the manuscript's author, whose Safe the publication module's
+`authorOf(genesis)` records and whose drafts log must name that same Safe, judged by `canAuthor` at
+the append block; or an owner of the publication Safe named by the module's `safe()` getter, read
+live. The author path is reached before the owner path, and an `authorOf` that is missing, not an
+address or the zero address, or a drafts log naming another Safe, refuses the author path alone.
+Every read is fail-closed: a throw or a non-`true` answer refuses the question it was asked, and a
+`safe()` that is not a usable address refuses the owner path. `publish` keeps `canRead` unchanged. `genesis = toBytes32Id(contentId)` — `toBytes32Id` lives in `@s2s/soul2soul-shared` and is imported at the top of
+`gates.ts`. **Gotchas:** GAP-1 (provenance is now built from real signed data in `render/main.ts`, not literals — only the `S2SContentInfo` type-rename tail remains; see the A3 trust TODO for the planned genesis-as-explicit-signed-field addition); the `assets_gateway` shape mismatch (see Gotchas); **GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, so a `dev` render cannot open an encrypted body and the app does not offer it for one. A `preview` render runs on Lit for exactly that reason and passes `unsigned: true`, so it decrypts without signing, and that preview is also how a publication reviews an offer. The separate `decrypt` action serves a draft's author and is not a publication read (A1 library table, `libs/author-draft.ts`).
 
 ---
 
@@ -420,8 +445,13 @@ input.remove[] →  per-entry (parallel)
 ```
 
 Every `hasAgreement(bytes32)` read in this section is the module's one agreement boolean, asked by
-`verifyPathAvailable`, `verifyRevocable` and the render revoke guard from bundle **0.1.2**; 0.1.0/0.1.1
-ask for `hasDeal`, which the module does not expose.
+`verifyPathAvailable`, `verifyRevocable` and the publish shape of the render revoke guard from bundle
+**0.1.2**; 0.1.0/0.1.1 ask for `hasDeal`, which the module does not expose.
+The render revoke guard has two shapes. A publish asks `hasAgreement` alone, so an ended agreement
+is a revoke. A preview reads the module's `safe()` and then one `canRead(genesis, safe)`, which
+answers agreement-or-offer in a single execution and cannot observe a deal mid-transition; it revokes
+on a definitive false, so an open offer is not a revoke, and it keeps the page live when either read
+fails, as the publish guard does on its one read.
 
 ### Execution order (structural invariant)
 
@@ -570,9 +600,10 @@ section is relied upon.
 | `addAndSignMetadata(id, html, protocolInfo, contentInfo?)`                            | —               | `string` (HTML + signed JSON-LD)                                                                                                                                                                                                                                                                            |
 | `canPublish(authorSafe, pubModule, signer)`                                           | —               | `boolean` (canPublish ∧ `isOwnerAt` with no block) — the **add** gate, asked per page: a destination path that does not yet carry the incoming genesis                                                                                                                                                                        |
 | `canRead(contentId, safe, pubModule, signer)`                                         | —               | `boolean` (the publication's `canRead(genesis, safe)` ∧ either `canAuthor`: ownership at the append block of the manuscript's last version, live `isOwner` when the log records no height, refusal when the Safe's modules cannot be resolved, **or** live `isOwner` of the reader Safe the publication admitted, for the publication Safe and reviewers) |
+| `canPreview(contentId, pubModule, signer, rpcs?)` | — | `boolean` — the preview decrypt gate, which requires `hasAgreement` or `hasOffer` for every path and refuses before any further read when neither holds: the contract's `canReview(genesis, signer)`, a listed reviewer under an offer or an agreement; **or** the manuscript's author, whose Safe the module's `authorOf(genesis)` records and whose drafts log must name that same Safe, judged by `canAuthor` at the append block; **or** live `isOwner` of the publication Safe the module's `safe()` getter names. The author path comes before the owner path. Fail-closed: a throw or a non-`true` answer refuses the question it was asked, an `authorOf` that is not a usable address or a drafts log naming another Safe refuses the author path, and a `safe()` that is not a usable address refuses the owner path |
 | `canAuthorVerdict(genesis, safe, signer)`                                             | bytes32 genesis | `CanAuthorVerdict` — `ok` plus what the answer was read from: `block`, `ownerSet` (`append-block` \| `live`), `modules`, `modulesError`, `author`. One call for the whole author question; the decrypt action reads the entry from it                                                                          |
 | `isOutOfForce`                                                                        | `bytes32 genesis` | `boolean` — no deal in force for the genesis. The **remove** limit: a page whose genesis is out of force may come off the tree, and no gate asks who is asking                                                                                                                                                |
-| `decrypt(pkpId, body, authorSafe, pubModule, signer)`                                 | —               | decrypted obj \| false (gated by `canRead`)                                                                                                                                                                                                                                                                 |
+| `decrypt(pkpId, body, authorSafe, pubModule, signer, rpcs?, { preview })`                                 | —               | decrypted obj \| false (gated by `canRead`, or `canPreview` when `preview` is true)                                                                                                                                                                                                                                                                 |
 | `evmRead(chain, addr, abi, method, args, rpcs?)`                                      | —               | call result — **catch-all failover**: tries each URL in `rpcs[]`, collects every failure in `failures[]`, throws one aggregated `Error` (`.failures` attached) on total failure. No transport-vs-revert distinction (attempted & reverted — ethers v5 wraps `SERVER_ERROR` as `CALL_EXCEPTION`; see GAP-15) |
 | `evmWrite(chain, pkp, addr, abi, method, args, confirm?)`                             | —               | `{ success, hash, ... }` (PKP-signed)                                                                                                                                                                                                                                                                       |
 | `toHexString(cid)`                                                                    | CIDv0 or CIDv1  | `0xe30101…` contenthash, **always CIDv1** (INV-6); a CIDv0 root is normalised with `toV1()` (same multihash)                                                                                                                                                                                                                                                                               |
@@ -792,6 +823,7 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
 | dev sequence shape contract (prep→single input handoff)                       | `sequence.test.ts` “seam contract”       | ⚠ stale               | inherits the same `SINGLE_POST` fixture                                                                                                                                                                                                                                                                                                                                                                           |     | non-fatal trace survives (ok:true + trace, no error join) | `sequence.test.ts` Test 3 | ⊘ skipped | `describe.skip` — TODO, never authored. The fatal-vs-non-fatal rule (§I/O) is untested. |
 | stage-failure envelope (ok:false, string error, no throw)                      | `sequence.test.ts` Test 4                | ✅ (gated)            | runs only when `chainReady`; covers a no-modules publication                                                                                                                                                                                                                                                                                                                                                      |
 | stage transport per render mode + preview capability gate                     | `sequence.test.ts` (mode blocks)         | ✅                    | mocked `runAction`: runner/Lit per stage for `dev`, `preview`, `publish`; `preview`/`unsigned` input values; `preview` without `capabilities.unsignedRender` throws before any dispatch |
+| preview decrypt gate + preview revoke guard                                       | `press/actions/src/libs/decrypt.test.ts`, `render/revoke-guard.test.ts` | ✅                    | `decryptRaw` asks `canPreview` in a preview and `canRead` otherwise, and refuses on either answer; the guard asks `hasAgreement` alone on a publish, and in a preview asks `safe()` then the module's one `canRead(genesis, safe)`, keeping an offer-only genesis live when it admits or when either read fails, and revoking on a definitive false even when a separate `hasOffer` would say true. `canPreview`'s three paths and its fail-closed reads are covered in `shared/src/gates/index.test.ts` |
 | INV-append / `makeOffer` / `hasAgreement` on-chain gating (the trust boundary)      | —                                        | ⛔ **missing**        | no `.t.sol`, no Hardhat tests under `protocol/`. The genesis-author append gate (INV-append) is entirely untested on-chain.                                                                                                                                                                                                                                                                                       |
 | INV-8 desync (records-updated-but-group-not, and inverse)                      | —                                        | ⛔ missing            | flagged as a contract test in §Test seams; not authored                                                                                                                                                                                                                                                                                                                                                           |
 | GAP-2 canonicalization (nested-key sort → verify fail)                         | —                                        | ⛔ missing            | flagged; not authored                                                                                                                                                                                                                                                                                                                                                                                             |

@@ -15,6 +15,7 @@
 import { evmRead } from './evm';
 import {
     canPublish as gateCanPublish,
+    canPreview as gateCanPreview,
     canRead as gateCanRead,
     canReset as gateCanReset,
     canReview as gateCanReview,
@@ -73,6 +74,27 @@ export const canReview = (
     rpcs?: string[],
 ): Promise<boolean> =>
     gateCanReview(bindRead(rpcs), contentId, publicationModule, signerAddress);
+
+/**
+ * May this signer open this manuscript before the offer is accepted? Admits a
+ * listed reviewer, the manuscript's author recorded by the publication and
+ * named by its drafts log, or an owner of the publication Safe. Every path
+ * requires the genesis to sit under an agreement or an offer. See `canPreview`
+ * in the shared gates.
+ */
+export const canPreview = (
+    contentId: string,
+    publicationModule: string,
+    signerAddress: string,
+    rpcs?: string[],
+): Promise<boolean> =>
+    gateCanPreview(
+        bindRead(rpcs),
+        bindValueRead(rpcs),
+        contentId,
+        publicationModule,
+        signerAddress,
+    );
 
 export const canReset = (
     multisig: string,

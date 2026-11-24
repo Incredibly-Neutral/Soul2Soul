@@ -5,14 +5,18 @@
 > [SPEC-publication-admin-app](SPEC-publication-admin-app.md) (the surface that proposes the decision).
 >
 > **Type:** component spec, small on purpose. It owns one question: **between "offered" and "decided",
-> who may read the work?** Today the answer is "whoever the author let hold the bytes", and this spec
-> exists so that gap is written down rather than discovered. The gates themselves, and what makes each
-> of them impossible to weaken, are in [SPEC-publication-must-not](SPEC-publication-must-not.md).
+> who may read the work?** Today the answer is the press's preview gate: a listed reviewer, the
+> manuscript's author, or an owner of the publication Safe, may open an offered manuscript. The
+> gates themselves, and what makes each of them impossible to weaken, are in
+> [SPEC-publication-must-not](SPEC-publication-must-not.md).
 >
-> **Audited against live code:** 2026-11-10, partially. Verified: `src/shared/src/gates/index.ts`,
-> `src/press/actions/src/libs/gates.ts`, `src/press/actions/src/libs/decrypt.ts`, and the module's
-> `canRead`/`canReview` at `S2SPublicationModuleV3.sol:297-312`. Not re-audited: the admin app's deals
-> tab and the `shared/src/cid-view` consumers, which still carry the 2026-10-30 reading.
+> **Audited against live code:** 2026-11-10, partially, and re-read 2026-11-24 for the preview gate.
+> Verified: `src/shared/src/gates/index.ts`, `src/press/actions/src/libs/gates.ts`,
+> `src/press/actions/src/libs/decrypt.ts`, and the module's `canRead`/`canReview` at
+> `src/publication/contracts/src/S2SPublicationModuleV0_1.sol:386-400` (`canReview` at
+> `:398-400`). Not re-audited: the `shared/src/cid-view` consumers, which still carry the
+> 2026-10-30 reading. The admin app's surface is
+> [SPEC-publication-admin-app](SPEC-publication-admin-app.md#key-flows).
 
 ---
 
@@ -24,7 +28,8 @@ gate as it applies to a pending offer, and the consequences of that composition 
 
 ## The gate
 
-Two predicates answer a read, and they are not the same predicate.
+Two predicates answer a read — `canRead` for a publish, `canPreview` for a preview — and they are not
+the same predicate.
 
 **What the press runs.** `canRead(contentId, safeAddress, publicationModule, signerAddress, rpcs)` in
 `src/press/actions/src/libs/gates.ts` binds `src/shared/src/gates/index.ts` to the action's `evmRead`.
@@ -37,27 +42,56 @@ Three ANDed reads, all on L2:
 | 3 | `publicationModule.canRead(toBytes32Id(contentId), safeAddress)` | **the module admits this reader**, agreement or offer |
 
 **What the module answers.** V3 exposes the per-genesis gates: `canRead(bytes32 genesis, address
-reader)` and `canReview(bytes32 genesis, address who)` (`S2SPublicationModuleV3.sol:297-312`). Both
-admit an agreement **or** an offer. `canRead` admits the safe, the genesis author, and any address in
+reader)` and `canReview(bytes32 genesis, address who)`
+(`src/publication/contracts/src/S2SPublicationModuleV0_1.sol:386-400`). Both admit an agreement
+**or** an offer. `canRead` admits the safe, the genesis author, and any address in
 the publication's reviewer set; `canReview` is the narrower one — a reviewer, and offered or agreed.
 
 Neither replaces the other. `canRead(genesis, reader)` trusts the address it is handed: the module
 cannot ask whether that reader holds the Safe it names, so a caller MUST pair it with `isOwner`. The
 press's composed gate does that in term 2, which is why the composition exists at all.
 
-Two things follow, and both are load-bearing:
+**What the press runs for a preview.** `canPreview(contentId, pubModule, signer, rpcs)` in
+`src/press/actions/src/libs/gates.ts` binds the shared `canPreview`, and `decrypt` asks it whenever
+the run is a preview. Three paths, each behind one condition: `hasAgreement` or `hasOffer` must hold
+before any author or Safe read. `canReview` is asked alongside them, and its yes admits alone.
 
-**Term 3 is the whole problem.** A pending offer has `hasAgreement == false`, and term 1 refuses it as well:
-a pending offer's author is not a whitelisted author. So a pending offer **cannot be decrypted through
-the press by anyone** — not the holders, not the author, not a reviewer, not the person who wrote it.
-The composed gate has no `hasOffer` branch, and nothing on this path calls `hasOffer`.
+| path | call | means |
+|---|---|---|
+| reviewer | `publicationModule.canReview(genesis, signer)` | the signer is in the reviewer set, and the genesis is offered or agreed; a yes is the admission on its own |
+| author | `publicationModule.authorOf(genesis)`, then `canAuthor` | the signer owns the Safe the publication records as the genesis author, the author Safe's drafts log names that same Safe, and `canAuthor` admits the signer at the append block |
+| publication owner | `safe.isOwner(signer)`, against `publicationModule.safe()` | read only when the reviewer answer and the author path both refuse: the signer owns the publication Safe |
 
-**The reviewer path exists and is unused.** `canReview` is wired through the action adapter
-(`src/press/actions/src/libs/gates.ts:49`) and answers yes for an offer, but
-`src/press/actions/src/libs/decrypt.ts:38` calls the composed `canRead`, so a reviewer's decryption of
-an offer is still refused at the gate. The reviewer set is real — `setReviewer`, capped at 20,
-`onlySafe` — and no app surface uses it. This is a gap, recorded in
-[SPEC-publication-must-not](SPEC-publication-must-not.md#reading) and not fixed by this spec.
+`canPublish` is not asked, so a pending offer and a signer who owns no author Safe the publication
+knows both reach a preview. Who may preview, and under what condition: a listed reviewer, the
+manuscript's author, or an owner of the publication Safe, and only while the genesis sits under an
+agreement or an offer. A reviewer's yes is the contract's own condition and stands alone. On the
+author path `authorOf` is the publication's recorded author of the genesis, written by the first
+`makeOffer`, not the writer of any append; the drafts log naming that same Safe proves the Safe kept
+the genesis, the blob's signed `public.author` proves the writer, and `canAuthor` proves the signer
+owned it at the append block. So an author previews a genesis under an agreement or an offer,
+including an offer they made that is still open. A genesis
+whose offer was declined or retracted, or that the publication never recorded, is refused to
+everyone, the author included, because the render's preview revoke guard would drop the page anyway.
+Every read is fail-closed: a throw or a non-`true` answer refuses the question it was asked. The
+reviewer question and the agreement-or-offer reads settle together, and a reviewer's yes returns
+alone, so a failed `authorOf` costs a listed reviewer nothing; `authorOf` and `safe()` are read only
+when one of the two holds, and `safe.isOwner` only when the author path refuses, so a failed or
+unusable `safe()` refuses the owner path alone. The author path's `canAuthor` reads are spent only
+when `authorOf` names a usable Safe.
+
+Three things follow, and each is load-bearing:
+
+**Term 3 closes the publish path to an offer.** A pending offer has `hasAgreement == false`, and term 1
+refuses it as well: a pending offer's author is not a whitelisted author. So a publish **cannot
+decrypt an offer** — not the holders, not the author, not a reviewer. That is the composition a
+publish is meant to have: it builds only from agreements.
+
+**The reviewer path is the module's own condition.** `canPreview` asks the module's `canReview(genesis, signer)`
+first, which answers yes for a listed reviewer while the genesis is offered or agreed. Its second path
+is the author's, and its third is ownership of the publication Safe the module's own `safe()` getter
+names, read live, on the same offer-or-agreement condition. A failed read refuses. The reviewer set
+is real — `setReviewer`, capped at 20, `onlySafe` — and the admin app's Preview is its surface.
 
 **Term 2 means the *holder* is the reader, not the author.** The press acts as the publication: the
 signature that authorises a render is a Safe owner's. An author who is not also a holder cannot decrypt
@@ -71,50 +105,56 @@ isn't.
 |---|---|
 | the work is offered | `makeOffer` appends the version; the item is a pending offer |
 | the publication learns of it | the app's deals tab lists it from `getOffers` |
-| the publication reads it | **only if the item was published in the clear.** `s2s-deals-tab` fetches each item by CID from a gateway and parses the body directly — no gate, no key, no press |
-| a reviewer reads it | same row, same fetch. The module has a reviewer set and `canReview`; the press's decrypt path asks the composed `canRead`, so the reviewer's read is refused unless the work is an agreement. No scoped read, no expiry |
+| the publication reads it | from the deals row's Preview: one Lit render through `canPreview`, which decrypts an encrypted body. A row is also listed from the cache without a key, so a plaintext item is readable without the press |
+| a reviewer reads it | the same Preview. The gate is the module's `canReview` inside `canPreview`, so a listed reviewer reads while the genesis is offered or agreed. No scoped read, no expiry |
 | the decision | `admit` or `reject` on a V3 module (`acceptOffer` / `retract` on V2), both Safe transactions |
 
-So the prototype ships offers **in the clear**, and the reason is structural rather than lazy: an
-encrypted offer is an object nobody can open, including the publication that is supposed to consider it.
-Encryption exists on both sides and is switched off by default for exactly this reason.
+An offer may still be uploaded in the clear, and the app lists it without a key; that is a choice on
+the authoring side, not a limit of the press. An encrypted offer is no longer an object nobody can
+open: it opens to the author who wrote it, to the reviewers the publication lists and to the
+publication's owners.
 
-**Review today is a decision to look, not a right to look.** The only access control on a pending offer
-is whatever the author did before uploading: publish it plaintext (anyone with the CID reads it), or
-encrypt it (nobody reads it). There is no middle setting.
+**Review is now a right the module grants, and authorship is a right the module records.** The access
+control on a pending offer is the module's answer: a listed reviewer, the manuscript's author and the
+publication's owners read while the offer or agreement holds, and nobody else does. The author is not
+an exception to that condition: `authorOf` records their Safe, but a preview still needs an agreement
+or an offer. What is missing is the middle setting — the reviewer's read is unscoped and leaves no
+trace.
 
 ## What a reviewer can see of an encrypted item
 
-Even unreadable, an encrypted item is not opaque. The signed **public envelope** is in the clear:
-`title` is body content (secret) but `attributes`, `tags`, `postType`, `locale`, `position`, and
-`plaintextHash` are in the signed public part, and `proof` names the signer. A review surface could
-therefore show *who* offered *what kind of* thing *when*, and verify the signature, without the
-publication ever being able to read the words. That is a real capability the prototype has and does not
-use.
+When the gate refuses, an encrypted item is still not opaque. The signed **public envelope** is in
+the clear: `title` is body content (secret) but `attributes`, `tags`, `postType`, `locale`, `position`,
+and `plaintextHash` are in the signed public part, and `proof` names the signer. A review surface
+could therefore show *who* offered *what kind of* thing *when*, and verify the signature, without
+the gate opening the body. The app shows that envelope on the row and leaves it there.
 
 ## Unknowns this spec does not settle
 
 Recorded here, decided elsewhere (an RFC, not a spec — per `docs/conventions.md`):
 
-1. Whether the press's decrypt path should call `canReview` for a non-owner before `canRead`, or whether
-   the composed gate grows an offer branch. The third list (reviewers) is built; which predicate reads
-   it on the decrypt path is not decided.
-2. Whether a reviewer read should be **scoped** (this genesis, until this time) or unconditional for the
-   publication's holders.
-3. Whether a declined work becomes a **record** (`declined, by, at`) or stays an absence. Today decline
+1. Whether a reviewer read should be **scoped** (this genesis, until this time) or unconditional for
+   the publication's holders. The reviewer and owner paths are the latter: they ask the module each
+   time, and the module answers while an agreement or an offer holds.
+2. Whether a declined work becomes a **record** (`declined, by, at`) or stays an absence. Today decline
    removes the offer, leaves the log, leaves the bytes, and tells nobody.
-4. Whether the author is **notified** of a decision, and through what — there is no event subscription,
+3. Whether the author is **notified** of a decision, and through what — there is no event subscription,
    no webhook, no inbox anywhere in the system.
 
 ## Invariants this component preserves
 
 - **A read never changes state.** The press's authorisation is an off-chain message
   (`extractSignerAddress` over `'lit actions auth'`); it costs nothing and writes nothing.
-- **`canRead` is fail-closed.** Any of the three reads returning false denies; an RPC failure throws
-  rather than defaulting to allow.
-- **An offer read through the press is refused, not refused per reviewer.** The composed gate is blind
-  to the reviewer set. Until (1) is decided, the module's `canReview` is a configured answer with no
-  caller, and the press path stays closed to every offer.
+- **`canRead` and `canPreview` are fail-closed.** A read returning false refuses the question it
+  answers; an RPC failure throws in `canRead` and answers false in `canPreview`, so neither defaults
+  to allow.
+- **A preview asks the deal question and the reviewer first, then the author's own question, and the
+  publication Safe's ownership last.** `canPreview` asks `canReview`, `hasAgreement` and `hasOffer`
+  together, refuses before any further read when neither the agreement nor the offer holds, then asks
+  `authorOf` and `safe()` together. It asks `canAuthor` when `authorOf` names a usable Safe, and asks
+  ownership of the publication Safe only when the author path refuses. Every path needs an agreement
+  or an offer: `authorOf` records the author's Safe, but a genesis under neither is refused to its
+  author too.
 
 ## Safe-to-change vs do-not-touch
 
@@ -126,10 +166,15 @@ Recorded here, decided elsewhere (an RFC, not a spec — per `docs/conventions.m
 
 ## Test seams
 
-- Gate truth table over {deal, offer, unknown} × {holder, non-holder} × {canPublish true, false}: the
-  offer/holder row must be **false** for an encrypted body, and is the regression that matters.
-- An encrypted offer rendered through the press: assert it fails at the gate — term 1 or term 3 — and
-  not at decryption. The difference distinguishes "not allowed" from "broken".
-- `canReview` against an offer: the module answers true for a listed reviewer and the press adapter
-  carries that answer unchanged. The row that matters is that nothing calls it yet.
+- Gate truth table over {deal, offer, unknown} × {listed reviewer, publication owner, the author,
+  neither} × {hasAgreement, hasOffer}: an offer answers true for the reviewer, the owner and the
+  author, and false for a signer the module lists nowhere and who wrote nothing. The unknown-genesis
+  row is false on every path.
+- An encrypted offer rendered through the press: a publish fails at the gate — term 1 or term 3 — and a
+  preview renders it. The pair distinguishes "not allowed" from "broken".
+- `canReview` against an offer: the module answers true for a listed reviewer, `canPreview` carries
+  that answer, and no further read follows it.
+- A failed `canReview`, `hasAgreement` or `hasOffer` read in a preview refuses only the question it was
+  asked: a `canReview` yes still admits, and either deal answer true still reaches the author and
+  owner paths.
 - An unencrypted offer: assert the app shows a title and no proof verification occurs on that path.

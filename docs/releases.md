@@ -27,6 +27,17 @@ reads it, and the next release is judged against the last release rather than ag
   body decrypts; `dev` stays on the runner.
 - The manifest advertises `capabilities.unsignedRender`, so the shared layer will run a preview on
   a publication pinned to this build.
+- `preview` decrypts through `canPreview`: a listed reviewer, the manuscript's author, or an owner of
+  the publication Safe may open it, while the manuscript is under an offer or an agreement on every
+  path. `publish` keeps `canRead`, so the author-Safe ownership it requires is unchanged.
+- A preview no longer treats an offered genesis as revoked. The render's revoke check reads
+  `hasOffer` as well in a preview and revokes only when neither an agreement nor an offer holds; a
+  publish still revokes on the agreement alone.
+- The manifest advertises `capabilities.offerPreview` beside `unsignedRender`. The safe-app requires
+  `unsignedRender` for every preview and `offerPreview` for an offer row; 0.1.4 is unfiled, so both
+  arrive together and one pin enables the whole preview.
+- safe-app: a row carries one render, Preview. The per-row Dev button is gone, and the toolbar
+  toggle still chooses dev or publish for Sync site.
 - Filing the document moves no publication: each one reads the manifest at its own
   `manifest_version` record, so pinning this build to a publication stays a separate human step.
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, vi } from 'vitest';
 import {
   canAuthor,
   canAuthorVerdict,
+  canPreview,
   canPublish,
   canRead,
   canReset,
@@ -361,6 +362,316 @@ describe('canReview', () => {
     };
     await canReview(read, 'bafyrawwcid', PUBLICATION, SIGNER, (ref) => `hashed:${ref}`);
     expect(seen).toEqual(['hashed:bafyrawwcid', SIGNER]);
+  });
+});
+
+describe('canPreview', () => {
+  const PUB_SAFE = '0x' + 'bb'.repeat(20);
+
+  interface PreviewOptions {
+    reviewer?: boolean;
+    /** The module's own `safe()` answer. */
+    publicationSafe?: unknown;
+    owner?: boolean;
+    hasAgreement?: boolean;
+    hasOffer?: boolean;
+    reviewerThrows?: boolean;
+    safeThrows?: boolean;
+    agreementThrows?: boolean;
+    /** The publication's `authorOf(genesis)`; the recorded author. Default: unknown. */
+    authorOf?: unknown;
+    /** The drafts log's `authorOf(genesis)`; defaults to the publication's answer. */
+    draftsAuthorOf?: unknown;
+    /** Whether the author Safe our authorOf names is owned by the signer, live. */
+    authorOwner?: boolean;
+    /** Whether the history module says the signer owned the Safe at the block. */
+    authorHistoryOwner?: boolean;
+    /** `blocksOf(genesis)`; the default records no height, so the live set answers. */
+    blocks?: unknown;
+    /** Whether the author Safe runs an owner-history module. */
+    history?: boolean;
+    /** The module's `authorOf` read throws. */
+    authorOfThrows?: boolean;
+    /** The drafts log throws when `canAuthor` reads it. */
+    authorPathThrows?: boolean;
+  }
+
+  /**
+   * One preview chain: the module answers canReview, authorOf, safe() and the
+   * agreement/offer questions; the author Safe answers module resolution, its
+   * drafts log and ownership; the publication Safe answers `isOwner`.
+   */
+  const makePreviewChain = (options: PreviewOptions = {}) => {
+    const asked: { target: string; fn: string; args: unknown[] }[] = [];
+    const history = options.history ?? true;
+    const read: GateRead = async (target, _abi, fn, args) => {
+      asked.push({ target, fn, args });
+      if (fn === 'canReview') {
+        if (options.reviewerThrows) throw new Error('rpc down');
+        return options.reviewer ?? false;
+      }
+      if (fn === 'supportsInterface') {
+        if (args[0] === DRAFTS_MODULE_INTERFACE_ID) return same(target, DRAFTS);
+        if (args[0] === OWNER_HISTORY_MODULE_INTERFACE_ID) return history && same(target, HISTORY);
+        return false;
+      }
+      if (fn === 'isOwner') {
+        if (same(target, PUB_SAFE)) return options.owner ?? false;
+        if (same(target, SAFE)) return options.authorOwner ?? false;
+        throw new Error(`unexpected owner Safe ${target}`);
+      }
+      if (fn === 'isOwnerAt') {
+        if (same(target, HISTORY)) return options.authorHistoryOwner ?? false;
+        throw new Error(`unexpected history module ${target}`);
+      }
+      if (fn === 'hasAgreement') {
+        if (options.agreementThrows) throw new Error('rpc down');
+        return options.hasAgreement ?? false;
+      }
+      if (fn === 'hasOffer') return options.hasOffer ?? false;
+      throw new Error(`unexpected boolean read ${fn}:${target}`);
+    };
+    const readValue: GateValueRead = async (target, _abi, fn, args) => {
+      asked.push({ target, fn, args });
+      if (fn === 'safe') {
+        if (options.safeThrows) throw new Error('safe read down');
+        return options.publicationSafe ?? PUB_SAFE;
+      }
+      if (fn === 'authorOf') {
+        if (options.authorOfThrows && same(target, PUBLICATION))
+          throw new Error('authorOf read down');
+        if (options.authorPathThrows && same(target, DRAFTS))
+          throw new Error('drafts log down');
+        if (same(target, DRAFTS)) return options.draftsAuthorOf ?? options.authorOf ?? ZERO;
+        return options.authorOf ?? ZERO;
+      }
+      if (fn === 'getModulesPaginated') return [[DRAFTS, ...(history ? [HISTORY] : [])], ZERO];
+      // Block 0 by default: a version written before the block was recorded, so
+      // the author path is judged on the Safe's live owner set.
+      if (fn === 'blocksOf') return options.blocks ?? [1, 0];
+      throw new Error(`unexpected value read ${fn}:${target}`);
+    };
+    return { read, readValue, asked };
+  };
+
+  it('admits a listed reviewer without spending the author or Safe reads', async () => {
+    const { read, readValue, asked } = makePreviewChain({ reviewer: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+
+    expect(asked.find((a) => a.fn === 'canReview')!.args).toEqual([HEX32, SIGNER]);
+    // The agreement and offer reads run alongside the reviewer question; the
+    // author and owner paths' reads are not spent on a reviewer yes.
+    expect(asked.some((a) => a.fn === 'hasAgreement')).toBe(true);
+    expect(asked.some((a) => a.fn === 'hasOffer')).toBe(true);
+    expect(asked.some((a) => a.fn === 'authorOf')).toBe(false);
+    expect(asked.some((a) => a.fn === 'safe')).toBe(false);
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
+    expect(asked.some((a) => a.fn === 'getModulesPaginated')).toBe(false);
+  });
+
+  it('admits the author Safe s live owner while an offer is open', async () => {
+    const { read, readValue, asked } = makePreviewChain({
+      authorOf: SAFE,
+      authorOwner: true,
+      hasOffer: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+
+    expect(asked.find((a) => a.fn === 'authorOf')!.target).toBe(PUBLICATION);
+    expect(asked.find((a) => a.fn === 'blocksOf')!.target).toBe(DRAFTS);
+    expect(asked.find((a) => a.fn === 'isOwner')!.target).toBe(SAFE);
+    // `safe()` is read alongside `authorOf`, but the owner path is not reached
+    // once the author path admitted.
+    expect(asked.find((a) => a.fn === 'safe')!.target).toBe(PUBLICATION);
+  });
+
+  it('admits the author with the append-block answer, not the live owner set', async () => {
+    const { read, readValue, asked } = makePreviewChain({
+      authorOf: SAFE,
+      authorOwner: false,
+      authorHistoryOwner: true,
+      blocks: [1, APPEND_BLOCK],
+      hasAgreement: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+
+    const judged = asked.find((a) => a.fn === 'isOwnerAt')!;
+    expect(judged.target).toBe(HISTORY);
+    expect(judged.args).toEqual([SIGNER, APPEND_BLOCK]);
+    // The live set answers another question, so it was not asked.
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
+  });
+
+  it('refuses the author when neither an agreement nor an offer is in force', async () => {
+    // The author's right does not outlive the offer: with nothing holding the
+    // genesis, the preview is refused before any author-side read is spent.
+    const { read, readValue, asked } = makePreviewChain({
+      authorOf: SAFE,
+      authorOwner: true,
+      hasAgreement: false,
+      hasOffer: false,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+    expect(asked.some((a) => a.fn === 'authorOf')).toBe(false);
+    expect(asked.some((a) => a.fn === 'safe')).toBe(false);
+    expect(asked.some((a) => a.fn === 'getModulesPaginated')).toBe(false);
+  });
+
+  it('refuses when the publication s authorOf and the drafts log disagree', async () => {
+    const { read, readValue } = makePreviewChain({
+      authorOf: SAFE,
+      draftsAuthorOf: OTHER_SAFE,
+      authorOwner: true,
+      hasOffer: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+  });
+
+  it('refuses the author path when authorOf answers the zero address', async () => {
+    const { read, readValue, asked } = makePreviewChain({
+      authorOf: ZERO,
+      owner: false,
+      hasOffer: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+    // No usable Safe was named, so no author-side read was spent.
+    expect(asked.some((a) => a.fn === 'getModulesPaginated')).toBe(false);
+    expect(asked.some((a) => a.fn === 'blocksOf')).toBe(false);
+  });
+
+  it('refuses an author Safe whose signer is not an owner', async () => {
+    const { read, readValue, asked } = makePreviewChain({
+      authorOf: SAFE,
+      authorOwner: false,
+      hasOffer: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+    expect(asked.find((a) => a.fn === 'isOwner')!.target).toBe(SAFE);
+  });
+
+  it('admits the publication Safe s owner while an offer is open', async () => {
+    const { read, readValue, asked } = makePreviewChain({ owner: true, hasOffer: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+
+    const ownership = asked.find((a) => a.fn === 'isOwner')!;
+    expect(ownership.target).toBe(PUB_SAFE);
+    expect(ownership.args).toEqual([SIGNER]);
+    expect(asked.find((a) => a.fn === 'safe')!.target).toBe(PUBLICATION);
+    expect(asked.find((a) => a.fn === 'hasAgreement')!.args).toEqual([HEX32]);
+    expect(asked.find((a) => a.fn === 'hasOffer')!.args).toEqual([HEX32]);
+  });
+
+  it('admits the publication Safe s owner under an agreement', async () => {
+    const { read, readValue } = makePreviewChain({ owner: true, hasAgreement: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+  });
+
+  it('refuses the publication Safe s owner when neither an agreement nor an offer holds the genesis', async () => {
+    const { read, readValue, asked } = makePreviewChain({
+      owner: true,
+      hasAgreement: false,
+      hasOffer: false,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+    // Nothing holds the genesis, so ownership is never asked.
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
+  });
+
+  it('refuses a signer who neither reviews nor owns the publication Safe', async () => {
+    const { read, readValue, asked } = makePreviewChain({ owner: false, hasOffer: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+
+    // The owner read answered false, but it was spent because an offer held the genesis.
+    expect(asked.find((a) => a.fn === 'isOwner')!.target).toBe(PUB_SAFE);
+  });
+
+  it('refuses when a read throws — a transport error never opens the preview', async () => {
+    const reviewerDown = makePreviewChain({ reviewerThrows: true, owner: true });
+    expect(
+      await canPreview(reviewerDown.read, reviewerDown.readValue, HEX32, PUBLICATION, SIGNER),
+    ).toBe(false);
+
+    // The agreement read fails and there is no offer: the deal question is
+    // unanswerable, so the preview is refused rather than let through.
+    const agreementDown = makePreviewChain({ owner: true, agreementThrows: true });
+    expect(
+      await canPreview(agreementDown.read, agreementDown.readValue, HEX32, PUBLICATION, SIGNER),
+    ).toBe(false);
+  });
+
+  it('refuses a non-boolean answer', async () => {
+    const { read, readValue } = makePreviewChain({ reviewer: 'true' as unknown as boolean });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+  });
+
+  it('admits a listed reviewer even when safe() would revert', async () => {
+    // `safe()` feeds the owner path only, and a reviewer yes is admitted before
+    // it is ever asked. A module that cannot name its Safe must not refuse a
+    // reviewer the contract already admitted.
+    const { read, readValue, asked } = makePreviewChain({ reviewer: true, safeThrows: true });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+    expect(asked.some((a) => a.fn === 'safe')).toBe(false);
+  });
+
+  it('admits a listed reviewer even when authorOf would revert', async () => {
+    // The author lookup is only reached when no reviewer admitted. A failed
+    // author read must not refuse a reviewer, nor spend a canAuthor read.
+    const { read, readValue, asked } = makePreviewChain({
+      reviewer: true,
+      authorOf: SAFE,
+      authorOwner: true,
+      authorOfThrows: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+    expect(asked.some((a) => a.fn === 'getModulesPaginated')).toBe(false);
+  });
+
+  it('refuses a throwing author path and still asks the owner path', async () => {
+    const { read, readValue, asked } = makePreviewChain({
+      authorOf: SAFE,
+      authorPathThrows: true,
+      owner: true,
+      hasOffer: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+    expect(asked.find((a) => a.fn === 'isOwner')!.target).toBe(PUB_SAFE);
+    expect(asked.some((a) => a.fn === 'hasOffer')).toBe(true);
+  });
+
+  it('admits the publication Safe s owner when canReview fails but safe() answers', async () => {
+    const { read, readValue } = makePreviewChain({
+      reviewerThrows: true,
+      owner: true,
+      hasOffer: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(true);
+  });
+
+  it('refuses an owner path when the module names no usable Safe', async () => {
+    const { read, readValue, asked } = makePreviewChain({
+      owner: true,
+      publicationSafe: '0x0',
+      hasOffer: true,
+    });
+
+    expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
   });
 });
 
