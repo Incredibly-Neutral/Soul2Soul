@@ -592,7 +592,7 @@ describe('canPreview', () => {
 
     expect(await canPreview(read, readValue, HEX32, PUBLICATION, SIGNER)).toBe(false);
 
-    // The owner read failed, but it was spent because an offer held the genesis.
+    // The owner read answered false, but it was spent because an offer held the genesis.
     expect(asked.find((a) => a.fn === 'isOwner')!.target).toBe(PUB_SAFE);
   });
 
