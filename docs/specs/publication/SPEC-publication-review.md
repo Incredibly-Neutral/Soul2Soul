@@ -61,8 +61,9 @@ the run is a preview. Two paths:
 
 Neither `canPublish` nor `canAuthor` is asked, so a pending offer and a signer who owns no author Safe
 the publication knows both reach a preview. Every read is fail-closed: a throw or a non-`true` answer
-refuses, and a `safe()` that is not a usable address refuses the owner path. Term 1 and the `safe()`
-getter share one `try`, so a failure of either refuses before a reviewer's `true` is used.
+refuses the question it was asked. Term 1 and the `safe()` getter settle independently, and a
+reviewer's yes returns before the Safe is looked at, so a failed or unusable `safe()` refuses the
+owner path alone.
 
 Two things follow, and both are load-bearing:
 

@@ -40,9 +40,9 @@ sit under an agreement or an offer; or an owner of the publication Safe, taken f
 publication owner cannot open a manuscript that was never offered to them. It never asks
 `canAuthor`: the author-Safe ownership that `canRead` requires is not what opens a preview; a
 manuscript's own author who is neither a listed reviewer nor an owner of the publication Safe is
-refused one, though a publish's `canRead` would admit them. Every
-read is fail-closed — a throw or a non-`true` answer refuses, and a `safe()` that is not a usable
-address refuses the owner path. The render action decrypts through it when the run is a preview,
+refused one, though a publish's `canRead` would admit them. No failed read admits: a throw or a
+non-`true` answer refuses the question it was asked, and a `safe()` that fails or is not a usable
+address refuses the owner path alone, since a listed reviewer's yes stands without it. The render action decrypts through it when the run is a preview,
 which is what lets a publication's owner or a listed reviewer read a manuscript between the offer
 and the agreement; a publish still decrypts through `canRead`.
 
