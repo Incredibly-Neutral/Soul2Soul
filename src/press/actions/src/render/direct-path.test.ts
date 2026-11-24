@@ -38,13 +38,17 @@ vi.mock('../libs/helpers', () => ({
   addressToUserId: vi.fn(),
 }));
 vi.mock('./config.ctrl', () => ({ getConfig: vi.fn() }));
-vi.mock('./data.ctrlr', () => ({
-  initTemplateData: vi.fn(),
-  fetchCollections: vi.fn(),
-  mergeDecrypted: vi.fn(),
-  pathsForCollections: vi.fn(),
-  shouldWriteBackCache: vi.fn(),
-}));
+vi.mock('./data.ctrlr', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./data.ctrlr')>();
+  return {
+    ...actual,
+    initTemplateData: vi.fn(),
+    fetchCollections: vi.fn(),
+    mergeDecrypted: vi.fn(),
+    pathsForCollections: vi.fn(),
+    shouldWriteBackCache: vi.fn(),
+  };
+});
 vi.mock('./metadata', () => ({ addAndSignMetadata: vi.fn() }));
 vi.mock('../renderer/html.ctrlr', () => ({ renderHTML: vi.fn() }));
 
@@ -74,11 +78,7 @@ import {
   buildSigningView,
   buildSigningViewV2,
 } from '../../../../shared/dist/manuscript/identity/signing-view';
-import {
-  S2S_DOMAIN,
-  S2S_TYPES,
-  S2S_TYPES_V2,
-} from '../../../../shared/dist/manuscript/types';
+import { S2S_DOMAIN, S2S_TYPES, S2S_TYPES_V2 } from '../../../../shared/dist/manuscript/types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -326,6 +326,33 @@ describe('render action — plaintext integrity (direct read path)', () => {
 
     const data = (result as { data?: { job?: { html?: string } } }).data;
     expect(data?.job?.html).toBe('QmRenderedHtml');
+  });
+
+  it('keeps the prep-assigned member path when a member job is revoked', async () => {
+    // A revoked bundle cannot decrypt, so templateData is built from the bundle
+    // and carries the FOLDER path. The member job already carries the member
+    // path assigned by prep, and that is the path its removal must target.
+    vi.mocked(initTemplateData).mockResolvedValue({
+      id: GENESIS,
+      path: '/chapters',
+      revoked: true,
+    } as never);
+
+    const memberInput = input();
+    memberInput.job = {
+      ...memberInput.job,
+      id: `${GENESIS}:one`,
+      path: '/chapters/one',
+      sourceId: GENESIS,
+      collectionKey: 'one',
+    };
+
+    const result = await main(memberInput);
+
+    expect(result.ok).toBe(true);
+    const data = (result as { data?: { job?: { path?: string; revoked?: boolean } } }).data;
+    expect(data?.job?.revoked).toBe(true);
+    expect(data?.job?.path).toBe('/chapters/one');
   });
 });
 
