@@ -55,8 +55,16 @@ export interface CollectionBundleFields {
   collection?: S2SCollectionDocument;
 }
 
-/** A page body produced by expanding a collection member. */
+/**
+ * A page body produced by expanding a collection member.
+ *
+ * `mediaType` and `cid` are declared here because a page body has no slot for
+ * either: the member is always markdown, and `cid` is the bundle's stored
+ * bytes, which the press augments a body with separately.
+ */
 export interface S2SExpandedCollectionMember extends S2SBodyPlain {
+  mediaType: 'text/markdown';
+  cid?: string;
   collectionGenesis: string;
   collectionTitle?: string;
   collectionSlug: string;
@@ -99,7 +107,7 @@ export function collectionMemberBody(
     collectionTitle: bundle.title,
     collectionSlug: bundle.collection?.slug ?? bundle.slug ?? '',
     collectionKey: item.key,
-  } as S2SExpandedCollectionMember;
+  };
 }
 
 /**
@@ -110,8 +118,8 @@ export function collectionMemberBody(
  */
 export function expandCollection(
   bundle: CollectionBundleFields | null | undefined,
-): S2SExpandedCollectionMember[] {
+): (S2SExpandedCollectionMember | CollectionBundleFields)[] {
   if (!bundle) return [];
-  if (!isCollectionContainer(bundle)) return [bundle as S2SExpandedCollectionMember];
+  if (!isCollectionContainer(bundle)) return [bundle];
   return (bundle.collection?.items ?? []).map((item, i) => collectionMemberBody(bundle, item, i));
 }

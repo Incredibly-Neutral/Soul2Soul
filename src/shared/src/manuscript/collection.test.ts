@@ -7,7 +7,15 @@ import {
   expandCollection,
   isCollectionContainer,
   type CollectionBundleFields,
+  type S2SExpandedCollectionMember,
 } from './collection';
+
+/** The member half of the expansion: a non-container passthrough is not one. */
+function expandMembers(bundle: CollectionBundleFields): S2SExpandedCollectionMember[] {
+  return expandCollection(bundle).filter(
+    (body): body is S2SExpandedCollectionMember => 'collectionKey' in body,
+  );
+}
 
 const BUNDLE: CollectionBundleFields = {
   id: '0xbundle',
@@ -71,7 +79,7 @@ describe('manuscript/collection', () => {
   });
 
   it('expands a bundle into one page body per member', () => {
-    const members = expandCollection(BUNDLE);
+    const members = expandMembers(BUNDLE);
 
     expect(members).toHaveLength(2);
     expect(members.map((m) => m.id)).toEqual(['0xbundle:first', '0xbundle:second']);
@@ -82,28 +90,27 @@ describe('manuscript/collection', () => {
   });
 
   it('hardcodes the member mediaType and marks it unencrypted', () => {
-    const [first] = expandCollection(BUNDLE);
-    const raw = first as unknown as Record<string, unknown>;
-    expect(raw.mediaType).toBe('text/markdown');
+    const [first] = expandMembers(BUNDLE);
+    expect(first.mediaType).toBe('text/markdown');
     expect(first.encryption).toBe(false);
     expect(first.content).toBe('<p>one</p>');
   });
 
   it('carries no per-member signature', () => {
-    const [first] = expandCollection(BUNDLE);
+    const [first] = expandMembers(BUNDLE);
     expect(first).not.toHaveProperty('objectId');
     expect(first).not.toHaveProperty('proof');
     expect(first).not.toHaveProperty('plaintextHash');
   });
 
   it('overrides position per item and defaults to index + 1', () => {
-    const members = expandCollection(BUNDLE);
+    const members = expandMembers(BUNDLE);
     expect(members[0]?.position).toBe('3');
     expect(members[1]?.position).toBe('2');
   });
 
   it('inherits locale and postType from the bundle, item wins', () => {
-    const members = expandCollection(BUNDLE);
+    const members = expandMembers(BUNDLE);
     expect(members[0]?.locale).toBe('de');
     expect(members[0]?.postType).toBe('article');
     expect(members[1]?.locale).toBe('fr');
@@ -111,13 +118,13 @@ describe('manuscript/collection', () => {
   });
 
   it('dedupes tags across the bundle and the item', () => {
-    const members = expandCollection(BUNDLE);
+    const members = expandMembers(BUNDLE);
     expect(members[0]?.tags).toEqual(['shared', 'folder', 'own']);
     expect(members[1]?.tags).toEqual(['shared', 'folder']);
   });
 
   it('falls back to en when no locale is declared', () => {
-    const [first] = expandCollection({
+    const [first] = expandMembers({
       ...BUNDLE,
       locale: undefined,
       collection: { slug: 's', items: [{ key: 'k', title: 'T', slug: 'k', content: '' }] },
@@ -126,9 +133,13 @@ describe('manuscript/collection', () => {
     expect(first.custom).toEqual({});
   });
 
-  it('passes a non-container through unchanged', () => {
+  it('passes a non-container through unchanged, without collection fields', () => {
     const page: CollectionBundleFields = { id: '0xpage', slug: 'page', mediaType: 'text/markdown' };
-    expect(expandCollection(page)).toEqual([page]);
+    const result = expandCollection(page);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(page);
+    expect('collectionKey' in result[0]).toBe(false);
+    expect('collectionGenesis' in result[0]).toBe(false);
     expect(expandCollection(null)).toEqual([]);
     expect(expandCollection(undefined)).toEqual([]);
   });
