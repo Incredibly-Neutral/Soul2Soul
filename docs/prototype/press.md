@@ -56,9 +56,13 @@ Each page carries its colophon inside it, as JSON-LD, outside the part of the pa
 
 Update writes the new root to the publication's name in one transaction, signed by the press's key: the root on the publication's name and on each alias in its config, and an empty value on any alias it dropped. The records contract on the L2 accepts writes only from callers the protocol's Safe has authorised, and the press's key is authorised in the same batch that records its address. If the transaction fails or reverts, the build fails. A site is published when its name points to it, and not before.
 
-## Preview: the same code, without the key
+## Dev and preview: same code, two runtimes
 
-A preview runs the same actions outside Lit, on a Bun runner that fetches each action by its CID, as Lit does, and stands in for Lit with a shim that holds no key: it can't sign and can't decrypt. A preview therefore renders only unencrypted text, its colophons carry no signature, and update never writes to the ledger. It still builds and pins a real tree, at `<cid>.preview.transport-union.dev`. The address is the root's CID: no one finds the preview without it, and anyone who has it can open it.
+A dev render runs the same actions outside Lit, on a Bun runner that fetches each action by its CID, as Lit does, and stands in for Lit with a shim that holds no key: it can't sign and can't decrypt. So it renders only unencrypted text, its colophons carry no signature, and update never writes to the ledger. It costs nothing.
+
+A preview render makes one paid call on Lit, for the render stage only. Lit holds the key, so a gated text opens; the page still carries no signature, because the render is told to skip signing, and update runs back on the runner so nothing is written. That one call is the price of seeing a gated page before publishing it.
+
+Both build and pin a real tree, at `<cid>.preview.transport-union.dev`. The address is the root's CID: no one finds the render without it, and anyone who has it can open it.
 
 ## Cache: a shortcut the ledger checks
 

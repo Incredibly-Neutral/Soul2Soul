@@ -28,7 +28,7 @@ What it costs: an author's account is a contract on one chain, and its owners ar
 
 ## Writing tools: Neovim and Obsidian
 
-An author writes in Neovim or in Obsidian, each with its own plugin. Neovim is open source end to end; Obsidian gives writers an interface many already know. From a note, an author can upload a manuscript to storage, preview its page, offer it to a publication, publish it and revoke it.
+An author writes in Neovim or in Obsidian, each with its own plugin. Neovim is open source end to end; Obsidian gives writers an interface many already know. From a note, an author can upload a manuscript to storage, preview its page, offer it to a publication, publish it and revoke it. The preview command keeps its name, because that is what the author gets, but it runs a dev render: signed page proof is left out, nothing is written on chain, and gated text stays closed.
 
 Each plugin creates its own key, stored on the author's device and added as an owner of the author's Safe. How many keys must sign is the author's choice. A key on a laptop and one on a phone, either of which can sign, guards against loss. Requiring both guards against theft.
 

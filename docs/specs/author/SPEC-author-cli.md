@@ -1083,7 +1083,7 @@ lists the env names; every one is also settable in a config file as a dotted pat
 | `S2S_KUBO_TOKEN` | token-gated | — | Kubo bearer token (renders use it as `_ipfsGatewayAuth`). |
 | `S2S_PINATA_JWT` / `S2S_PINATA_GATEWAY` | backups | — | Pinata pinning leg. |
 | `S2S_FILEBASE_TOKEN` | backups | — | Filebase pinning leg. |
-| `S2S_RUNNER_URL` | preview | `https://run.transport-union.dev/run` | Lit-action runner (preview renders use the Bun runner). |
+| `S2S_RUNNER_URL` | preview (dev mode) | `https://run.transport-union.dev/run` | Lit-action runner (the `preview` command renders through it, in `dev` mode). |
 | `S2S_RPC_L1` / `S2S_RPC_L2` | — | fallback chain | Explicit comma-separated L1/L2 RPC lists. Set **both** ⇒ they replace the derived chains; one alone heads its own chain and keeps the failover behind it. |
 | `MAINNET_RPC_URL` / `BASE_RPC_URL` | — | fallback chain | Not aliases of the two above: they take the head of their own chain (the DRPC slot of shared `buildFallbackRpcs`), so an explicit endpoint never costs the Alchemy/Infura/public fallbacks. |
 | `S2S_ENS_REGISTRY` | — | protocolInfo | Override the ENS OpenSubdomainRegistry address. |
@@ -1274,8 +1274,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   moves the document back to the offer set. A failed listing read warns and continues;
   `simulateAuthorWrite` still guards the write.
 - **Render gate**: `authorSafeAddress` = `service.getMultiSig()` (ENS-resolved, like neutralpress);
-  signature = `signMessage('lit actions auth')`; `litUsageKey` required; preview → Bun runner,
-  publish → Lit nodes; kuboToken passed as Bearer `_ipfsGatewayAuth`.
+  signature = `signMessage('lit actions auth')`; `litUsageKey` required; the `preview` command passes
+  `dev` (all stages on the Bun runner, unsigned), `publish` passes `publish` (render and update on
+  Lit nodes); kuboToken passed as Bearer `_ipfsGatewayAuth`.
 - **Durability** (upload and publish only, never preview): fire-and-forget
   `backupToProviders` (filebase + pinata) plus the Filecoin leg (`runFilecoinLeg`) with
   `onFilecoinMismatch` CID reporting. The Filecoin leg needs the publication's Safe for the CAR

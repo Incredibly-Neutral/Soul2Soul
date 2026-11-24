@@ -45,7 +45,7 @@ The eight components (each is a *minimum guarantee*; the named tech is a *refere
 
 | Domain | Lives where | Controlled by | Holds |
 |---|---|---|---|
-| **Neutral publisher** | Lit network (+ Bun preview runner) | PKP + permitted action CIDs | rendering, decryption, signing, on-chain root write |
+| **Neutral publisher** | Lit network (+ Bun runner for dev renders) | PKP + permitted action CIDs | rendering, decryption, signing, on-chain root write |
 | **Publication** | Safe on Base (L2) + ENS subdomain (L1) | publication multisig | licensing, whitelist, config, site-root pointer |
 | **Author** | authoring surface + author Safe | author's key/Safe | content, encryption, render triggers |
 | **Protocol root** | `soul2soul.eth` → controller Safe + global records | protocol operators | PKP info, action CIDs, gateways, ENS records contract |
@@ -88,54 +88,81 @@ and reading the history never depends on the guard having fired.
 
 Orchestrated client-side by `shared/src/rendering/index.ts :: renderwithLitActions`. Three stages,
 each is a self-contained `main({…inputs})` function bundled to one file, fetched by CID, executed
-either on Lit nodes (prod) or the Bun runner (preview).
+on Lit nodes or on the Bun runner. Which transport a stage uses is the **render mode** (below).
 
 ```
 client ── signature over "lit actions auth" ───▶
         ▼
-[PREP]     runtime: Bun runner (NO signing)      → jobs[]
+[PREP]     runner, every mode                    → jobs[]
            reads: ENS→modules, config, content bodies; expands "ripples" (related content)
         ▼
-[RENDER]   runtime: Lit (PKP)                   → job.html (CID)
+[RENDER]   dev: runner · preview, publish: Lit   → job.html (CID)
   "single"  gate: canRead/canPublish (on-chain, Base) AND signer ∈ owners of the author Safe
             (canRead: at the append block; the publication Safe and reviewers: live)
-           PKP: Lit.Actions.Decrypt (gated collections)
-           render: Handlebars → HTML; sign: provenance embedded
+           PKP: Lit.Actions.Decrypt (gated collections; Lit only)
+           render: Handlebars → HTML
+           provenance: sign and embed on publish; skip when `unsigned` is true
            upload: HTML → IPFS
         ▼
-[UPDATE]   runtime: Lit (PKP)                    → new root CID
+[UPDATE]   dev, preview: runner · publish: Lit   → new root CID
   "merged"  builds IPFS MFS tree from job html, cp config.assetsCid → /assets,
-           removes stale paths (`remove[]`: slug renames / revocations),
-           pins, evmWrite contenthash_wrapped  (ONLY the PKP can write the root)
+           removes stale paths (`remove[]`: slug renames / revocations), pins,
+           evmWrite contenthash_wrapped on publish only  (ONLY the PKP can write the root)
 ```
 
-- **PREP** — cheap, **no signing**, runs on the Bun runner in dev *and* prod. Resolves the
+- **PREP** — cheap, **no signing**, runs on the Bun runner in every mode. Resolves the
   publication (ENS→modules), reads config, fetches content bodies, expands **ripples** (related
   content that must re-render), emits a deduped `jobs[]`. For a single contentId it also detects
   **slug changes** (diffs genesis slug vs current) and emits `remove[]` entries.
-- **RENDER/SINGLE** — one Lit action per job; **this is where trust is enforced.** Recovers the
-  caller's signer from a sig over `"lit actions auth"`; runs the on-chain gates; PKP-decrypts gated
-  collections; renders Handlebars HTML; signs + embeds provenance; uploads HTML to IPFS. Produces
-  per-job HTML; it does **not** write the site root.
-- **UPDATE/MERGED** — assembles the IPFS MFS tree from the rendered jobs, pins it, and **writes
-  `contenthash_wrapped`** (the new site root) on-chain via the PKP. The single privileged root write.
+- **RENDER/SINGLE** — one action per job; **this is where trust is enforced.** Recovers the
+  caller's signer from a sig over `"lit actions auth"`; runs the on-chain gates; decrypts gated
+  collections where a key is available (Lit only); renders Handlebars HTML; on publish signs and
+  embeds provenance; uploads HTML to IPFS. Dev and preview pass `unsigned: true`, so the page is
+  uploaded as rendered. Produces per-job HTML; it does **not** write the site root.
+- **UPDATE/MERGED** — assembles the IPFS MFS tree from the rendered jobs and pins it in every mode;
+  only publish **writes `contenthash_wrapped`** (the new site root) on-chain via the PKP. The single
+  privileged root write.
 
-**Preview vs production (INV-7 — one renderer, run two ways):** in `preview=true` every stage runs
-through the **Bun serverless runner** (`run.transport-union.dev`), which replicates the Lit Actions
-**without signing** (the shim's `getPrivateKey` has no signing capability). `addAndSignMetadata`
-wraps signing in try/catch — under the shim the sign throws and the catch returns **unsigned** HTML.
-So identical action source yields signed HTML on Lit and unsigned HTML in preview. Why two runtimes:
-a Lit render costs ≈ **$0.20–0.50 each** — too expensive for iterating on templates; preview is the
-free/cheap, no-provenance path. There is a **single renderer** (`protocol/actions/renderer/`) run two
-ways — a template cannot render differently across dev/preview/prod (no parity drift to police).
+**Two runtimes, three modes (INV-7 — one renderer, run three ways).** A run names its mode, and the
+mode decides each stage's transport and whether anything is signed or written:
+
+| stage | `dev` | `preview` | `publish` |
+|---|---|---|---|
+| prep | runner | runner | runner |
+| render | runner | Lit, `unsigned: true` | Lit, signed |
+| update | runner, no write | runner, no write | Lit, root written |
+| maintain-cache | not run | not run | Lit |
+
+`dev` is the path that used to be called preview: every stage on the Bun runner, unsigned, no
+decrypt, no on-chain write, a real tree and real CIDs. It is free. `preview` is new: prep and update
+stay on the runner, the render stage runs on Lit with `unsigned: true`, so a gated body decrypts and
+the result is still unsigned and unwritten. Each render is a paid Lit invocation. `publish` renders
+and updates on Lit, signed, and writes the root.
+
+Preview must render on Lit because Lit is the only runtime with `Lit.Actions.Decrypt`; the Bun
+shim holds no key and can neither sign nor decrypt. That is also why the two runtimes exist: a Lit
+render costs ≈ **$0.20–0.50 each**, too expensive for iterating on templates, so `dev` keeps the
+free path for everything an unencrypted page needs. There is a **single renderer**
+(`protocol/actions/renderer/`) run on both — a template cannot render differently across the modes
+(no parity drift to police).
+
+**Inputs and the capability gate.** The action inputs keep one boolean `preview`, true for `dev`
+and `preview` and false for `publish`, because deployed actions read it. The new render reads
+`unsigned`, true in the same two modes and false on publish; absent or false keeps the signing
+attempt. A render action pinned before that input would ignore it and sign the Lit page, so the
+manifest advertises `capabilities.unsignedRender`, and `renderwithLitActions` refuses `preview`
+without it, before dispatching anything. The preview gateway host stays
+`preview.transport-union.dev` for both dev and preview: it names what you are looking at, not the
+mode. An offer cannot be rendered in either non-publishing mode, because the render action treats
+a genesis with no agreement as revoked.
 
 **I/O contract (every action returns one shape):** `ActionResult<T> = { ok:true, action, data, trace } |
 { ok:false, action, error, trace }`, discriminated on `ok`; `trace` is on **both** branches (survives
 a throw). **Fatal** (can't produce a result) → `throw` a *string* naming the offending value → caught →
 `{ ok:false, error }`. **Non-fatal** (result still produced, e.g. one collection item failed to decrypt
 but the page rendered) → push to `trace`, stay `ok:true`. Validation is **client-side only, both ends**
-(zod schemas in `shared/src/rendering/action-io.ts`; bundles stay zod-free, INV-7). Dispatch: `preview`
-chooses transport (Bun fetch vs Lit `executeAction`), nothing else.
+(zod schemas in `shared/src/rendering/action-io.ts`; bundles stay zod-free, INV-7). Dispatch: the
+render mode chooses each stage's transport (Bun fetch vs Lit `executeAction`), nothing else.
 
 ## 4. The data model — content items, bodies, and the render-time view
 

@@ -109,7 +109,8 @@ the block the gate judged it at, cats that entry's CID, parses the item's `s2s` 
 (`bodies.s2s` on a v3 item, `body` on a v1/v2 item; an item carrying neither, or one that does not
 parse, is refused), decrypts it, and releases the plaintext only if it hashes to the signed
 `public.plaintextHash`. `maintain-cache` and `repoint-archive` maintain the per-publication cache
-pointer, and `render-dev` builds a preview.
+pointer, and `render-dev` renders an injected template, partials and plaintext body with no chain,
+key or upload, for the starter dev kit.
 
 ## Readings
 
