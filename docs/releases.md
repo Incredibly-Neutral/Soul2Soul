@@ -27,10 +27,9 @@ reads it, and the next release is judged against the last release rather than ag
   body decrypts; `dev` stays on the runner.
 - The manifest advertises `capabilities.unsignedRender`, so the shared layer will run a preview on
   a publication pinned to this build.
-- `preview` decrypts through `canPreview`: a listed reviewer, the manuscript's author with no offer
-  asked, or an owner of the publication Safe while the manuscript is under an offer or an agreement,
-  may open it. `publish` keeps `canRead`, so the author-Safe ownership it requires is
-  unchanged.
+- `preview` decrypts through `canPreview`: a listed reviewer, the manuscript's author, or an owner of
+  the publication Safe may open it, while the manuscript is under an offer or an agreement on every
+  path. `publish` keeps `canRead`, so the author-Safe ownership it requires is unchanged.
 - A preview no longer treats an offered genesis as revoked. The render's revoke check reads
   `hasOffer` as well in a preview and revokes only when neither an agreement nor an offer holds; a
   publish still revokes on the agreement alone.

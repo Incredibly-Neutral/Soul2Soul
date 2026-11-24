@@ -168,8 +168,8 @@ and preview); absent or false keeps the signing attempt. The manifest advertises
 `capabilities.unsignedRender`, and `renderwithLitActions` refuses `preview` on a document that does
 not, because an older render action would ignore `unsigned` and sign the page. The same release
 advertises `capabilities.offerPreview` beside it: its render action decrypts a preview through
-`canPreview`, which admits a listed reviewer, the manuscript's author with no offer asked, or an
-owner of the publication Safe while the genesis is under an offer or an agreement, so an offer can
+`canPreview`, which requires an offer or an agreement on every path and admits a listed reviewer, the
+manuscript's author, or an owner of the publication Safe, so an offer can
 be previewed before it is accepted. The safe-app
 requires that flag for an offer row; the shared layer reads only `unsignedRender`.
 

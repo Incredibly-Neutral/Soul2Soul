@@ -84,9 +84,9 @@ Read against `src/publication/contracts/src/S2SPublicationModuleV3.sol`,
 - **AGREEMENT-5 is the live one, through `canRead` or `canPreview`.** A publish decides reading by the
   module's `canRead(genesis, safe)` and its own ownership check (the genesis author at the append
   block, or the reader Safe's live owner set), and `canRead` counts an agreement or an offer as
-  admission. A preview decides reading by `canPreview` instead: the module's `canReview`, or
-  ownership of the publication Safe, while an agreement or an offer holds, or the manuscript's
-  author, named by `authorOf` and proved by `canAuthor`, with neither asked. The bare boolean is
+  admission. A preview decides reading by `canPreview` instead: while an agreement or an offer holds,
+  the module's `canReview`, an owner of the publication Safe, or the manuscript's author, named by the
+  publication's `authorOf` and proved by the drafts log and `canAuthor`. The bare boolean is
   `hasAgreement(genesis)`: the revoke guard reads it through `isOutOfForce`, and the overwrite guard
   reads it directly.
 - **Rule changes are upgrades.** The module sits behind a proxy that only the publication's safe may

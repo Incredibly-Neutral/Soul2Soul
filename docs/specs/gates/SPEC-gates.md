@@ -33,24 +33,27 @@ Safe and a reviewer Safe are holders, not authors, and a holder may ask for a bu
 they do not own (GATES-4). `canAuthor` asks only the ownership question, since a draft was never
 offered and no agreement is involved.
 
-The preview gate is `canPreview`, beside `canRead` and `canReview`. It admits three identities, in
-this order. A listed reviewer, by the contract's `canReview(genesis, who)`, which already requires
-the genesis to sit under an agreement or an offer. The manuscript's own author, whom the publication
-module's `authorOf(genesis)` names and `canAuthor` admits when the signer owns that author Safe at
-the append block; this path asks neither `hasAgreement` nor `hasOffer`, because the author's right
-does not depend on the publication's decision, so a genesis under neither an agreement nor an offer
-still opens to its author. An owner of the publication Safe, taken from the module's own `safe()`
-getter and asked live through `isOwner`, while `hasAgreement` or `hasOffer` is true, so a
-publication owner cannot open a manuscript that was never offered to them. The asymmetry is the
-point: the author needs no offer, an owner of the publication Safe needs an agreement or an offer,
-and a reviewer's condition comes from the contract. The owner path is reached only after the author
-path refuses, and an `authorOf` that answers nothing usable refuses the author path alone. No failed
-read admits: a throw or a non-`true` answer refuses the question it was asked, and a `safe()` that
-fails or is not a usable address refuses the owner path alone, since a listed reviewer's yes stands
-without it. The render action decrypts through it when the run is a preview, which is what lets a
-publication's owner or a listed reviewer read a manuscript between the offer and the agreement, and
-what lets an author reopen a manuscript the publication declined. A publish still decrypts through
-`canRead`.
+The preview gate is `canPreview`, beside `canRead` and `canReview`. Every path requires the genesis
+to sit under an agreement or an offer: `hasAgreement` and `hasOffer` are read first, and when neither
+is true the preview is refused before any author or Safe read. It then admits three identities, in
+this order. A listed reviewer, by the contract's `canReview(genesis, who)`, which already requires an
+agreement or an offer; a reviewer's yes is the admission on its own. The manuscript's author. The
+publication module's `authorOf(genesis)` is the publication's recorded author of the genesis, written
+by the first `makeOffer`, not the writer of any append; the author Safe's drafts log must then name
+that same Safe, which is what proves the writer, and `canAuthor` admits the signer as an owner at the
+append block. An owner of the publication Safe, taken from the module's own `safe()` getter and asked
+live through `isOwner`, under the same agreement-or-offer condition. The author path is reached
+before the owner path, and an `authorOf` that answers nothing usable, or a drafts log that names
+another Safe, refuses the author path alone. No failed read admits: a throw or a non-`true` answer
+refuses the question it was asked, and a `safe()` that fails or is not a usable address refuses the
+owner path alone, since a listed reviewer's yes stands without it.
+
+What that admits: a preview lasts exactly as long as the deal it rests on. An author previews a
+genesis that is under an agreement or an offer, including the offer they made that is still open. A
+genesis whose offer was declined or retracted, or that the publication never recorded, is refused to
+everyone, the author included, and the render's preview revoke guard would drop the page anyway. A
+publication's owner or a listed reviewer reads a manuscript between the offer and the agreement. A
+publish still decrypts through `canRead`.
 
 `canAuthor` answers at the append block. Where the drafts log's `blocksOf(genesis)` gives a finite
 block above 0, the owner history answers `isOwnerAt` there: a key rotated out still reads what it
@@ -87,9 +90,10 @@ memory.
 
 Note (this implementation): that window is what the preview gate opens, to a listed reviewer through
 the contract's `canReview` and to an owner of the publication Safe through its live owner set. Both
-readings end when the offer or the agreement does. The author's own preview stands outside this
-window: GATES-1 gives it unconditionally, so `canPreview` also admits the manuscript's author with no
-offer and no agreement asked.
+readings end when the offer or the agreement does. The manuscript's author is admitted on the same
+condition, not outside it: `canPreview` requires an agreement or an offer for every path, so a
+genesis the publication declined is refused to its author too. GATES-1's unconditional read is the
+separate draft path, which asks `canAuthor` alone.
 
 ## GATES-3 — the renderer, under an agreement, on the approved version
 

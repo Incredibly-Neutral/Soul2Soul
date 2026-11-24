@@ -51,25 +51,31 @@ press's composed gate does that in term 2, which is why the composition exists a
 
 **What the press runs for a preview.** `canPreview(contentId, pubModule, signer, rpcs)` in
 `src/press/actions/src/libs/gates.ts` binds the shared `canPreview`, and `decrypt` asks it whenever
-the run is a preview. Three paths, in order:
+the run is a preview. Three paths, each behind one condition: `hasAgreement` or `hasOffer` must hold
+before any of them is asked.
 
 | path | call | means |
 |---|---|---|
-| reviewer | `publicationModule.canReview(genesis, signer)` | the signer is in the reviewer set, and the genesis is offered or agreed |
-| author | `publicationModule.authorOf(genesis)`, then `canAuthor` | the signer owns the author Safe the publication names for the genesis, at the append block; no offer or agreement is asked |
-| publication owner | `safe.isOwner(signer)`, against `publicationModule.safe()` | read only when the reviewer and author paths refuse: the signer owns the publication Safe |
-| offer check | `publicationModule.hasAgreement(genesis)` or `hasOffer(genesis)` | read only when the publication-owner path passed: the genesis is under an agreement or an offer |
+| reviewer | `publicationModule.canReview(genesis, signer)` | the signer is in the reviewer set, and the genesis is offered or agreed; a yes is the admission on its own |
+| author | `publicationModule.authorOf(genesis)`, then `canAuthor` | the signer owns the Safe the publication records as the genesis author, the author Safe's drafts log names that same Safe, and `canAuthor` admits the signer at the append block |
+| publication owner | `safe.isOwner(signer)`, against `publicationModule.safe()` | read only when the reviewer answer and the author path both refuse: the signer owns the publication Safe |
 
 `canPublish` is not asked, so a pending offer and a signer who owns no author Safe the publication
-knows both reach a preview. The author path is the author's own right, and it is why `authorOf` is
-read: the publication module names the Safe that wrote the genesis, and `canAuthor` proves the signer
-owns it at the append block, resolving that Safe's drafts log and owner history. The publication has
-no say in it, so an author previews a manuscript the publication declined, or one sitting under
-neither an offer nor an agreement. Every read is fail-closed: a throw or a non-`true` answer refuses
-the question it was asked. The reviewer and author reads settle together and a reviewer's yes returns
-alone, so a failed `authorOf` costs a listed reviewer nothing; the publication Safe's `safe()` is read
-only after both refuse, so a failed or unusable `safe()` refuses the owner path alone. The author
-path's `canAuthor` reads are spent only when `authorOf` names a usable Safe.
+knows both reach a preview. Who may preview, and under what condition: a listed reviewer, the
+manuscript's author, or an owner of the publication Safe, and only while the genesis sits under an
+agreement or an offer. A reviewer's yes is the contract's own condition and stands alone. On the
+author path `authorOf` is the publication's recorded author of the genesis, written by the first
+`makeOffer`, not the writer of any append; the drafts log naming that same Safe is what proves the
+writer, and `canAuthor` proves the signer owned it at the append block. So an author previews a
+genesis under an agreement or an offer, including an offer they made that is still open. A genesis
+whose offer was declined or retracted, or that the publication never recorded, is refused to
+everyone, the author included, because the render's preview revoke guard would drop the page anyway.
+Every read is fail-closed: a throw or a non-`true` answer refuses the question it was asked. The
+reviewer question and the agreement-or-offer reads settle together, and a reviewer's yes returns
+alone, so a failed `authorOf` costs a listed reviewer nothing; `authorOf` and `safe()` are read only
+when one of the two holds, and `safe.isOwner` only when the author path refuses, so a failed or
+unusable `safe()` refuses the owner path alone. The author path's `canAuthor` reads are spent only
+when `authorOf` names a usable Safe.
 
 Three things follow, and each is load-bearing:
 
@@ -106,11 +112,11 @@ open: it opens to the author who wrote it, to the reviewers the publication list
 publication's owners.
 
 **Review is now a right the module grants, and authorship is a right the module records.** The access
-control on a pending offer is the module's answer: a listed reviewer and the publication's owners
-read while the offer or agreement holds, and nobody else does. The author is the exception, and not
-because the module admits them: `authorOf` names their Safe, so an author reads their own manuscript
-with no offer at all. What is missing is the middle setting — the reviewer's read is unscoped and
-leaves no trace.
+control on a pending offer is the module's answer: a listed reviewer, the manuscript's author and the
+publication's owners read while the offer or agreement holds, and nobody else does. The author is not
+an exception to that condition: `authorOf` records their Safe, and the drafts log proves the writer,
+but a preview still needs an agreement or an offer. What is missing is the middle setting — the
+reviewer's read is unscoped and leaves no trace.
 
 ## What a reviewer can see of an encrypted item
 
@@ -138,12 +144,13 @@ Recorded here, decided elsewhere (an RFC, not a spec — per `docs/conventions.m
   (`extractSignerAddress` over `'lit actions auth'`); it costs nothing and writes nothing.
 - **`canRead` and `canPreview` are fail-closed.** Any read returning false denies; an RPC failure throws
   in `canRead` and answers false in `canPreview`, so neither defaults to allow.
-- **A preview asks the reviewer answer, the author's own question, and the publication Safe's
-ownership last.** `canPreview` asks `canReview` and `authorOf` first, then `canAuthor` when `authorOf`
-names a usable Safe, and asks ownership of the publication Safe only when the author path refuses. An
-author's right does not depend on the module's deal state: `authorOf` names their Safe, and
-`canAuthor` proves they own it at the append block, so a genesis under neither an agreement nor an
-offer opens to its author.
+- **A preview asks the deal question and the reviewer first, then the author's own question, and the
+  publication Safe's ownership last.** `canPreview` asks `canReview`, `hasAgreement` and `hasOffer`
+  together, refuses before any further read when neither the agreement nor the offer holds, then asks
+  `authorOf` and `safe()` together. It asks `canAuthor` when `authorOf` names a usable Safe, and asks
+  ownership of the publication Safe only when the author path refuses. Every path needs an agreement
+  or an offer: `authorOf` records the author's Safe and the drafts log proves the writer, but a
+  genesis under neither is refused to its author too.
 
 ## Safe-to-change vs do-not-touch
 
