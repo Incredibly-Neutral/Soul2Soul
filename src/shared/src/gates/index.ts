@@ -519,10 +519,13 @@ const answeredTrue = async (question: () => Promise<boolean>): Promise<boolean> 
  *   - The manuscript's author. The module's `authorOf(genesis)` names the Safe
  *     that wrote the genesis, and {@link canAuthor} answers whether the signer
  *     owns it. The author path stands alone: it requires neither an agreement
- *     nor an offer, because an author's right does not involve the publication
- *     at all, and a draft that was never offered still opens to its author. An
- *     `authorOf` that answers nothing usable (a missing answer, a non-address,
- *     the zero address) refuses this path only.
+ *     nor an offer, because an author's right does not turn on the
+ *     publication's decision; an author still opens the genesis when neither is
+ *     in force, a declined offer included. The publication's record is the
+ *     entry condition, not a deal: a genesis it never recorded has no
+ *     `authorOf`, and this path refuses it. An `authorOf` that answers nothing
+ *     usable (a missing answer, a non-address, the zero address) refuses this
+ *     path only.
  *   - An owner of the publication Safe. The module names that Safe in its own
  *     `safe()` getter; ownership is asked live, because a preview is asked for
  *     now. The genesis must also be under an agreement or an offer, so a
