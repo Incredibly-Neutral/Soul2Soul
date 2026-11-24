@@ -453,3 +453,25 @@ describe('evm-update — reset and preview', () => {
     expect(readsOf('/hello-world/index.html')).toBe(0);
   });
 });
+
+describe('evm-update — a collection member job attests the bundle genesis', () => {
+  it('removes a former member page when the only job naming the bundle is a member job', async () => {
+    // A collection bundle whose own postType maps to no page emits no bundle
+    // job; its members carry the bundle genesis as sourceId. The removal of a
+    // dropped member names that genesis, and the incoming job set must know it.
+    const memberId = `${GENESIS}:one`;
+    mocks.incoming = incomingIdentity(memberId);
+
+    const result: Awaited<ReturnType<typeof main>> = await main({
+      ...baseInput,
+      jobs: [{ ...makeJob('/chapters/one/', memberId), sourceId: GENESIS }],
+      remove: [{ path: '/chapters/old', replacedBy: GENESIS }],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(hasTrace(result, 'removed: /chapters/old')).toBe(true);
+    expect(hasTrace(result, 'not in job set')).toBe(false);
+    expect(removalsOf('/chapters/old').length).toBeGreaterThan(0);
+  });
+});

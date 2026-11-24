@@ -22,6 +22,7 @@ const config = (
     { reference: 'chapter', file: 'chapter.hbs', path: '/chapters/{slug}/' },
     { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
   ],
+  localePaths: Record<string, string> = {},
 ): S2SPublicationConfig => ({
   assetsCid: '',
   contract: '',
@@ -29,7 +30,7 @@ const config = (
   name: 'test.soul2soul.eth',
   templateCid: '',
   mapping: { templateConfig: templates, ripples: [] },
-  localePaths: {},
+  localePaths,
 });
 
 const item = (
@@ -59,6 +60,18 @@ const bundle = (
   content: '',
   collection: { slug: 'genesis', items },
   ...overrides,
+});
+
+/**
+ * What `getOldBody` actually hands prep: the stored body bytes, parsed. No
+ * mediaType, no postType, no id — only the collection document and the page
+ * fields the author wrote into the body.
+ */
+const stored = (items: S2SCollectionItem[]): Partial<CollectionBundleFields> => ({
+  title: 'Genesis',
+  slug: 'genesis',
+  content: '',
+  collection: { slug: 'genesis', items },
 });
 
 describe('planCollectionJobs — a new bundle', () => {
@@ -115,6 +128,33 @@ describe('planCollectionJobs — removals', () => {
     expect(jobs.map((job) => job.path)).toEqual(['/chapters/new-slug/']);
     expect(remove).toEqual([{ path: '/chapters/old-slug/', replacedBy: GENESIS }]);
     expect(remove.map((entry) => entry.path)).not.toContain(jobs[0].path);
+  });
+
+  it('removes the page of a dropped member when the old body is the raw stored shape', () => {
+    // getOldBody parses the stored body bytes, so the old body has a collection
+    // document but no mediaType. The document's items are what mark it as a
+    // bundle; the item carries the postType that named its template.
+    const { jobs, remove } = planCollectionJobs({
+      config: config(),
+      body: bundle([item('a', 'a')]),
+      oldBody: stored([item('a', 'a'), item('b', 'b')]),
+    });
+
+    expect(jobs.map((job) => job.path)).toEqual(['/chapters/a/']);
+    expect(remove).toEqual([{ path: '/chapters/b/', replacedBy: GENESIS }]);
+  });
+
+  it('removes a dropped member at its own locale prefix', () => {
+    // The stored body has no locale of its own, and the shim does not supply
+    // one: the item the CLI wrote carries it, so a de member is removed from
+    // the de tree and not from the default (en) one.
+    const { remove } = planCollectionJobs({
+      config: config(undefined, { de: '/de' }),
+      body: bundle([]),
+      oldBody: stored([item('kapitel', 'kapitel', 'chapter', { locale: 'de' })]),
+    });
+
+    expect(remove).toEqual([{ path: '/de/chapters/kapitel/', replacedBy: GENESIS }]);
   });
 
   it('keeps the template the member rendered with, not the new bundle post type', () => {
@@ -196,6 +236,19 @@ describe('planCollectionJobs — removals are deduplicated', () => {
     });
 
     expect(jobs.map((job) => job.path)).toEqual(['/chapters/a/']);
+    expect(remove).toEqual([]);
+  });
+
+  it('never removes the page the bundle itself is writing', () => {
+    // The member that used to sit on the bundle's own page is gone; the bundle
+    // job writes that path, so deleting it would erase the bundle.
+    const { remove } = planCollectionJobs({
+      config: config(),
+      body: bundle([]),
+      oldBody: bundle([item('a', 'genesis')]),
+      bundlePath: '/chapters/genesis/',
+    });
+
     expect(remove).toEqual([]);
   });
 });

@@ -2,9 +2,10 @@
 // prep/collection-plan.ts — the member pages a collection bundle gains, and
 // the ones it loses, relative to the bundle version already stored.
 //
-// Pure: a publication config, the new decrypted body and the previous flat
-// body in; jobs and removals out. No chain read, no IPFS, no clock, so every
-// decision can be tested against fixtures.
+// Pure planner: no chain read, no IPFS, no clock, so every decision can be
+// tested against fixtures. It imports the render config module prep already
+// loads (getTaskConfig keys a body on its postType); nothing new reaches the
+// action bundle.
 //
 // A member is a page in its own right: it gets the same job a standalone post
 // gets, addressed by the bundle genesis plus the member's key. A member that is
@@ -68,13 +69,17 @@ const resolvePage = (
  * `body` is the new decrypted flat body; `oldBody` is the version already
  * stored, or null for a first publication. A body that is not a collection
  * container yields nothing — prep's own single job stands unchanged.
+ *
+ * `bundlePath` is the page the bundle's own job occupies, when one claims it.
+ * A member that moves onto that path must not remove the page being written.
  */
 export function planCollectionJobs(args: {
   config: S2SPublicationConfig;
   body: CollectionBundleFields;
-  oldBody: CollectionBundleFields | null;
+  oldBody: Partial<CollectionBundleFields> | null;
+  bundlePath?: string;
 }): { jobs: S2SJob[]; remove: { path: string; replacedBy?: string }[] } {
-  const { config, body, oldBody } = args;
+  const { config, body, oldBody, bundlePath } = args;
 
   if (!isCollectionContainer(body)) return { jobs: [], remove: [] };
 
@@ -101,14 +106,25 @@ export function planCollectionJobs(args: {
     nextPaths.set(member.collectionKey, page.path);
   }
 
-  // Removals are diffed against the stored bundle only. Its members inherit
-  // postType, locale and the rest from it, so the old page is resolved from a
-  // body built the same way the render built it the first time.
+  // Removals are diffed against the stored bundle only. getOldBody returns the
+  // stored body bytes, not a flat body: the collection document is there, the
+  // mediaType and page fields are not, so the document's items are what mark a
+  // former container. Each item the CLI writes carries its own postType and
+  // locale, so collectionMemberBody takes them from the item.
   const removals: { path: string; replacedBy?: string }[] = [];
-  if (oldBody && isCollectionContainer(oldBody)) {
-    const items = oldBody.collection?.items ?? [];
-    items.forEach((item, index) => {
-      const oldMember = collectionMemberBody(oldBody, item, index);
+  const storedItems = oldBody?.collection?.items;
+  if (Array.isArray(storedItems)) {
+    storedItems.forEach((item, index) => {
+      const oldMember = collectionMemberBody(
+        {
+          id: body.id,
+          author: '',
+          postType: item.postType ?? oldBody?.postType,
+          collection: oldBody?.collection,
+        },
+        item,
+        index,
+      );
       const oldPage = resolvePage(oldMember, config, config.localePaths);
       if (!oldPage) return;
 
@@ -119,8 +135,10 @@ export function planCollectionJobs(args: {
     });
   }
 
-  // One removal per path, and never a path a new job is about to occupy: a
-  // move that lands where another member already is must not delete that page.
+  // The bundle's own page is written by its job too, so it is never a removal
+  // target. Then: one removal per path, and never a path a new job is about to
+  // occupy — a move that lands where another page already is must not delete it.
+  if (bundlePath) jobPaths.add(bundlePath);
   const seen = new Set<string>();
   const remove = removals
     .filter((entry) => {

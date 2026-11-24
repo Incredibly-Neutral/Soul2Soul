@@ -119,14 +119,19 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
 
       const { templateConfig, rippleConfigs } = await getTaskConfig(config, body);
 
+      // The page the bundle itself occupies, when a template claims it. The
+      // collection plan needs it: a member that moves onto this path must not
+      // remove the page this job is about to write.
+      let bundlePath: string | undefined;
       if (templateConfig && templateConfig.file != null) {
+        bundlePath = createPath(body, templateConfig, config.localePaths);
         jobs.push({
           id: body.id,
           templateConfig,
           // The page this item will occupy, from the same createPath the
           // render action writes with. The orchestrator turns it into the
           // remove entry for a revoke, so the removal names a page that exists.
-          path: createPath(body, templateConfig, config.localePaths),
+          path: bundlePath,
           templateData: undefined,
           html: '',
         });
@@ -141,6 +146,7 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
           config: config as S2SPublicationConfig,
           body: body as CollectionBundleFields,
           oldBody: oldBody as CollectionBundleFields | null,
+          bundlePath,
         });
         jobs.push(...plan.jobs);
         for (const entry of plan.remove)
