@@ -16,8 +16,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
+  COLLECTION_MANIFEST_FILENAME,
+  COLLECTION_MEDIA_TYPE,
   authorAddress,
   buildSignedContentItem,
+  collectionMemberId,
   parseMarkdownNote,
   renderwithLitActions,
   runFilecoinLeg,
@@ -26,7 +29,12 @@ import {
   toPreviewLabel,
 } from '@s2s/soul2soul-shared';
 import { canPreview } from '@s2s/soul2soul-shared/gates';
-import type { ParsedNote, S2SContentBody, S2SManifest } from '@s2s/soul2soul-shared';
+import type {
+  ParsedNote,
+  S2SCollectionDocument,
+  S2SContentBody,
+  S2SManifest,
+} from '@s2s/soul2soul-shared';
 import type { PublicInputV2 } from '@s2s/soul2soul-shared';
 import { S2SPublicationModuleV0_1 } from '@s2s/publication-contracts';
 import type { Address } from 'viem';
@@ -45,6 +53,7 @@ import {
 } from '../lib/frontmatter';
 import { CliError, UsageError, ActionError, describeError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
+import { loadCollectionDocument } from './collection';
 import { requireSetting } from './config';
 import { buildEncryptFn, fetchStoredItem, storedBodyIsDecryptable } from './encrypt';
 import {
@@ -225,6 +234,7 @@ export interface NoteSigningInputs {
 export function noteSigningInputs(
   parsed: ParsedNote,
   options: { subdomain: string; creationDate: number; modifiedDate: number },
+  extra: { collection?: S2SCollectionDocument } = {},
 ): NoteSigningInputs {
   const custom = { ...parsed.custom };
   if (parsed.summary !== undefined) custom.summary = parsed.summary;
@@ -233,7 +243,7 @@ export function noteSigningInputs(
     pub: {
       specVersion: '2',
       postType: parsed.postType,
-      mediaType: 'text/markdown',
+      mediaType: extra.collection ? COLLECTION_MEDIA_TYPE : 'text/markdown',
       parent: String(parsed.parent),
       position: String(parsed.position),
       publication: options.subdomain,
@@ -248,7 +258,13 @@ export function noteSigningInputs(
       // builder writes nothing for it.
       label: parsed.label ?? undefined,
     },
-    body: { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
+    body: {
+      title: parsed.title,
+      slug: parsed.slug,
+      content: parsed.content,
+      custom,
+      ...(extra.collection ? { collection: extra.collection } : {}),
+    },
   };
 }
 
@@ -311,6 +327,13 @@ export async function authorWrite(
   // Shared's parser only knows the legacy one, so resolve both here and let the
   // one value drive the encryptor, the downgrade guard and the write-back.
   parsed.encryption = resolveEncryption(parsed.frontmatter);
+  // A folder is one signed manuscript: its manifest is the note, and its
+  // members travel in the body. Loaded before any chain or IPFS work, so a
+  // folder that cannot be read as a collection fails as a usage error.
+  const collection =
+    basename(notePath) === COLLECTION_MANIFEST_FILENAME
+      ? await loadCollectionDocument(notePath, parsed)
+      : undefined;
 
   // Resolve the encrypt function FIRST, before any chain/IPFS work: a note with
   // `encrypted: true` and no usable Lit key/PKP must fail closed with a usage
@@ -434,11 +457,15 @@ export async function authorWrite(
       `refusing to publish ${notePath}: frontmatter \`creation_date\` is ${JSON.stringify(declaredCreation)}, which is not a date. Fix it to \`YYYY-MM-DDTHH:mm:ss\` (UTC) or remove the key.`,
     );
   }
-  const { pub, body } = noteSigningInputs(parsed, {
-    subdomain,
-    creationDate,
-    modifiedDate: now,
-  });
+  const { pub, body } = noteSigningInputs(
+    parsed,
+    {
+      subdomain,
+      creationDate,
+      modifiedDate: now,
+    },
+    { collection },
+  );
   const signedItem = await buildSignedContentItem(pub, body, ctx.signer, encryptFn, author.address);
 
   const objectId = parsed.genesis ?? signedItem.objectId;
@@ -1242,6 +1269,40 @@ export async function revokeContent(
     throw new Error(`note ${notePath} has no genesis — nothing to revoke on-chain`);
   }
 
+  // A collection bundle removes its index and every member page in one
+  // re-render. The post-retract body cannot name them, so the folder is read
+  // first: a folder missing a member would leave that page live, which is
+  // worse than refusing. Never retract and then remove only the index.
+  let collection: S2SCollectionDocument | undefined;
+  if (basename(notePath) === COLLECTION_MANIFEST_FILENAME) {
+    try {
+      collection = await loadCollectionDocument(notePath, parsed);
+    } catch (err) {
+      throw new UsageError(
+        `refusing to revoke ${notePath}: ${err instanceof Error ? err.message : String(err)} — the folder must be intact to name every member page`,
+      );
+    }
+  }
+
+  // Every path this command will remove is named BEFORE the terminal retract:
+  // the bundle page plus one per member. A folder that cannot be read has
+  // already refused above, before any chain write. Building this after the
+  // retract could only fail on a note id that is already ended.
+  const revokeTargets = [
+    {
+      id: genesis,
+      slug: parsed.slug,
+      locale: parsed.locale,
+      postType: parsed.postType,
+    },
+    ...(collection?.items ?? []).map((item) => ({
+      id: collectionMemberId(genesis, item.key),
+      slug: item.slug,
+      locale: item.locale,
+      postType: item.postType,
+    })),
+  ];
+
   // `retract` is authorized as the genesis author, i.e. the author Safe.
   const author = await authorSafeState(ctx);
   warnOnAuthorMismatch(ctx, notePath, parsed.frontmatter.author, author.address);
@@ -1291,14 +1352,7 @@ export async function revokeContent(
       render: true,
       publish: true,
       offer: false,
-      revoke: [
-        {
-          id: genesis,
-          slug: parsed.slug,
-          locale: parsed.locale,
-          postType: parsed.postType,
-        },
-      ],
+      revoke: revokeTargets,
     },
     { noteEncrypted: parsed.encryption },
   );
