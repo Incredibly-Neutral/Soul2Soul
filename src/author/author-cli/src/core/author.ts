@@ -1257,6 +1257,33 @@ export interface RevokeResult {
  * genesis reverts `Ended()`. So this ends the note id: republishing it means a
  * new note, a new genesis. Revoking is stated as such in the log line.
  */
+/**
+ * The revoke targets for a bundle: the folder page first, then one page per
+ * member. The bundle's id is its genesis; a member's is the genesis plus the
+ * member key. Slug, locale and post type travel with each target because a
+ * retracted body no longer carries them.
+ */
+export function revokeTargetsFor(
+  genesis: string,
+  parsed: Pick<ParsedNote, 'slug' | 'locale' | 'postType'>,
+  collection?: S2SCollectionDocument,
+): { id: string; slug?: string; locale?: string; postType?: string }[] {
+  return [
+    {
+      id: genesis,
+      slug: parsed.slug,
+      locale: parsed.locale,
+      postType: parsed.postType,
+    },
+    ...(collection?.items ?? []).map((item) => ({
+      id: collectionMemberId(genesis, item.key),
+      slug: item.slug,
+      locale: item.locale,
+      postType: item.postType,
+    })),
+  ];
+}
+
 export async function revokeContent(
   ctx: CliContext,
   notePath: string,
@@ -1288,20 +1315,7 @@ export async function revokeContent(
   // the bundle page plus one per member. A folder that cannot be read has
   // already refused above, before any chain write. Building this after the
   // retract could only fail on a note id that is already ended.
-  const revokeTargets = [
-    {
-      id: genesis,
-      slug: parsed.slug,
-      locale: parsed.locale,
-      postType: parsed.postType,
-    },
-    ...(collection?.items ?? []).map((item) => ({
-      id: collectionMemberId(genesis, item.key),
-      slug: item.slug,
-      locale: item.locale,
-      postType: item.postType,
-    })),
-  ];
+  const revokeTargets = revokeTargetsFor(genesis, parsed, collection);
 
   // `retract` is authorized as the genesis author, i.e. the author Safe.
   const author = await authorSafeState(ctx);

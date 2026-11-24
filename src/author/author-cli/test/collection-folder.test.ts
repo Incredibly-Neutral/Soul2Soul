@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,7 +11,7 @@ import {
 } from '@s2s/soul2soul-shared';
 
 import { loadCollectionDocument } from '../src/core/collection';
-import { noteSigningInputs } from '../src/core/author';
+import { noteSigningInputs, revokeTargetsFor } from '../src/core/author';
 import { requireNotePath } from '../src/commands/helpers';
 import { UsageError } from '../src/lib/errors';
 
@@ -73,6 +73,10 @@ describe('loadCollectionDocument', () => {
         '',
       ].join('\n'),
     );
+    // Neither a non-markdown file nor a nested note is a member.
+    write('notes.txt', 'not a chapter');
+    mkdirSync(join(dir, 'sub'), { recursive: true });
+    writeFileSync(join(dir, 'sub', 'x.md'), '# Nested', 'utf8');
 
     const document = await loadManifest();
 
@@ -107,6 +111,22 @@ describe('loadCollectionDocument', () => {
     expect(message).toContain('duplicate collection key "same"');
     expect(message).toContain('x.md');
     expect(message).toContain('y.md');
+  });
+
+  it('names every colliding file, not just the first two', async () => {
+    write('a.md', ['---', 'slug: same', '---', '# A', ''].join('\n'));
+    write('b.md', ['---', 'slug: same', '---', '# B', ''].join('\n'));
+    write('c.md', ['---', 'slug: same', '---', '# C', ''].join('\n'));
+
+    let caught: unknown;
+    try {
+      await loadManifest();
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UsageError);
+    const message = caught instanceof Error ? caught.message : '';
+    expect(message).toContain('a.md, b.md and c.md');
   });
 
   it('inherits language and parent from raw frontmatter, not the parser default', async () => {
@@ -196,7 +216,46 @@ describe('noteSigningInputs collection', () => {
   });
 });
 
+describe('revokeTargetsFor', () => {
+  it('names the bundle first, then one target per member', () => {
+    const targets = revokeTargetsFor(
+      '0xgenesis',
+      { slug: 'book', locale: 'en', postType: 'chapter' },
+      {
+        slug: 'book',
+        items: [
+          {
+            key: 'first',
+            title: 'First',
+            slug: 'first',
+            content: '',
+            locale: 'de',
+            postType: 'appendix',
+          },
+        ],
+      },
+    );
+
+    expect(targets).toEqual([
+      { id: '0xgenesis', slug: 'book', locale: 'en', postType: 'chapter' },
+      { id: '0xgenesis:first', slug: 'first', locale: 'de', postType: 'appendix' },
+    ]);
+  });
+});
+
 describe('requireNotePath', () => {
+  it('returns a regular note path unchanged', () => {
+    const note = write('note.md', '# Note');
+    expect(requireNotePath({ flags: {}, positionals: [note] })).toBe(note);
+  });
+
+  it('refuses a path that does not exist', () => {
+    const missing = join(dir, 'missing.md');
+    expect(() => requireNotePath({ flags: {}, positionals: [missing] })).toThrow(
+      `note file not found: ${missing}`,
+    );
+  });
+
   it('resolves a folder to its collection manifest', () => {
     writeFileSync(join(dir, COLLECTION_MANIFEST_FILENAME), MANIFEST, 'utf8');
     expect(requireNotePath({ flags: {}, positionals: [dir] })).toBe(

@@ -61,13 +61,8 @@ export async function loadCollectionDocument(
     const key = duplicateKey(err);
     if (key === undefined) throw err;
     const names = filesBySlug.get(key) ?? [];
-    const [first, second] = names;
-    const named =
-      first !== undefined && second !== undefined
-        ? `${first} and ${second}`
-        : names.join(' and ') || '(unknown files)';
     throw new UsageError(
-      `duplicate collection key "${key}": ${named} resolve to the same page name — rename one of them`,
+      `duplicate collection key "${key}": ${listNames(names)} resolve to the same page name — rename one of them`,
     );
   }
 
@@ -82,6 +77,16 @@ export async function loadCollectionDocument(
   }
 
   return document;
+}
+
+/** Every colliding file, as `a.md, b.md and c.md`. */
+function listNames(names: readonly string[]): string {
+  if (names.length === 0) return '(unknown files)';
+  return names.reduce(
+    (text, name, i) =>
+      i === 0 ? name : i === names.length - 1 ? `${text} and ${name}` : `${text}, ${name}`,
+    '',
+  );
 }
 
 /** The key out of `duplicate collection key "<slug>"`, or undefined for any other error. */
