@@ -88,7 +88,7 @@ const chainReady = !!(MAINNET_RPC_URL && BASE_RPC_URL && PUBLICATION && TEST_PRI
 // Helpers
 // ============================================================================
 
-/** Minimal lit mock — never called in preview mode (runAction uses fetch only). */
+/** Minimal lit mock — runAction is mocked here, so it is never called. */
 const mockLit = {} as any;
 
 /** Generate a valid signature by signing "lit actions auth" with TEST_PRIVATE_KEY. */
@@ -101,7 +101,7 @@ async function makeSignature(): Promise<string> {
 }
 
 async function callAction(cid: string, inputs: Record<string, unknown>): Promise<unknown> {
-  return runAction(true, mockLit, cid, inputs);
+  return runAction('runner', mockLit, cid, inputs);
 }
 
 /**
@@ -420,7 +420,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
   it('returns immediately on ok (single runAction call, no retry)', async () => {
     vi.mocked(runAction).mockResolvedValue(okResult as any);
 
-    const result = await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    const result = await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
 
     expect(result).toBe(okResult);
     expect(runAction).toHaveBeenCalledTimes(1);
@@ -432,7 +432,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -448,7 +448,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -464,7 +464,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -478,7 +478,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
     expect(thrown.failure).toBe(fail);
   });
 
-  it('preview mode: always-failing runAction makes exactly 1 call then throws', async () => {
+  it('dev mode: always-failing runAction makes exactly 1 call then throws', async () => {
     vi.mocked(runAction).mockResolvedValue({
       ok: false,
       action: 'render',
@@ -486,7 +486,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
       trace: [],
     } as any);
 
-    await expect(runRenderActionWithRetry(true, mockLit, cid, { id: 'j1' }, {})).rejects.toThrow();
+    await expect(runRenderActionWithRetry('dev', mockLit, cid, { id: 'j1' }, {})).rejects.toThrow();
 
     expect(runAction).toHaveBeenCalledTimes(1);
   });
@@ -501,7 +501,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -524,7 +524,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
     vi.mocked(runAction).mockResolvedValue(fail as any);
 
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch {
       /* single attempt throws the failure */
     }
@@ -537,7 +537,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -559,7 +559,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -600,7 +600,7 @@ describe('runRenderActionWithRetry — empty-string not swallowed', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -627,7 +627,7 @@ describe('runRenderActionWithRetry — empty-string not swallowed', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -644,7 +644,7 @@ describe('runRenderActionWithRetry — empty-string not swallowed', () => {
 
     let thrown: any;
     try {
-      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+      await runRenderActionWithRetry('publish', mockLit, cid, { id: 'j1' }, {});
     } catch (e) {
       thrown = e;
     }
@@ -757,7 +757,7 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
     );
 
     const res: any = await renderwithLitActions(
-      true, // preview
+      'dev', // mode
       mockLit,
       '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
       'usage',
@@ -788,7 +788,7 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
     // must NOT silently reach the update action.
     await expect(
       renderwithLitActions(
-        true,
+        'dev',
         mockLit,
         '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
         'usage',
@@ -828,7 +828,7 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
     );
 
     const res: any = await renderwithLitActions(
-      true,
+      'dev',
       mockLit,
       '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
       'usage',
@@ -875,14 +875,14 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
   const SIGNATURE =
     '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
 
-  // Minimal lit mock — never called in preview mode (runAction uses fetch only).
+  // Minimal lit mock — runAction is mocked here, so it is never called.
   const litStub = {} as LitService;
 
   // Non-empty contentIds so this is NOT a reset-only run: prep + render run,
   // then the guard must fire before the update stage.
   const call = () =>
     renderwithLitActions(
-      true, // preview
+      'dev', // mode
       litStub,
       SIGNATURE,
       'usage',
@@ -914,7 +914,7 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
         });
       }
       if (cid === 'cid-render') {
-        // non-ok render envelope → runRenderActionWithRetry exhausts (preview = 1
+        // non-ok render envelope → runRenderActionWithRetry exhausts (dev = 1
         // attempt) and throws, so the render job is recorded as failed.
         return Promise.resolve({
           ok: false,
@@ -939,7 +939,7 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
     expect((err as Error).message).toContain('render boom');
     expect((err as Error).message).not.toContain('jobs must have at least one item');
     expect((err as Error).message).not.toContain('EvmUpdate action input validation failed');
-    // Update action's CID was never POSTed — only prep + 1 render (preview).
+    // Update action's CID was never POSTed — only prep + 1 render (dev).
     expect(runAction).toHaveBeenCalledTimes(2);
     const postedCids = vi.mocked(runAction).mock.calls.map((c) => c[2]);
     expect(postedCids).not.toContain(updateCid);
@@ -1042,7 +1042,7 @@ describe('renderwithLitActions — the revoke target reaches prep', () => {
     );
 
     const res: any = await renderwithLitActions(
-      true,
+      'dev',
       {} as any,
       '0x' + '00'.repeat(64),
       'usage',
@@ -1063,5 +1063,166 @@ describe('renderwithLitActions — the revoke target reaches prep', () => {
     expect(prepInputs.revoke).toEqual(revoke);
     expect(updateInputs.remove).toEqual([{ path: '/posts/test2/' }]);
     expect(res.remove).toEqual([{ path: '/posts/test2/' }]);
+  });
+});
+
+// ============================================================================
+// Stage transport by render mode.
+//
+// One mode per run, and each stage has its own transport:
+//   prep    — runner for every mode
+//   render  — runner for dev, Lit for preview and publish
+//   update  — runner for dev and preview, Lit for publish
+//
+// The action inputs keep the `preview` boolean (true for dev and preview) for
+// the deployed actions, and carry `unsigned` (true for dev and preview) read by
+// the render action released in 0.1.4. runAction is the vi.mocked spy from the top
+// of this file, so the transport is read from its first argument.
+// ============================================================================
+
+describe('renderwithLitActions — stage transport by render mode', () => {
+  const protocolInfo = {
+    gateway: 'https://ipfs.transport-union.dev',
+    litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },
+    capabilities: { unsignedRender: true },
+  } as any;
+  const SIGNATURE = '0x' + '00'.repeat(64);
+  const renderedJob = { ...sampleJob, html: 'QmRendered', path: sampleJob.path };
+
+  type StageCall = { cid: string; transport: string; inputs: any };
+
+  async function run(mode: 'dev' | 'preview' | 'publish'): Promise<StageCall[]> {
+    const calls: StageCall[] = [];
+    vi.mocked(runAction).mockImplementation(
+      async (transport: any, _lit: any, cid: any, inputs: any) => {
+        calls.push({ cid, transport, inputs });
+        if (cid === 'cid-prep') {
+          return { ok: true, action: 'prep', data: { jobs: [sampleJob] }, trace: [] };
+        }
+        if (cid === 'cid-render') {
+          return { ok: true, action: 'render', data: { job: renderedJob, timestamp: '1' }, trace: [] };
+        }
+        if (cid === 'cid-update') {
+          return { ok: true, action: 'evm-update', data: { cid: 'QmRoot' }, trace: [] };
+        }
+        throw new Error('unexpected cid ' + cid);
+      },
+    );
+
+    const res: any = await renderwithLitActions(
+      mode,
+      mockLit,
+      SIGNATURE,
+      'usage',
+      protocolInfo,
+      null,
+      '0x0000...0001',
+      'test.soul2soul.eth',
+      ['0xcontent-id-1'],
+      undefined,
+      sampleEndpoints.rpcs,
+    );
+    expect(res.success).toBe(true);
+    return calls;
+  }
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  afterAll(() => {
+    vi.mocked(runAction).mockRestore();
+  });
+
+  it('dev: prep, render and update all run on the runner, unsigned true', async () => {
+    const calls = await run('dev');
+    expect(calls.map((c) => [c.cid, c.transport])).toEqual([
+      ['cid-prep', 'runner'],
+      ['cid-render', 'runner'],
+      ['cid-update', 'runner'],
+    ]);
+    // dev is unsigned like preview: the page keeps its colophon, loses the
+    // signature, and nothing reaches the ledger.
+    const render = calls.find((c) => c.cid === 'cid-render')!;
+    expect(render.inputs.preview).toBe(true);
+    expect(render.inputs.unsigned).toBe(true);
+  });
+
+  it('preview: render runs on Lit, prep and update on the runner, unsigned true', async () => {
+    const calls = await run('preview');
+    expect(calls.map((c) => [c.cid, c.transport])).toEqual([
+      ['cid-prep', 'runner'],
+      ['cid-render', 'lit'],
+      ['cid-update', 'runner'],
+    ]);
+    const render = calls.find((c) => c.cid === 'cid-render')!;
+    expect(render.inputs.preview).toBe(true);
+    expect(render.inputs.unsigned).toBe(true);
+  });
+
+  it('publish: render and update run on Lit, unsigned false', async () => {
+    const calls = await run('publish');
+    expect(calls.map((c) => [c.cid, c.transport])).toEqual([
+      ['cid-prep', 'runner'],
+      ['cid-render', 'lit'],
+      ['cid-update', 'lit'],
+    ]);
+    // publish signs: unsigned is false (or absent for a caller that predates it).
+    const render = calls.find((c) => c.cid === 'cid-render')!;
+    expect(render.inputs.preview).toBe(false);
+    expect(render.inputs.unsigned ?? false).toBe(false);
+  });
+});
+
+// ============================================================================
+// Preview needs an unsigned-capable render action.
+//
+// A render action pinned before the `unsigned` input ignores it and signs the
+// page. The manifest advertises capabilities.unsignedRender once the render
+// action reads the input; until then a preview must refuse to run rather than
+// dispatch a Lit render that would sign.
+// ============================================================================
+
+describe('renderwithLitActions — preview requires capabilities.unsignedRender', () => {
+  const protocolInfo = {
+    gateway: 'https://ipfs.transport-union.dev',
+    litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },
+    // No capabilities: the document predates the unsigned input.
+  } as any;
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  afterAll(() => {
+    vi.mocked(runAction).mockRestore();
+  });
+
+  it('refuses preview when the manifest does not advertise an unsigned render', async () => {
+    let thrown: any;
+    try {
+      await renderwithLitActions(
+        'preview',
+        mockLit,
+        '0x' + '00'.repeat(64),
+        'usage',
+        protocolInfo,
+        null,
+        '0x0000...0001',
+        'test.soul2soul.eth',
+        ['0xcontent-id-1'],
+        undefined,
+        sampleEndpoints.rpcs,
+      );
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toContain('unsignedRender');
+    expect(thrown.message).toContain('predates the `unsigned` input');
+    expect(thrown.message).toContain('Release the render action');
+    // Nothing was dispatched: no prep, no render, no update.
+    expect(runAction).not.toHaveBeenCalled();
   });
 });

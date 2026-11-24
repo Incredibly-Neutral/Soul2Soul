@@ -12,7 +12,7 @@ import {
   validateSingleInput,
   validateSingleOutput,
 } from './action-io';
-import { S2SJob } from './types';
+import { S2SJob, RenderMode } from './types';
 import type { RevokeTarget } from '../lit/actions/types';
 import { runAction } from './helpers';
 
@@ -63,20 +63,21 @@ export function isDeterministicBudgetError(msg: string): boolean {
  * the orchestrator (`renderwithLitActions`) is the only other consumer.
  */
 export async function runRenderActionWithRetry(
-  preview: boolean,
+  mode: RenderMode,
   lit: LitService,
   cid: string,
   job: any,
   inputs: Record<string, unknown>,
   litUsageKey?: string,
 ): Promise<any> {
-  const attempts = preview ? 1 : RENDER_RETRY_ATTEMPTS;
+  const attempts = mode === 'publish' ? RENDER_RETRY_ATTEMPTS : 1;
+  const transport = mode === 'dev' ? 'runner' : 'lit';
   let lastFailure: any;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     if (attempt > 1) await sleepMs(RENDER_RETRY_BACKOFF_MS);
     try {
-      const actionResult: any = await runAction(preview, lit, cid, inputs, litUsageKey, 'render');
+      const actionResult: any = await runAction(transport, lit, cid, inputs, litUsageKey, 'render');
       // Envelope success (render action returns { ok: ... }). A non-ok result
       // can be a transient transport failure surfaced by the action, so on the
       // live path we re-run the (read-only) render action rather than giving up.
@@ -150,7 +151,7 @@ export async function runRenderActionWithRetry(
 // ===========================================================================
 
 export const renderwithLitActions = async (
-  preview: boolean,
+  mode: RenderMode,
   lit: LitService,
   signature: string,
   litUsageKey: string,
@@ -171,6 +172,27 @@ export const renderwithLitActions = async (
 ) => {
   let jobs: S2SJob[] = [];
   let cid: string | null = null;
+
+  // The action inputs still read one boolean: `preview` is true for dev and
+  // preview, false for publish. Deployed action CIDs read it, so it keeps its
+  // meaning even where the stage transport changed. `unsigned` is the new
+  // input the render action reads to decide whether to sign.
+  const preview = mode !== 'publish';
+  const unsigned = mode !== 'publish';
+
+  // Preview renders on Lit and asks the render action to run unsigned. A
+  // render action that predates the `unsigned` input ignores it and signs the
+  // page, so refuse the run unless the manifest advertises that its pinned
+  // action reads it. This is the only way to keep a decrypting preview off a
+  // deployment that would sign.
+  if (mode === 'preview' && protocolInfo.capabilities?.unsignedRender !== true) {
+    throw new Error(
+      "preview requires an unsigned render: this publication's manifest does not " +
+        'advertise capabilities.unsignedRender, so its pinned render action predates ' +
+        'the `unsigned` input and a Lit render would sign the page. ' +
+        'Release the render action that reads `unsigned` and pin it to this publication.',
+    );
+  }
 
   // A reset-only run (reset:true with zero contentIds) skips prep + render —
   // prep rejects empty contentIds (prep/main.ts) — and drives the update action
@@ -213,7 +235,7 @@ export const renderwithLitActions = async (
       revoke: revokeIds,
     });
     const prepAction = await runAction(
-      true,
+      'runner',
       lit,
       protocolInfo.litActions.prep,
       prepInputs,
@@ -260,6 +282,7 @@ export const renderwithLitActions = async (
             publication,
             job,
             preview,
+            unsigned,
             maintainCache: index === jobs.length - 1,
             // The id(s the caller rendered — the render action scopes its on-chain
             // hasAgreement revoke check to these ids ONLY (a revoke is always about
@@ -273,7 +296,7 @@ export const renderwithLitActions = async (
             endpoints,
           });
           const actionResult = await runRenderActionWithRetry(
-            preview,
+            mode,
             lit,
             protocolInfo.litActions.render,
             job,
@@ -399,7 +422,7 @@ export const renderwithLitActions = async (
   });
 
   const evmAction: any = await runAction(
-    preview,
+    mode === 'publish' ? 'lit' : 'runner',
     lit,
     protocolInfo.litActions.update,
     evmInputs,
@@ -439,7 +462,7 @@ export const renderwithLitActions = async (
         endpoints,
       });
       maintainCacheResult = await runAction(
-        preview,
+        'lit',
         lit,
         protocolInfo.litActions.maintainCache,
         maintainInputs,

@@ -57,17 +57,18 @@ const describeMissingResponse = (
 };
 
 // ===========================================================================
-// runAction — single source of truth for dev/prod transport
+// runAction — single source of truth for stage transport
 // ===========================================================================
 
 /**
- * Executes a Lit Action on either the Bun runner (preview) or Lit nodes
- * (production). Returns ActionBarResult<T> uniformally.
+ * Executes a Lit Action on either the Bun runner or Lit nodes. Which transport
+ * a stage uses is the caller's decision (see RenderMode in ./types); this
+ * function only carries it out. Returns ActionBarResult<T> uniformally.
  */
 
 
 export async function runAction(
-  preview: boolean,
+  transport: 'runner' | 'lit',
   lit: LitService,
   cid: string,
   inputs: Record<string, unknown>,
@@ -76,7 +77,7 @@ export async function runAction(
   label?: string,
 ): Promise<unknown> {
 
-  if (preview) {
+  if (transport === 'runner') {
     const runnerUrl = process.env.S2S_RUNNER_URL || 'https://run.transport-union.dev/run';
     const r = await fetch(runnerUrl, {
       method: 'POST',

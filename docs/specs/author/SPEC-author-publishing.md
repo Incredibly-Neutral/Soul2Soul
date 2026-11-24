@@ -177,8 +177,9 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   SPEC-publication-agreements for the gate).
 - **Publication creation:** integration (chain fork + Lens testnet) — assert L1==L2 Safe address,
   both modules enabled + discoverable by NAME, feed created, records set, temp signer removed.
-- `renderCalls`: drive `renderwithLitActions` through the Bun runner with fixtures (same path as
-  preview) — the sequence test from SPEC-protocol-actions.
+- `renderCalls`: drive `renderwithLitActions` in `dev` mode through the Bun runner with fixtures
+  (the free path; the author host's `preview` command passes `dev` internally) — the sequence test
+  from SPEC-protocol-actions.
 
 ## Test coverage status (2026-10-12)
 

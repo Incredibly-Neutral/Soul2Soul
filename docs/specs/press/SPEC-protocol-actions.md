@@ -30,7 +30,7 @@ Does **not** own: authoring/encrypting content (neutralpress), publication/Safe/
 enclave + on-chain groups — this code only _runs inside_ that).
 
 Runtime: each action is a self-contained `main({...inputs})` function bundled to one file, fetched
-by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals: `ethers@5`,
+by CID, executed on Lit nodes or on the Bun runner by the render mode. Globals: `ethers@5`,
 `Lit.Actions.*` (see `action_globals.ts`). **No Node built-ins** beyond the shim (INV-7).
 
 ---
@@ -40,7 +40,7 @@ by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals
 | Path                       | Role                                                                                                                                                              | State                                                                              |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `prep/main.ts`             | Stage 1 — build `jobs[]` from contentIds (cheap, no signing)                                                                                                      | live                                                                               |
-| `render/main.ts`           | Stage 2 — per-job: gate → decrypt → render → sign → upload HTML                                                                                                   | live                                                                               |
+| `render/main.ts`           | Stage 2 — per-job: gate → decrypt → render → colophon (signed on publish, no `proofValue` when `unsigned`) → upload HTML                                                                          | live                                                                               |
 | `update/main.ts`           | Stage 3 (merged) — assemble MFS tree, **remove stale paths**, pin, write root                                                                                     | live                                                                               |
 | `cbor/`                    | old root-builder                                                                                                                                                  | **gone** — merged into `update` (GAP-5 ✅); no longer in the group's permitted set |
 | `renderer/`                | Handlebars render (`renderHTML`)                                                                                                                                  | live                                                                               |
@@ -109,13 +109,13 @@ Bundles stay zod-free (INV-7) — the action's own guard is `requireFields` (pre
 `type _Assert = <A>Input extends <A>ActionInput ? true : never`. This sentinel now resolves to `true`
 for all three actions — the `S2SJob.html` mismatch was resolved (optional in both interface and schema).
 
-**Dispatch — `preview` chooses transport, nothing else (SPEC-00 §3.1).** One helper is the only place
-`preview` appears; everything after is uniform (validate-in → dispatch → check `ok` → validate-out →
-consume `data`/`trace`), once per stage, never per branch:
+**Dispatch — the render mode chooses each stage's transport (SPEC-00 §3).** `runAction` is the only
+place a transport is named; everything after is uniform (validate-in → dispatch → check `ok` →
+validate-out → consume `data`/`trace`), once per stage, never per branch:
 
 ```ts
-async function runAction<T>(preview, lit, cid, inputs, litUsageKey): Promise<ActionResult<T>> {
-  if (preview) {
+async function runAction<T>(transport: 'runner' | 'lit', lit, cid, inputs, litUsageKey): Promise<ActionResult<T>> {
+  if (transport === 'runner') {
     const w = await fetch('https://run.transport-union.dev/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -129,12 +129,26 @@ async function runAction<T>(preview, lit, cid, inputs, litUsageKey): Promise<Act
 }
 ```
 
+`renderwithLitActions` takes a `RenderMode` (`'dev' | 'preview' | 'publish'`) and routes the three
+stages: prep is runner in every mode; render is runner in `dev`, Lit in `preview` and `publish`;
+update is runner in `dev` and `preview`, Lit in `publish`. `maintain-cache` runs only on publish, on
+Lit. Every mode makes a single attempt, publish included: `RENDER_RETRY_ATTEMPTS` is 1 by operator
+directive (2026-10), because each retry re-fires the Lit action and re-drains a fresh session's
+50-request budget. Fail fast; the orchestrator marks the job failed.
+
 **Two error levels, verified:** a thrown action error returns `success:true, response:{ok:false}`, so
 runner `success:false` means **transport/crash only**, action `ok:false` means **logic failure**.
 The runner wrapper exists on the Bun path only; `runAction` absorbs it so callers see one shape.
-**prep is runner-only** (no signing → never on Lit, dev _and_ prod); `single`/`merged` use
-`runAction(preview)`. A separate prod branch that returns `success:true` on `ok:false` is the bug this
-structure forbids.
+**prep is runner-only** (no signing → never on Lit, in any mode). A separate prod branch that returns
+`success:true` on `ok:false` is the bug this structure forbids.
+
+**The two boolean inputs.** The per-action inputs keep `preview` (true for `dev` and `preview`, false
+for `publish`) because the deployed actions read it: render uses it in the cache-refresh gate
+(`shouldWriteBackCache`), update uses it to skip the on-chain write. The render action released in
+0.1.4 also reads `unsigned`
+(true for `dev` and `preview`); absent or false keeps the signing attempt. A pinned render action
+that predates `unsigned` would ignore it on Lit and sign the page, so `renderwithLitActions` refuses
+`preview` unless the manifest advertises `capabilities.unsignedRender`, before dispatching anything.
 
 ## Action contracts (= test fixtures)
 
@@ -193,7 +207,7 @@ location. The `remove` array flows through `renderwithLitActions` unchanged into
 
 ---
 
-### A2 — `single` `main({ job, signature, authorSafeAddress, configCid, publication })`
+### A2 — `single` `main({ job, signature, authorSafeAddress, configCid, publication, preview, unsigned })`
 
 **Consumes**
 
@@ -204,6 +218,7 @@ location. The `remove` array flows through `renderwithLitActions` unchanged into
 | `authorSafeAddress` | `address`                                      | caller      |                                               |
 | `configCid`         | `string?`                                      | caller      |                                               |
 | `publication`       | ENS name                                       | caller      |                                               |
+| `unsigned`          | `boolean?`                                     | caller      | true for `dev` and `preview`; skips only the PKP key read inside `addAndSignMetadata`, so the colophon is embedded with its proof options and no `proofValue`. Absent/false keeps the signing attempt. Read by the render action released in 0.1.4; older actions ignore it. |
 
 **Produces** `{ success, timestamp, job, html, logz, errors? }` where `job.html` = CID of the
 uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt/permission failed.
@@ -221,12 +236,13 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
 6. `initTemplateData(...)` → decrypts body if `body.encryption` (gated `canRead`: the publication's
    admission, then ownership of the author Safe at the append block, or live ownership of the
    reader Safe it named); sets `revoked`
-7. if not revoked: `fetchCollections` → per-item `decrypt` (gated) → `renderHTML` → `addAndSignMetadata` (PKP sign, INV-5) → `uploadFile` → CID
+7. if not revoked: `fetchCollections` → per-item `decrypt` (gated) → `renderHTML` → `addAndSignMetadata`
+   (the colophon; PKP sign unless `unsigned`, INV-5) → `uploadFile` → CID
 8. else: `job.revoked = true`, empty html/path
 
 **Network/chain:** ETHEREUM+BASE reads (modules, config, gates), Lens testnet (body/collections),
-IPFS add/cat, **PKP** for `Lit.Actions.Decrypt` and the metadata signature. **Runs on Lit (prod) /
-Bun (preview, unsigned).**
+IPFS add/cat, **PKP** for `Lit.Actions.Decrypt` and the metadata signature. **Runs on Lit for
+`preview` and `publish`, on the Bun runner for `dev` (unsigned).**
 
 **Invariants:** INV-1, 5, 7, 9, and the gates (`canRead` = the publication's own
 `canRead(genesis, safe)` **AND** ownership of the reader it admitted, as either the genesis author
@@ -238,10 +254,7 @@ owner-history module on the Safe is refused with that module named. The other ad
 drafts module, so their half is `isOwner(readerSafe, signer)`, read only after the author half
 refuses, and a Safe the verdict named as the genesis author never falls back to it. `genesis =
 toBytes32Id(contentId)` — `toBytes32Id` lives in `@s2s/soul2soul-shared` and is imported at the top of
-`gates.ts`. **Gotchas:** GAP-1 (provenance is now built from real signed data in `render/main.ts`, not literals — only the `S2SContentInfo` type-rename tail remains; see the A3 trust TODO for the planned genesis-as-explicit-signed-field addition); the `assets_gateway` shape mismatch (see Gotchas); **GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, but this is moot by design:
-preview content is mock and never encrypted, so `decrypt.ts` is never called on that path.
-Encrypted-content editorial review runs through a separate, real Lit decrypt action instead
-(SPEC-00 OPEN-TASK-4/GAP-13).
+`gates.ts`. **Gotchas:** GAP-1 (provenance is now built from real signed data in `render/main.ts`, not literals — only the `S2SContentInfo` type-rename tail remains; see the A3 trust TODO for the planned genesis-as-explicit-signed-field addition); the `assets_gateway` shape mismatch (see Gotchas); **GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, so a `dev` render cannot open an encrypted body and the app does not offer it for one. A `preview` render runs on Lit for exactly that reason and passes `unsigned: true`, so it decrypts without signing. Encrypted-content editorial review also runs through a separate, real Lit decrypt action (SPEC-00 OPEN-TASK-4/GAP-13).
 
 ---
 
@@ -255,7 +268,7 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 | `authorSafeAddress` | `address`                                  | caller                          |                                                                                                                                                                                   |
 | `publication`       | ENS name                                   | caller                          |                                                                                                                                                                                   |
 | `jobs`              | `S2SJob[]`                                 | single outputs (`renderedJobs`) | each has `path` + `html` (CID)                                                                                                                                                    |
-| `preview`           | `boolean`                                  | caller                          | true ⇒ skip on-chain write                                                                                                                                                        |
+| `preview`           | `boolean`                                  | caller                          | true for `dev` and `preview` ⇒ skip the on-chain write; false for `publish`                                                                                                                                                        |
 | `remove`            | `{ path: string; replacedBy?: string }[]?` | caller (orchestrator)           | MFS paths to delete — slug **renames** (`replacedBy` = superseding job genesis, validated against `jobs`) or **revocations** (no `replacedBy`). See Sequence + trust model below. |
 
 **Produces** `{ success, cid?, response?, logz }` — `cid` = new site root.
@@ -285,7 +298,8 @@ still has a deal in force stays, and a caller nobody trusts can cause the remova
 pays for.
 
 **Network/chain:** Kubo MFS/pin on `ipfs.transport-union.dev`; BASE read (`getText`) + BASE write
-(`setText`, PKP-signed). **Runs on Lit (prod) / Bun (preview, no write).**
+(`setText`, PKP-signed). **Runs on Lit for `publish`; on the Bun runner for `dev` and `preview`
+(`preview=true`, no write).**
 
 **Invariants:** INV-1, 4, 6, 8, 9, 10, 11. **Gotchas:** Kubo `files/cp` does not overwrite — code
 `rm`s first; CID is CIDv0 (INV-6 / OPEN-TASK-1). **Tree-mutation integrity gate implemented 2026-08-07** — see §A3 Decision Tree below.
@@ -339,8 +353,8 @@ input.jobs[] →  verifyProvenance(htmlCid, id, pkp, gateway)
                     └─ all pass ──▶ cp (add to tree)
                       └─ any fail ──▶ throw (reject entire update)
 
-                                          PREVIEW PATH (Bun shim, no getPrivateKey):
-                                          preview=true → skip verify entirely → cp anyway
+                                          NON-PUBLISHING PATH (runner, no getPrivateKey):
+                                          preview=true (dev, preview) → skip verify entirely → cp anyway
 
                                           SLUG OVERWRITE check (before rm+cp):
                                           if existing entry at destPath and !preview:
@@ -430,9 +444,13 @@ trusts it. If copy loop throws, remove loop never runs.
   passes. 1+2 together = "PKP signed _this_ HTML claiming _this_ genesis."
 - **`canonicalize` must be identical on both sides (GAP-2).** Top-level key sort, current quirk.
   Co-evolve or share the function; a one-sided GAP-2 "fix" silently breaks every sig.
-- **Preview is unsigned by design (INV-7/GAP-6).** Bun shim's `getPrivateKey` throws → `proof` has
-  no `proofValue`. So the verify gate is `if (!preview)`: enforce only on the Lit path. Bonus:
-  preview HTML can never enter the prod tree (OPEN-TASK-2's flip side).
+- **A non-publishing tree is unsigned by design (INV-7/GAP-6).** The render action skips only
+  the PKP key read when `unsigned` is true, so a page from `dev` or `preview` carries the full
+  colophon with a proof that has no `proofValue`; a `dev` render through an older pinned action
+  instead lets the shim's `getPrivateKey` throw, and the catch emits the same proof options. The
+  update action therefore enforces the verify gate only on the Lit/publish path (`if (!preview)`),
+  and the runner path copies pages unverified. Bonus: preview HTML can never enter the prod tree
+  (OPEN-TASK-2's flip side).
 - **Copy loop succeeds before remove loop runs.** If any job fails verification the entire update
   rejects, so `jobGenesisSet` always contains verified HTML. The rename guard
   `jobGenesisSet.has(replacedBy)` transitively proves the target is verified.
@@ -454,8 +472,8 @@ trusts it. If copy loop throws, remove loop never runs.
   the copy loop reads the existing HTML's JSON-LD, extracts its genesis, and calls `hasAgreement`
   on-chain. If a deal exists **and** the incoming genesis differs, the update throws. This
   prevents an author from overwriting deal-protected content with their own content. Same-genesis
-  re-renders are exempt (the page just updated, deal unaffected). Preview (`!preview` guard)
-  skips this check.
+  re-renders are exempt (the page just updated, deal unaffected). A non-publishing run
+  (`!preview`: `dev`, `preview`) skips this check.
 
 ### What this does NOT need
 
@@ -770,15 +788,16 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
 | Seam / invariant                                                               | Test file                                | Status                | Note                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------------------------------------------ | ---------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | --------------------------------------------------------- | ------------------------- | --------- | --------------------------------------------------------------------------------------- |
 | `ActionResult` envelope (ok/action/trace; fatal-vs-non-fatal; `requireFields`) | `shared/src/rendering/action-io.test.ts` | ✅                    | shape-only, Lens-era fixtures but value-agnostic                                                                                                                                                                                                                                                                                                                                                                  |
-| preview `prep→single→update` sequence (Bun runner, no gates)                   | `shared/src/rendering/sequence.test.ts`  | ⚠ **stale + blocked** | (1) hardcodes Lens-era `SINGLE_POST` (decimal post id) but `prep` now calls `fetchById(genesis)`→`getLatest(bytes32)` — a decimal id breaks ABI encoding; (2) ignores the `TEST_CONTENT_IDS` env var `.env` already provides; (3) `MAINNET_RPC_URL`/`BASE_RPC_URL` absent from `.env` → `chainReady=false` → live tests **silently skip**. Fix: read `TEST_CONTENT_IDS`, set RPC env, use a real bytes32 genesis. |
-| preview sequence shape contract (prep→single input handoff)                    | `sequence.test.ts` “seam contract”       | ⚠ stale               | inherits the same `SINGLE_POST` fixture                                                                                                                                                                                                                                                                                                                                                                           |     | non-fatal trace survives (ok:true + trace, no error join) | `sequence.test.ts` Test 3 | ⊘ skipped | `describe.skip` — TODO, never authored. The fatal-vs-non-fatal rule (§I/O) is untested. |
+| dev `prep→single→update` sequence (Bun runner, no gates)                       | `shared/src/rendering/sequence.test.ts`  | ⚠ **stale + blocked** | (1) hardcodes Lens-era `SINGLE_POST` (decimal post id) but `prep` now calls `fetchById(genesis)`→`getLatest(bytes32)` — a decimal id breaks ABI encoding; (2) ignores the `TEST_CONTENT_IDS` env var `.env` already provides; (3) `MAINNET_RPC_URL`/`BASE_RPC_URL` absent from `.env` → `chainReady=false` → live tests **silently skip**. Fix: read `TEST_CONTENT_IDS`, set RPC env, use a real bytes32 genesis. |
+| dev sequence shape contract (prep→single input handoff)                       | `sequence.test.ts` “seam contract”       | ⚠ stale               | inherits the same `SINGLE_POST` fixture                                                                                                                                                                                                                                                                                                                                                                           |     | non-fatal trace survives (ok:true + trace, no error join) | `sequence.test.ts` Test 3 | ⊘ skipped | `describe.skip` — TODO, never authored. The fatal-vs-non-fatal rule (§I/O) is untested. |
 | stage-failure envelope (ok:false, string error, no throw)                      | `sequence.test.ts` Test 4                | ✅ (gated)            | runs only when `chainReady`; covers a no-modules publication                                                                                                                                                                                                                                                                                                                                                      |
+| stage transport per render mode + preview capability gate                     | `sequence.test.ts` (mode blocks)         | ✅                    | mocked `runAction`: runner/Lit per stage for `dev`, `preview`, `publish`; `preview`/`unsigned` input values; `preview` without `capabilities.unsignedRender` throws before any dispatch |
 | INV-append / `makeOffer` / `hasAgreement` on-chain gating (the trust boundary)      | —                                        | ⛔ **missing**        | no `.t.sol`, no Hardhat tests under `protocol/`. The genesis-author append gate (INV-append) is entirely untested on-chain.                                                                                                                                                                                                                                                                                       |
 | INV-8 desync (records-updated-but-group-not, and inverse)                      | —                                        | ⛔ missing            | flagged as a contract test in §Test seams; not authored                                                                                                                                                                                                                                                                                                                                                           |
 | GAP-2 canonicalization (nested-key sort → verify fail)                         | —                                        | ⛔ missing            | flagged; not authored                                                                                                                                                                                                                                                                                                                                                                                             |
 | determinism (frozen clock: `metadata.ts` `new Date()`, `update` `Date.now()`)  | —                                        | ⛔ missing            | output CIDs non-deterministic; no clock injection                                                                                                                                                                                                                                                                                                                                                                 |
 
-### Fixture requirement (preview test unblock)
+### Fixture requirement (dev-path test unblock)
 
 `contentIds` is a **bytes32 genesis**, not a Lens post id. Live fixture (from a real publish on
 `s3nl.soul2soul.eth`, makeOffer tx `0x6d10f033…`):

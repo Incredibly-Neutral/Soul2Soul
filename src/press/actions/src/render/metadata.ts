@@ -49,6 +49,7 @@ export const addAndSignMetadata = async (
   html: string,
   protocolInfo: S2SManifest,
   contentInfo?: S2SContentInfoWithDates,
+  options: { unsigned?: boolean } = {},
 ) => {
   // console.log("pkp", protocolInfo.pkp.publicKey.replace("0x", ""));
 
@@ -256,20 +257,29 @@ export const addAndSignMetadata = async (
     const toSignHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
 
     // 6. Sign with Lit PKP (may fail in preview — that's fine, metadata still gets embedded)
-    try {
-      const signingKey = new ethers.utils.SigningKey(
-        await Lit.Actions.getPrivateKey({ pkpId: protocolInfo.pkp }),
-      );
-      const signature = ethers.utils.joinSignature(
-        signingKey.signDigest(ethers.utils.arrayify(toSignHash)),
-      );
-      signable.proof = {
-        ...proofOptions,
-        proofValue: signature,
-      };
-    } catch (signError) {
-      console.log('Signing skipped (preview or shim):', signError);
+    //
+    // An unsigned run has no key to ask for: skip the key read only, and emit
+    // the same signatureless proof the catch below emits. Every other step
+    // (hashing, schema, canonicalisation, insertion) is unchanged, so a dev or
+    // preview page keeps its whole colophon and loses only the signature.
+    if (options.unsigned) {
       signable.proof = proofOptions;
+    } else {
+      try {
+        const signingKey = new ethers.utils.SigningKey(
+          await Lit.Actions.getPrivateKey({ pkpId: protocolInfo.pkp }),
+        );
+        const signature = ethers.utils.joinSignature(
+          signingKey.signDigest(ethers.utils.arrayify(toSignHash)),
+        );
+        signable.proof = {
+          ...proofOptions,
+          proofValue: signature,
+        };
+      } catch (signError) {
+        console.log('Signing skipped (preview or shim):', signError);
+        signable.proof = proofOptions;
+      }
     }
 
     // 7. Create script tag (with proof if signed, without signature otherwise)

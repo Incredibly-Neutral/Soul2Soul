@@ -85,7 +85,7 @@ export async function renderCalls(
 		const rpcs = buildRpcEndpoints(main);
 		const kuboToken = main.oxo?.settings?.kubo_token;
 		const res: any = await renderwithLitActions(
-			!publish,
+			publish ? 'publish' : 'dev',
 			main.oxo.ctrlr.lit,
 			signature,
 			lit_usage_key,

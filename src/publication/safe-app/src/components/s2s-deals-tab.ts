@@ -1,7 +1,13 @@
 // s2s-deals-tab.ts
 import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { LitService, renderwithLitActions, toBytes32Id } from '@s2s/soul2soul-shared';
+import {
+  LitService,
+  previewLink,
+  renderwithLitActions,
+  toBytes32Id,
+  type RenderMode,
+} from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -196,7 +202,8 @@ export class S2SDealsTab extends LitElement {
   @state() private deals: Array<Deal> = [];
   @state() private offers: Array<Deal> = [];
   @state() private fetching = false;
-  @state() private previewMode = false;
+  /** The toolbar toggle: bulk renders run cheap ('dev') or live ('publish'). */
+  @state() private devMode = false;
   @state() private offersSort: SortState | null = null;
   @state() private dealsSort: SortState | null = null;
   @state() private offersChips: Record<string, string[]> = {};
@@ -206,6 +213,15 @@ export class S2SDealsTab extends LitElement {
     message: string;
   } = { result: 'idle', message: '' };
   @state() private rowPhase: Record<string, RowPhase> = {};
+  /**
+   * A per-row render in flight, and a popup-blocked result URL, both keyed by
+   * `<mode>:<genesis>`: the two row buttons render independently and a busy
+   * Dev must not disable Preview. Separate from rowPhase because these renders
+   * decide nothing about the agreement, so they must not move the row's
+   * publish/remove step.
+   */
+  @state() private renderBusy: Record<string, boolean> = {};
+  @state() private renderReady: Record<string, string> = {};
   /** Bumped on every phase change, handed to <s2s-table> as its revision. */
   @state() private rowRevision = 0;
   /**
@@ -279,6 +295,23 @@ export class S2SDealsTab extends LitElement {
         to {
           transform: rotate(360deg);
         }
+      }
+
+      /* One mode's button and the link a blocked popup leaves beside it. */
+      .render-action {
+        display: inline-flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      /* A render the popup blocker refused. The link is the user's second
+         gesture, so it sits beside the button rather than replacing it. */
+      .preview-ready {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        color: var(--color-purple, #d8b4fe);
+        text-decoration: underline;
       }
     `,
   ];
@@ -688,7 +721,7 @@ export class S2SDealsTab extends LitElement {
   private async renderRow(genesis: string) {
     this.setRowPhase(genesis, 'rendering');
     try {
-      const res = await this.performRender(false, [genesis]);
+      const res = await this.performRender('publish', [genesis]);
       console.log(res);
       // A `success:false` envelope is a render that wrote nothing, including
       // the contenthash write that moves the root. Marking it rendered would
@@ -741,20 +774,152 @@ export class S2SDealsTab extends LitElement {
     }
   }
 
+  // ---- per-row renders: dev and preview -----------------------------------
+
+  private renderKey(mode: 'dev' | 'preview', genesis: string): string {
+    return `${mode}:${genesis}`;
+  }
+
+  /** The row a genesis names, deal before offer (a genesis can be listed as both). */
+  private rowFor(genesis: string): Deal | undefined {
+    return [...store.deals, ...store.offers, ...this.retainedOffers].find(
+      (d) => d.genesis === genesis,
+    );
+  }
+
+  /**
+   * Why a row cannot be rendered in `mode`, or null when it can.
+   *
+   * An offer has no page to show in either mode: the render action treats a
+   * triggered genesis with no agreement as revoked (press/actions/src/render/
+   * main.ts), so the page is removed from the subtree instead of written.
+   *
+   * Encryption is read as truthiness, like renderIds does: the flag is copied
+   * off the stored item unvalidated. The dev runner has no key, so an
+   * encrypted body is refused here exactly as the sweep refuses it; preview
+   * runs on Lit and decrypts, so it does not care.
+   *
+   * Preview is refused unless the publication's pinned manifest advertises
+   * `capabilities.unsignedRender`: the shared layer throws for that case so a
+   * decrypting render can never sign, and the UI must not offer what throws.
+   */
+  private actionUnavailable(mode: 'dev' | 'preview', genesis: string): string | null {
+    const row = this.rowFor(genesis);
+    if (row?.status !== 'deal') {
+      return 'An offer has no agreement: the render treats it as revoked';
+    }
+    if (mode === 'dev' && Boolean(row.encryption)) {
+      return 'The dev runner has no key for an encrypted body';
+    }
+    if (mode === 'preview' && store.protocolInfo?.capabilities?.unsignedRender !== true) {
+      return 'The pinned render action predates unsigned renders; pin a newer release to enable preview';
+    }
+    return null;
+  }
+
+  /**
+   * Render one row and open the result in a new tab. The window is opened here,
+   * inside the click gesture, before any await: a popup raised after the render
+   * returns is blocked, and the Safe's iframe makes that worse. Everything
+   * after the open sits inside the try, so the in-flight flag is always
+   * cleared, even when the open itself throws.
+   *
+   * The refusal is repeated here rather than left to the disabled button: a
+   * click on the <s2s-button> host reaches this handler.
+   */
+  private async renderOne(mode: 'dev' | 'preview', genesis: string) {
+    const key = this.renderKey(mode, genesis);
+    if (this.renderBusy[key] || this.actionUnavailable(mode, genesis) !== null) return;
+
+    // A new attempt supersedes the link the last blocked one left behind.
+    this.setRenderReady(key, null);
+    this.setRenderBusy(key, true);
+
+    let tab: Window | null = null;
+    try {
+      tab = window.open('', '_blank');
+      const res = await this.performRender(mode, [genesis]);
+      // The path is the page. An envelope with a CID but no path names only
+      // the site root, which is not this manuscript: fail rather than open it.
+      if (!res.success || !res.cid || !res.path) {
+        throw new Error(res.error ?? 'the render returned no page to open');
+      }
+      const url = previewLink(res.cid, res.path);
+      if (tab) {
+        // Sever the opener so the preview cannot reach back into the Safe app.
+        tab.opener = null;
+        tab.location.href = url;
+      } else {
+        this.setRenderReady(key, url);
+      }
+    } catch (error: any) {
+      tab?.close();
+      const what = mode === 'dev' ? 'Dev render failed' : 'Preview failed';
+      this.showNotification(`${what}: ${error.message}`, 'error');
+    } finally {
+      this.setRenderBusy(key, false);
+    }
+  }
+
+  /** Copy-on-write, and a revision bump so the table re-renders the row. */
+  private setRenderBusy(key: string, busy: boolean) {
+    this.renderBusy = { ...this.renderBusy, [key]: busy };
+    this.rowRevision += 1;
+  }
+
+  private setRenderReady(key: string, url: string | null) {
+    const next = { ...this.renderReady };
+    if (url === null) delete next[key];
+    else next[key] = url;
+    this.renderReady = next;
+    this.rowRevision += 1;
+  }
+
+  /**
+   * One mode's control: the button, and the fallback link a blocked popup
+   * leaves. A row that cannot be rendered in that mode keeps the button,
+   * disabled, with the reason as its title.
+   */
+  private renderModeControl(mode: 'dev' | 'preview', genesis: string): TemplateResult {
+    const key = this.renderKey(mode, genesis);
+    const busy = this.renderBusy[key] ?? false;
+    const blocked = this.actionUnavailable(mode, genesis);
+    const ready = this.renderReady[key];
+    const label = mode === 'dev' ? 'Dev' : 'Preview';
+    const busyLabel = mode === 'dev' ? 'Rendering' : 'Previewing';
+    return html`
+      <span class="render-action">
+        <s2s-button action=${mode} genesis="${genesis}" type="secondary"
+          ?disabled=${busy || blocked !== null}
+          title=${blocked ?? nothing}
+          @click=${() => void this.renderOne(mode, genesis)}>
+          ${busy
+            ? html`<span class="row-spinner" aria-hidden="true"></span> ${busyLabel}`
+            : label}
+        </s2s-button>
+        ${ready
+          ? html`<a class="preview-ready" href=${ready} target="_blank"
+              rel="noopener noreferrer">Open preview</a>`
+          : nothing}
+      </span>
+    `;
+  }
+
   // ---- render calls -------------------------------------------------------
 
   /**
    * Every genesis a sweep must visit: the deals and the offers, deduped. An
    * offer has no agreement, so rendering it makes the action remove the page
    * its path still holds — which is the only way a revoked manuscript's own
-   * page is ever revisited, since it is no longer a deal. Preview drops
-   * encrypted items: their bodies cannot be rendered without the key.
+   * page is ever revisited, since it is no longer a deal. A dev sweep drops
+   * encrypted items: the runner has no key. A publish or preview sweep keeps
+   * them: publish signs on Lit, preview decrypts there.
    */
-  private renderIds(preview: boolean): string[] {
+  private renderIds(mode: RenderMode): string[] {
     const seen = new Set<string>();
     const ids: string[] = [];
     for (const item of [...store.deals, ...store.offers]) {
-      if (preview && item.encryption) continue;
+      if (mode === 'dev' && item.encryption) continue;
       if (seen.has(item.genesis)) continue;
       seen.add(item.genesis);
       ids.push(item.genesis);
@@ -762,9 +927,9 @@ export class S2SDealsTab extends LitElement {
     return ids;
   }
 
-  private async bulkRender(preview: boolean) {
+  private async bulkRender(mode: 'dev' | 'publish') {
     try {
-      const res = await this.performRender(preview, this.renderIds(preview));
+      const res = await this.performRender(mode, this.renderIds(mode));
       console.log(res);
       if (!res.success) {
         this.showNotification(
@@ -783,7 +948,7 @@ export class S2SDealsTab extends LitElement {
    * Throws when the records it needs are missing, so a caller can report it
    * instead of rendering nothing under a spinner.
    */
-  private async performRender(preview: boolean, genesisIds: string[]) {
+  private async performRender(mode: RenderMode, genesisIds: string[]) {
     const configCid = store.getRecord('config');
     if (configCid == null) throw new Error('no config record');
 
@@ -807,7 +972,7 @@ export class S2SDealsTab extends LitElement {
     };
 
     return await renderwithLitActions(
-      preview,
+      mode,
       this.lit,
       signature,
       import.meta.env.VITE_LIT_USAGE_KEY,
@@ -828,11 +993,13 @@ export class S2SDealsTab extends LitElement {
   }
 
   /**
-   * The next step for one row, or nothing. Preview hides it: a preview renders
-   * the cache, it does not decide what the live site says about an agreement.
+   * The next step for one row, or nothing. A dev sweep drives the cache, it
+   * does not decide what the live site says about an agreement, so the toggle
+   * hides this action while it is on. The row's own Dev and Preview buttons are
+   * independent of the toggle and stay visible.
    */
   private renderRowAction(genesis: string): TemplateResult | typeof nothing {
-    if (this.previewMode) return nothing;
+    if (this.devMode) return nothing;
 
     const phase = this.rowPhase[genesis] ?? 'idle';
     const expects = this.rowExpects[genesis] ?? true;
@@ -882,6 +1049,8 @@ export class S2SDealsTab extends LitElement {
                 @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
               <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
                 @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>`}
+          ${this.renderModeControl('dev', offer.genesis)}
+          ${this.renderModeControl('preview', offer.genesis)}
           ${this.renderRowAction(offer.genesis)}
         </div>
       </div>
@@ -898,6 +1067,8 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${formatDateTime(deal.modifiedDate)}</div>
         <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
         <div class="table-cell row-actions">
+          ${this.renderModeControl('dev', deal.genesis)}
+          ${this.renderModeControl('preview', deal.genesis)}
           <s2s-button action="reject" genesis="${deal.genesis}" status="deal" type="secondary"
             @click=${() => this.reject(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
           </s2s-button>
@@ -927,9 +1098,9 @@ export class S2SDealsTab extends LitElement {
           @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
         ></s2s-check>
         <s2s-button action="bulkrender" type="secondary"
-          @click=${() => this.bulkRender(this.previewMode)}>Sync site</s2s-button>
-        <toggle-button .bool=${this.previewMode} label="preview"
-          @toggle=${(e: CustomEvent) => { this.previewMode = e.detail.checked; }}></toggle-button>
+          @click=${() => this.bulkRender(this.devMode ? 'dev' : 'publish')}>Sync site</s2s-button>
+        <toggle-button .bool=${this.devMode} label="dev"
+          @toggle=${(e: CustomEvent) => { this.devMode = e.detail.checked; }}></toggle-button>
       </div>
 
       ${offers.length > 0

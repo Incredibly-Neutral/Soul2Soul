@@ -32,7 +32,7 @@ The owners keep three lists, recorded in the publication module and managed from
 
 ## Templates and design
 
-A publication's design is its templates and CSS. The templates are written in Handlebars, a small language that covers what a site needs. Handlebars is a logic-less template language: a template lays out data but runs no code. The press renders every publication's design, and never runs code a publication wrote.
+A publication's design is its templates and CSS. The templates are written in Handlebars, a small language that covers what a site needs. Handlebars is a logic-less template language: a template lays out data but runs no code. The press renders every publication's design, and never runs code a publication wrote. A render that has to open gated text runs on Lit, and costs one paid call; a render that doesn't runs outside Lit for nothing.
 
 The templates are read from the publication's GitHub repository. A developer pushes a new version there, and the owners update the config to reflect it, in a transaction on the ledger.
 

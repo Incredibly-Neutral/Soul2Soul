@@ -439,12 +439,22 @@ async function documentJson(actions: Array<{ name: string; cid: string }>): Prom
     functionName: 'getManifest',
   });
   const current = JSON.parse(json) as Record<string, unknown>;
+  // The render action released from this build reads `unsigned`, so a preview
+  // can skip provenance instead of signing the page. Carry any capabilities
+  // the current document already advertises and add this one.
+  const currentCapabilities =
+    current.capabilities &&
+    typeof current.capabilities === 'object' &&
+    !Array.isArray(current.capabilities)
+      ? (current.capabilities as Record<string, unknown>)
+      : {};
   return JSON.stringify({
     ...current,
     version,
     litActions: Object.fromEntries(
       actions.map((a) => [a.name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase()), a.cid]),
     ),
+    capabilities: { ...currentCapabilities, unsignedRender: true },
   });
 }
 

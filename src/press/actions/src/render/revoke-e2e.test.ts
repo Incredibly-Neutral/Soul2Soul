@@ -234,7 +234,7 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
     });
 
     const result = await renderwithLitActions(
-      true, // preview
+      'dev', // mode
       mockLit,
       SIGNATURE,
       'lit-usage-key',

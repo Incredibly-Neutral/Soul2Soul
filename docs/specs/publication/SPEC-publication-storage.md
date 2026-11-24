@@ -89,7 +89,7 @@ Redundancy is a property of **which host published**, not of the publication's c
 |---|---|---|---|---|---|
 | author-side publish (`neutralpress`) | yes | yes | yes | yes, ≥2 | up to 5 |
 | admin-app Bulk Render | yes | no | no | no | 1 |
-| preview (either host) | yes | no | no | no | 1 |
+| dev or preview render (either host) | yes | no | no | no | 1 |
 
 `backupToProviders(cid, …)` is a `Promise.allSettled` over `['filebase','pinata']` plus a Filecoin leg,
 returning `{ filebase, pinata, filecoin }` where filecoin is one of `'skipped' | 'ok' | 'mismatch' |
@@ -110,11 +110,13 @@ the app.
 
 A preview root is pinned in the shared node, referenced by no ENS record and no alias, and unmirrored. It
 survives until the node is rebuilt; then it is the first thing to disappear and nothing notices, because
-nothing points at it. Previews accumulate: one per render, forever.
+nothing points at it. Both non-publishing modes accumulate them: one per render, forever.
 
-A preview is **not a dry run**: same action code, same templates, real CID, real pin — but executed by
+A preview is **not a dry run**: same action code, same templates, real CID, real pin, and no record write
+(`if (!preview)`). The two modes differ in where the render runs. `dev` renders every stage on
 `S2S_RUNNER_URL` (`https://run.transport-union.dev/run`, 10 s timeout) **outside** the enclave, so it is
-exactly as private as that runner is, and it skips the record write via `if (!preview)`.
+exactly as private as that runner is, it cannot decrypt a gated body, and it is free. `preview` renders
+on Lit, a paid invocation, so a gated body opens; `unsigned: true` keeps the page unprovenanced.
 
 ## Observing availability
 

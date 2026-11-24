@@ -163,6 +163,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       configCid,
       publication,
       preview,
+      unsigned,
       endpoints,
       maintainCache,
       triggeredContentIds,
@@ -521,10 +522,20 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             : undefined,
         };
 
-        html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
+        // Provenance is the PKP signature. An unsigned run (dev or preview)
+        // has no signing key, so it skips only the key read: the colophon is
+        // still built and inserted, without a proofValue. Absent or false
+        // keeps the signing attempt; the Bun shim throws inside
+        // addAndSignMetadata and its own catch returns the unsigned page,
+        // which is the longstanding preview behavior.
+        html = await addAndSignMetadata(job.id, html, protocolInfo, metadata, { unsigned });
 
-        let t6 = Date.now();
-        trace.push(`signed: ${((t6 - t0) / 1000).toFixed(3)} seconds`);
+        if (unsigned) {
+          trace.push('provenance unsigned: colophon kept, no signature');
+        } else {
+          let t6 = Date.now();
+          trace.push(`signed: ${((t6 - t0) / 1000).toFixed(3)} seconds`);
+        }
 
         const htmlCid = await uploadFile(gateway!, html!);
         job.html = htmlCid;
