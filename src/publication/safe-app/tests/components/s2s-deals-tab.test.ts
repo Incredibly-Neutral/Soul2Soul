@@ -1562,6 +1562,39 @@ describe('s2s-deals-tab', () => {
     await flushUpdates(el);
     expect(open).not.toHaveBeenCalled();
     expect(renderwithLitActions).not.toHaveBeenCalled();
+
+    // The host is not the button: a click on its padding still dispatches, so
+    // the guard has to live in the handler too, not only in the disabled flag.
+    (host as HTMLElement).click();
+    await flushUpdates(el);
+    expect(open).not.toHaveBeenCalled();
+    expect(renderwithLitActions).not.toHaveBeenCalled();
+  });
+
+  it('refuses a row whose encryption flag is truthy but not true, like the sweep does', async () => {
+    const item = encryptedItem('Sealed field notes') as unknown as { encryption: unknown };
+    item.encryption = 'sealed';
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xSealed', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(item);
+    seedRenderPrerequisites();
+
+    const open = stubWindowOpen(fakeTab() as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    const { host, btn } = previewControl(root, '0xSealed');
+    expect(btn!.disabled).toBe(true);
+    expect(host!.getAttribute('title')).toBe('Encrypted manuscripts cannot be previewed');
+
+    (host as HTMLElement).click();
+    await flushUpdates(el);
+    expect(open).not.toHaveBeenCalled();
+    expect(renderwithLitActions).not.toHaveBeenCalled();
   });
 
   it('closes the preview tab and reports the real error when the render fails', async () => {

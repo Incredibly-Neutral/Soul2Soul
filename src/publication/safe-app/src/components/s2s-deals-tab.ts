@@ -763,9 +763,13 @@ export class S2SDealsTab extends LitElement {
    * Preview one row's page and open it in a new tab. The window is opened
    * here, inside the click gesture, before any await: a popup raised after the
    * render returns is blocked, and Safe's iframe makes that worse.
+   *
+   * The encrypted check is repeated here rather than left to the disabled
+   * button: a click on the <s2s-button> host (its padding) still dispatches,
+   * and the render has no key for that item.
    */
   private async previewRow(genesis: string) {
-    if (this.previewing[genesis]) return;
+    if (this.previewing[genesis] || this.isSealed(genesis)) return;
 
     // A new attempt supersedes the link the last blocked one left behind.
     this.setPreviewReady(genesis, null);
@@ -795,6 +799,19 @@ export class S2SDealsTab extends LitElement {
     }
   }
 
+  /**
+   * Whether a row's manuscript is encrypted, read as truthiness like
+   * renderIds does: the flag is copied off the stored item unvalidated, so a
+   * non-boolean truthy value has to be refused here exactly as a sweep refuses
+   * it, or the row would offer a preview the bulk preview already drops.
+   */
+  private isSealed(genesis: string): boolean {
+    const row = [...store.deals, ...store.offers, ...this.retainedOffers].find(
+      (d) => d.genesis === genesis,
+    );
+    return Boolean(row?.encryption);
+  }
+
   /** Immutable copy-on-write, so Lit sees a new map and re-renders the row. */
   private setPreviewing(genesis: string, busy: boolean) {
     this.previewing = { ...this.previewing, [genesis]: busy };
@@ -814,7 +831,7 @@ export class S2SDealsTab extends LitElement {
    */
   private renderPreview(deal: Deal): TemplateResult {
     const busy = this.previewing[deal.genesis] ?? false;
-    const sealed = deal.encryption === true;
+    const sealed = this.isSealed(deal.genesis);
     const ready = this.previewReady[deal.genesis];
     return html`
       <s2s-button action="preview" genesis="${deal.genesis}" type="secondary"

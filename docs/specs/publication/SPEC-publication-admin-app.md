@@ -143,7 +143,8 @@ toggle (which changes only what the bulk Sync site call does). It renders that o
 click gesture and navigated once the render answers, because a popup raised after the awaits is blocked,
 with an "Open preview" link left beside the button when the browser blocks it anyway. A failed render
 closes the tab and names the error. An encrypted row's button is rendered but disabled — the render has
-no key, and `renderIds()` already drops those items from a preview.
+no key, and `renderIds()` already drops those items from a preview — and the handler refuses that row too,
+since a click on the control's host still dispatches.
 
 **Config build:** `AssetsBuilder` (GitHub → `assetsCid`) → `ConfigBuilder.buildConfig(...)` → one
 `setRecord('config')` proposal. The build itself belongs to
