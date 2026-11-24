@@ -46,8 +46,9 @@ it. The right ends when the offer ends; nothing already read is recalled.
 
 Note (this implementation): the press's preview gate, `canPreview`, is that reading. It admits a
 listed reviewer through the module's `canReview` and an owner of the publication Safe, and it
-requires an agreement or an offer, so the right ends when the offer does. Publishing keeps the
-author-side gate, `canRead`.
+requires an agreement or an offer, so the reviewer's right ends when the offer does. It also admits
+the manuscript's author, named by `authorOf` and proved by `canAuthor`, with no offer asked, because
+GATES-1 requires neither an agreement nor a whitelist. Publishing keeps the author-side gate, `canRead`.
 
 ## PUBLICATION-6 — decline, and end from its side, at once
 

@@ -28,7 +28,7 @@ A publication can add an alias: a .eth name it buys and owns itself. It wraps th
 
 ## Permissions
 
-The owners keep three lists, recorded in the publication module and managed from the app. Each names the people the publication trusts with one thing. Authors on the author list take the fast track: what they offer becomes an agreement at once, while anyone else's offer waits for the owners to admit or decline it. Developers on the developer list may publish, so a template can be tried on a real page; their work still counts as an offer until the owners admit it. Reviewers on the reviewer list, and the publication's own owners, can preview an offered manuscript before accepting it. The gates read these lists from the module when they decide who can publish, who can review and who can read, so access follows the record on Base and nothing else.
+The owners keep three lists, recorded in the publication module and managed from the app. Each names the people the publication trusts with one thing. Authors on the author list take the fast track: what they offer becomes an agreement at once, while anyone else's offer waits for the owners to admit or decline it. Developers on the developer list may publish, so a template can be tried on a real page; their work still counts as an offer until the owners admit it. Reviewers on the reviewer list, the manuscript's author, and the publication's own owners, can preview an offered manuscript before accepting it. The gates read these lists from the module when they decide who can publish, who can review and who can read, so access follows the record on Base and nothing else.
 
 ## Templates and design
 

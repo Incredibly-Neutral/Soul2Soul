@@ -136,8 +136,8 @@ controls, and it
 opens `previewLink(cid, path)` in a new tab opened inside the click, before any await, so the popup is not
 blocked. Preview (`mode: 'preview'`) runs the render stage on Lit so a gated body decrypts through
 `canPreview`, unsigned, with no on-chain write, and returns the real tree and CIDs. It is offered for an encrypted or unencrypted
-row, and for an offer as well as a deal: the publication's owner or a listed reviewer reads the
-manuscript before accepting. It is refused unless the pinned manifest document it renders from advertises
+row, and for an offer as well as a deal: the manuscript's author, the publication's owner or a
+listed reviewer reads the manuscript before accepting. It is refused unless the pinned manifest document it renders from advertises
 `capabilities.unsignedRender`, and an offer row additionally needs `capabilities.offerPreview`, the
 flag the sibling release writes beside it; a publication that has not moved its
 `manifest_version` record still reads the older document. `unsignedRender` is required in every case

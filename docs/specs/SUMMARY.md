@@ -159,8 +159,9 @@ revoked. The manifest advertises `capabilities.offerPreview` beside `unsignedRen
 ignores it and the safe-app requires it for an offer row.
 
 **Decrypt gate.** A publish decrypts through `canRead`, unchanged. A preview decrypts through
-`canPreview`: a listed reviewer, or an owner of the publication Safe, while the genesis is under an
-offer or an agreement. Neither path asks `canAuthor`, and every read is fail-closed. Details in
+`canPreview`: a listed reviewer; an owner of the publication Safe while the genesis is under an
+offer or an agreement; or the manuscript's author, whom the module's `authorOf` names and
+`canAuthor` admits with no offer asked. Every read is fail-closed. Details in
 [gates](gates/SPEC-gates.md) and [publication review](publication/SPEC-publication-review.md).
 
 **I/O contract (every action returns one shape):** `ActionResult<T> = { ok:true, action, data, trace } |
