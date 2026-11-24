@@ -71,7 +71,7 @@ These types are the **single source of truth** for stored content items. They li
 | `S2SPublicContent` | `manuscript/types.ts` | signed public metadata: `specVersion, author(0x address), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates, and never a `label`; a v2 item may carry `label?` (a public, UNSIGNED display name — ADR-003) |
 | `S2SProof` | `manuscript/types.ts` | EIP-712 author sig: `type("eip712"), signer(0x), signature(0x)` |
 | `S2SContentItem` | `manuscript/types.ts` | **flat stored object** (storage layout v3): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), bodies(Record<string,string>)` — `bodies` holds one body per key holder, keyed by the key holder's name; `s2s` is the protocol PKP's and every item has it. A v1/v2 item stores a single `body` string instead. |
-| `S2SContentBody` | `manuscript/types.ts` | what goes inside a body: `title, slug, content, custom?(Record)` |
+| `S2SContentBody` | `manuscript/types.ts` | what goes inside a body: `title, slug, content, custom?(Record), collection?(S2SCollectionDocument)` |
 
 Key design decisions (from HANDOFF-content-item):
 - **No discriminated union.** Both readings of a body are `string` (ciphertext when `encryption=true`, stringified JSON when `false`).
@@ -82,6 +82,28 @@ Key design decisions (from HANDOFF-content-item):
 - **`author` is the author Safe's bare `0x` address**, not a `did` string. The address is the identity; any prefix around it is decoration, so there is none.
 - **One body per key holder.** `bodies` is keyed by whose key it is: `s2s` is the protocol PKP's, and every item carries that entry. The layout leaves room for a publication with its own key to add its own ciphertext beside it, which needs no new signature; only the press's entry is written today. The envelope is unchanged, so `objectId`, `plaintextHash` and the EIP-712 type hash are the same bytes as a single-`body` item's. Read it with `bodyForKey(item)` / `itemBodies(item)` (default key `s2s`), never `item.body`: a body-less item is `malformed-item`.
 - **`tags`/`attributes`** live in the signed public part. **`title`/`slug`/`content`/`custom`** live in the body.
+
+### Collection bundle types
+
+A folder collection is one signed manuscript whose body carries a `collection` document. Nothing in
+the signed envelope changes: `collection` is a body field, the EIP-712 structs do not name it, and
+`plaintextHash` still commits the canonical body that holds it. The types live in
+`manuscript/types.ts`; `manuscript/collection.ts` holds the constants and the pure expander.
+
+- `COLLECTION_MEDIA_TYPE` — `'application/vnd.s2s.collection+json'`; the `public.mediaType` that
+  marks a bundle.
+- `COLLECTION_MANIFEST_FILENAME` — `'_collection.md'`; the file that turns a folder into a bundle.
+- `S2SCollectionItem` — `key, title, slug, content, postType?, position?, parent?, locale?, tags?,
+  custom?`. A member is unsigned: the bundle signs once.
+- `S2SCollectionDocument` — `slug, items[]`.
+- `collection?` — on `S2SContentBody` and on the legacy `S2SBodyPlain`.
+- `isCollectionContainer(body)` — true only when `body.mediaType === COLLECTION_MEDIA_TYPE`; never on
+  the presence of a `collection` field, so a member carrying collection metadata does not expand
+  into itself.
+- `collectionMemberId(bundleId, key)` — `` `${bundleId}:${key}` ``, the render-time id of a member.
+- `expandCollection(bundle)` — a non-container passes through as a one-element array; a container
+  with no items gives `[]`; a null or undefined bundle gives `[]`. An expanded member carries no
+  `objectId`, `proof` or `plaintextHash`.
 
 ### Identity modules (NEW)
 

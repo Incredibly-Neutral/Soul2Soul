@@ -810,6 +810,10 @@ Draft = { module: string;          // the drafts module the Safe sent append to
   render?: { cid: string; path: string; previewUrl: string } }
 ```
 
+For a folder collection the result row is the bundle: `cid` and `genesis` are the manifest's, and
+the members exist only inside the body. No member has a result row, an objectId or a signature of
+its own.
+
 Shared field meanings:
 
 | Field | Meaning |
@@ -1317,6 +1321,40 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 - **new**: requires `--repo` + an ERC-4337 endpoint (`S2S_PIMLICO_KEY`). `createFeed` is a **stub returning the zero
   address** — Lens feed creation is not wired headless (see gaps).
 
+### A folder is one collection
+
+A directory that holds `_collection.md` is one manuscript, not one per file. `upload`, `offer`,
+`preview`, `publish` and `revoke` accept the directory and resolve it to that manifest: the manifest
+is the bundle's own page and supplies `title`, `slug` and `custom`, while every other markdown file
+in the folder is a member in folder order. The bundle is signed once with `public.mediaType`
+`application/vnd.s2s.collection+json`; one encrypt, one CID, one deal, one access set and one
+revocation cover the whole folder. Its body adds the members:
+
+```json
+{
+  "title": "Field notes",
+  "slug": "field-notes",
+  "content": "…",
+  "collection": {
+    "slug": "field-notes",
+    "items": [
+      { "key": "first", "title": "First", "slug": "first", "content": "…" },
+      { "key": "second", "title": "Second", "slug": "second", "content": "…", "tags": ["draft"] }
+    ]
+  }
+}
+```
+
+A member's `key` is its slug, so two files that resolve to the same slug are refused rather than one
+silently replacing the other. `position` defaults to the member's 1-based folder order; `locale`,
+`postType` and `parent` inherit from the manifest when the member omits them; the signed document
+stores the member's own `tags`, and render unions them with the manifest's, deduplicated. Members
+are not signed individually and carry no objectId or proof of their own, so the write-back touches
+only the manifest: it receives `genesis`, `cid`, `author` and `creation_date`, and the member notes
+keep their frontmatter untouched. A revoke of the folder emits, for each member, a target shaped
+`{ id: '<bundle>:<key>', slug, locale, postType }`, plus the bundle itself; prep then removes the
+member pages as well as the index ([SPEC-protocol-actions](../press/SPEC-protocol-actions.md)).
+
 ## Distribution
 
 There is no registry in the path. A release is one tarball, one checksum, and the installer:
@@ -1358,6 +1396,8 @@ directory needs no arguments and no network.
 
 - **Lens feed is not wired** for `new` — `createFeed` returns the zero address. The browser hosts
   talk to a Lens-compatible API with the owner session; a headless equivalent is a follow-up.
+- **Collections in drafts.** `drafts fetch --out <folder>` does not rebuild `_collection.md` from the
+  member drafts; a bundle fetched as a draft comes back as one note.
 - **Frontmatter write-back** re-serializes the whole `---` block via yaml `Document`: existing key
   order and scalar values survive, **comments do not**, and `0x`-looking strings are **quoted**
   (so they round-trip as strings rather than re-parsing as numbers). `encrypted` is the one boolean
