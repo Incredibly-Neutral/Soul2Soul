@@ -2,9 +2,10 @@
  * decryptRaw/decrypt gate selection.
  *
  * Contract: `options.preview` is the only thing that moves the gate. A preview
- * asks `canPreview` (a listed reviewer, or a publication owner while the
- * genesis is under an agreement or an offer); every other run asks `canRead`
- * exactly as before. Neither path decrypts when the gate refuses.
+ * asks `canPreview` — a listed reviewer, the manuscript's author, or an owner of
+ * the publication Safe, each of them only while the genesis is under an agreement
+ * or an offer. Every other run asks `canRead` exactly as before. Neither path
+ * decrypts when the gate refuses.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { canPreview, canRead } from './gates';

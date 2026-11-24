@@ -23,10 +23,10 @@ export interface DecryptedPlaintext {
  * Which gate admits this decryption.
  *
  * `preview` opens the manuscript before the offer is accepted, so it asks
- * `canPreview` (a listed reviewer under an agreement or an offer, the manuscript's
- * author with no offer asked, or an owner of the publication Safe while the genesis
- * is under an agreement or an offer) instead of `canRead` (the author's own right).
- * Everything else is unchanged.
+ * `canPreview` instead of `canRead`: a listed reviewer, the manuscript's author,
+ * or an owner of the publication Safe. All three paths require the genesis to sit
+ * under an agreement or an offer, so a preview never outlives the deal. Every
+ * other run asks `canRead`, the author's own right. Nothing else changes.
  */
 export interface DecryptOptions {
   preview?: boolean;

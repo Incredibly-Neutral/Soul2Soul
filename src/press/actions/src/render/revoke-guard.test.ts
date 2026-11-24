@@ -9,10 +9,11 @@
  *     live page into a revoked-and-removed one; runRenderActionWithRetry
  *     handles transient RPC failures.
  *
- * A preview run also asks hasOffer, because an offer is not a revoke:
- *   - offer only (hasAgreement false, hasOffer true) → not revoked
- *   - neither agreement nor offer → revoked
- *   - either read failing → not revoked
+ * A preview run asks the module's own canRead(genesis, safe), one atomic view:
+ *   - canRead true (an agreement or an offer holds) → not revoked
+ *   - canRead false → revoked, even when a separate hasOffer read would say true:
+ *     the module's view is the authority, and hasOffer is never consulted
+ *   - canRead (or the safe() read before it) failing → not revoked
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { isRevokedByAgreementState } from './main';
@@ -67,30 +68,35 @@ describe('isRevokedByAgreementState — conservative revoke guard (reviewer C/G)
     expect(vi.mocked(evmRead).mock.calls.map((c) => c[3])).toEqual(['hasAgreement']);
   });
 
-  it('does not revoke an offer-only genesis in a preview', async () => {
-    vi.mocked(evmRead).mockImplementation(async (_chain, _target, _abi, fn) => fn === 'hasOffer');
+  it('asks safe() then the module canRead in a preview, and answers not revoked when it admits', async () => {
+    vi.mocked(evmRead).mockImplementation(async (_chain, _target, _abi, fn) =>
+      fn === 'safe' ? '0xsafe' : true,
+    );
 
     expect(await isRevokedByAgreementState(JOB_ID, PUBLICATION_MODULE, RPCS, true)).toBe(false);
-    expect(vi.mocked(evmRead).mock.calls.map((c) => c[3])).toEqual(['hasAgreement', 'hasOffer']);
+    expect(vi.mocked(evmRead).mock.calls.map((c) => c[3])).toEqual(['safe', 'canRead']);
   });
 
-  it('revokes in a preview only when neither an agreement nor an offer holds the genesis', async () => {
-    vi.mocked(evmRead).mockResolvedValue(false);
-    expect(await isRevokedByAgreementState(JOB_ID, PUBLICATION_MODULE, RPCS, true)).toBe(true);
+  it('revokes in a preview when the module canRead says false, even if hasOffer would say true', async () => {
+    vi.mocked(evmRead).mockImplementation(async (_chain, _target, _abi, fn) => {
+      if (fn === 'safe') return '0xsafe';
+      if (fn === 'hasOffer') return true;
+      return false;
+    });
 
-    vi.mocked(evmRead).mockResolvedValue(true);
-    expect(await isRevokedByAgreementState(JOB_ID, PUBLICATION_MODULE, RPCS, true)).toBe(false);
+    expect(await isRevokedByAgreementState(JOB_ID, PUBLICATION_MODULE, RPCS, true)).toBe(true);
+    expect(vi.mocked(evmRead).mock.calls.map((c) => c[3])).toEqual(['safe', 'canRead']);
   });
 
   it('does not revoke in a preview when either read fails', async () => {
     vi.mocked(evmRead).mockImplementation(async (_chain, _target, _abi, fn) => {
-      if (fn === 'hasOffer') throw new Error('offer read down');
-      return false;
+      if (fn === 'canRead') throw new Error('canRead down');
+      return '0xsafe';
     });
     expect(await isRevokedByAgreementState(JOB_ID, PUBLICATION_MODULE, RPCS, true)).toBe(false);
 
     vi.mocked(evmRead).mockImplementation(async (_chain, _target, _abi, fn) => {
-      if (fn === 'hasAgreement') throw new Error('agreement read down');
+      if (fn === 'safe') throw new Error('safe down');
       return false;
     });
     expect(await isRevokedByAgreementState(JOB_ID, PUBLICATION_MODULE, RPCS, true)).toBe(false);
