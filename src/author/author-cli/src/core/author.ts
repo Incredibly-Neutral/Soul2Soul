@@ -22,13 +22,16 @@ import {
   renderwithLitActions,
   runFilecoinLeg,
   subdomainOf,
+  toBytes32Id,
   toPreviewLabel,
 } from '@s2s/soul2soul-shared';
-import type { ParsedNote, S2SContentBody } from '@s2s/soul2soul-shared';
+import { canPreview } from '@s2s/soul2soul-shared/gates';
+import type { ParsedNote, S2SContentBody, S2SManifest } from '@s2s/soul2soul-shared';
 import type { PublicInputV2 } from '@s2s/soul2soul-shared';
 import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
+import { createGateReads } from '../adapters/gate-read';
 import {
   CID_KEY,
   ENCRYPTED_KEY,
@@ -53,6 +56,7 @@ import {
 } from './drafts';
 import { ipfsUri } from '../lib/ipfs-link';
 import { manifestFor, type CliContext } from './context';
+import { choosePreviewMode, type PreviewModeChoice } from './preview-mode';
 import { PublicationService, type AuthorListing } from './service';
 
 // ===========================================================================
@@ -529,7 +533,15 @@ export async function authorWrite(
     // The render action's `authorSafeAddress` is the AUTHOR Safe (neutralpress
     // passes `user.safe`); passing the publication Safe makes the action check
     // `isOwner` on the wrong contract.
-    render = await renderContent(ctx, service, publication, objectId, author.address, opts);
+    render = await renderContent(
+      ctx,
+      service,
+      publication,
+      objectId,
+      author.address,
+      opts,
+      parsed.encryption,
+    );
   }
 
   return {
@@ -853,6 +865,53 @@ function describePreviousReadFailure(err: unknown): { reason: string; remedy: st
 // Render pipeline
 // ===========================================================================
 
+/**
+ * The render mode for this run, and the line to print when an encrypted
+ * preview has to fall back to the cheap runner.
+ *
+ * Only a preview of an encrypted note asks the chain: publish names its own
+ * mode and a plaintext preview never decrypts. Admission is asked through
+ * shared's `canPreview`, never answered here, so the CLI and the decrypt action
+ * read the same offer, agreement and drafts rules. A read failure is a
+ * refusal, matching the gate.
+ */
+async function previewMode(
+  ctx: CliContext,
+  service: PublicationService,
+  genesis: string,
+  encrypted: boolean,
+  publish: boolean,
+  protocolInfo: S2SManifest,
+): Promise<PreviewModeChoice> {
+  const unsignedRender = protocolInfo.capabilities?.unsignedRender === true;
+  if (publish || !encrypted) {
+    return choosePreviewMode({ publish, encrypted, admitted: false, unsignedRender });
+  }
+
+  const module = service.publicationModule;
+  let admitted = false;
+  if (module) {
+    const { read, readValue } = createGateReads((target, abi, fn, args) =>
+      ctx.l2.readContract({
+        address: target as Address,
+        abi,
+        functionName: fn,
+        args,
+      } as never) as Promise<unknown>,
+    );
+    admitted = await canPreview(
+      read,
+      readValue,
+      genesis,
+      module,
+      ctx.eoaAddress,
+      toBytes32Id,
+    ).catch(() => false);
+  }
+
+  return choosePreviewMode({ publish, encrypted, admitted, unsignedRender });
+}
+
 async function renderContent(
   ctx: CliContext,
   service: PublicationService,
@@ -860,6 +919,8 @@ async function renderContent(
   objectId: string,
   authorSafeAddress: Address,
   opts: AuthorWriteOptions,
+  /** The note's resolved encryption flag; a preview of ciphertext must decrypt on Lit. */
+  encrypted: boolean,
 ): Promise<RenderOutcome> {
   const signature = await ctx.signer.signMessage('lit actions auth');
   const litUsageKey = requireSetting(ctx.config.lit.usageKey, 'LIT_USAGE_KEY');
@@ -870,8 +931,11 @@ async function renderContent(
   // prep after a release and looks like a fix that did nothing.
   const protocolInfo = await manifestFor(ctx, service);
 
+  const choice = await previewMode(ctx, service, objectId, encrypted, opts.publish, protocolInfo);
+  if (choice.notice) ctx.out.warn(choice.notice);
+
   const res = await renderwithLitActions(
-    opts.publish ? 'publish' : 'dev',
+    choice.mode,
     ctx.lit,
     signature,
     litUsageKey,
@@ -1100,19 +1164,27 @@ export async function revokeContent(
   // 2. Remove-plumbing re-render so the published site stops resolving it.
   // The path is not the caller's to derive: prep resolves the page this id
   // occupies with the renderer's own createPath and removes exactly that.
-  const render = await renderContent(ctx, service, publication, genesis, authorSafeAddress, {
-    render: true,
-    publish: true,
-    offer: false,
-    revoke: [
-      {
-        id: genesis,
-        slug: parsed.slug,
-        locale: parsed.locale,
-        postType: parsed.postType,
-      },
-    ],
-  });
+  const render = await renderContent(
+    ctx,
+    service,
+    publication,
+    genesis,
+    authorSafeAddress,
+    {
+      render: true,
+      publish: true,
+      offer: false,
+      revoke: [
+        {
+          id: genesis,
+          slug: parsed.slug,
+          locale: parsed.locale,
+          postType: parsed.postType,
+        },
+      ],
+    },
+    parsed.encryption,
+  );
 
   // The update action decides the removal after the fact: it skips the path
   // when the page's genesis still reads as in force, and it reports the rm

@@ -12,6 +12,11 @@ export default mergeConfig(
         // without this a test run silently depends on whatever build happens to
         // be lying around (and fails outright when none has been built).
         '@s2s/soul2soul-shared': fileURLToPath(new URL('../../shared/src', import.meta.url)),
+        // The gates are a subpath export, aliased to source for the same reason:
+        // the package entry is dist, and a test run must not need a build.
+        '@s2s/soul2soul-shared/gates': fileURLToPath(
+          new URL('../../shared/src/gates/index.ts', import.meta.url),
+        ),
       },
     },
     test: {
