@@ -786,11 +786,12 @@ export class S2SDealsTab extends LitElement {
    *
    * Preview runs on Lit and decrypts, so a sealed body is no obstacle. An
    * offer is previewable like a deal — the publication's owner or a listed
-   * reviewer reads the manuscript before accepting — once the pinned action
-   * advertises `capabilities.offerPreview`, the press-side gate the sibling
-   * release adds beside `unsignedRender`. `unsignedRender` stays required in
-   * every case: the shared layer throws for a decrypting render on a pin that
-   * predates it, and the UI must not offer what throws.
+   * reviewer reads the manuscript before accepting — once the pinned manifest
+   * advertises `capabilities.offerPreview`, which this tab requires and the
+   * release script writes; a build that advertises it is one whose render
+   * action carries the offer gate beside `unsignedRender`. `unsignedRender`
+   * stays required in every case: the shared layer throws for a decrypting
+   * render on a pin that predates it, and the UI must not offer what throws.
    */
   private previewUnavailable(row: Deal | undefined): string | null {
     const capabilities = store.protocolInfo?.capabilities ?? {};
