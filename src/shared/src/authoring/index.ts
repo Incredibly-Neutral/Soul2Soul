@@ -12,3 +12,4 @@ export * from './note';
 export * from './links';
 export * from './revoke';
 export * from './publication';
+export * from './collection';

@@ -10,7 +10,22 @@ export type {
   S2SPublicContent,
   S2SProof,
   S2SContentBody,
+  S2SCollectionItem,
+  S2SCollectionDocument,
+  CollectionBundleFields,
+  S2SExpandedCollectionMember,
 } from './manuscript';
+
+// Collections — one signed bundle, N members. Pure string/object work, no
+// chain library and no node builtin, so it travels into an action bundle.
+export {
+  COLLECTION_MEDIA_TYPE,
+  COLLECTION_MANIFEST_FILENAME,
+  isCollectionContainer,
+  collectionMemberId,
+  collectionMemberBody,
+  expandCollection,
+} from './manuscript/collection';
 export type {
   ActionResult,
   DataAvailabilityEntry,

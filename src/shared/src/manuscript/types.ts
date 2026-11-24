@@ -132,12 +132,37 @@ export interface S2SContentItemV3 {
  */
 export type AnyS2SContentItem = S2SContentItem | S2SContentItemV2 | S2SContentItemV3;
 
+/**
+ * One member of a folder collection, as it sits inside the bundle's body.
+ * Members are not signed individually: the bundle is signed once and the
+ * press expands it into N page bodies after a single decrypt.
+ */
+export interface S2SCollectionItem {
+  key: string;
+  title: string;
+  slug: string;
+  content: string;
+  postType?: string;
+  position?: number;
+  parent?: number;
+  locale?: string;
+  tags?: string[];
+  custom?: Record<string, unknown>;
+}
+
+/** The collection half of a bundle body: a folder slug and its ordered members. */
+export interface S2SCollectionDocument {
+  slug: string;
+  items: S2SCollectionItem[];
+}
+
 /** What goes into the body field of S2SContentItem (the content, optionally encrypted) */
 export interface S2SContentBody {
   title: string;
   slug: string;
   content: string;
   custom?: Record<string, unknown>;
+  collection?: S2SCollectionDocument;
 }
 
 // ============================================================================
@@ -260,6 +285,7 @@ export interface S2SBodyPlain extends S2SBodyBase {
   title: string;
   slug: string;
   custom?: any;
+  collection?: S2SCollectionDocument;
 }
 
 export interface S2SBodyEncrypted extends S2SBodyBase {
