@@ -62,7 +62,7 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 | path                                                                                                                           | role                                                                                                             |
 | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `components/s2s-app.ts`                                                                                                        | root element; five tabs; reads the site root via `getText(node, "contenthash_wrapped")`; boots `FilecoinStorage` |
-| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions, Bulk Render + preview                                    |
+| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions (Dev, Preview, Publish/Remove page), Sync site with a dev/publish toggle |
 | `components/s2s-whitelist-tab.ts`                                                                                              | author/dev lists                                                                                                 |
 | `components/s2s-records-tab.ts`                                                                                                | view/edit records; config + asset build entry; alias editing                                                     |
 | `components/s2s-storage-tab.ts`                                                                                                | CID inventory + Filecoin storage/Data-Sets tables, piece delete, dataset terminate                               |
@@ -131,9 +131,22 @@ version table. A factory that answers nothing is refused, not worked around: the
 expected and stops. Nothing in the app reads a version and nothing falls back to an older module's
 verb set.
 
-**Bulk Render / preview:** one button, two behaviours, the same `renderwithLitActions` call with
-`preview` flipped. The item list is `store.deals` (the app's cache, not the module), a preview filters out
-encrypted items, and the result is `console.log`ged — no root is set, no header refresh. Details in
+**Dev, preview, publish:** each Active Agreements row carries two render actions beside its publish step, and both
+open `previewLink(cid, path)` in a new tab opened inside the click. **Dev** (`mode: 'dev'`) is the cheap
+Bun-runner render — unsigned, no decrypt — so it is offered only for an unencrypted row, and an encrypted row
+shows it disabled with a title saying the runner has no key. **Preview** (`mode: 'preview'`) runs the render
+stage on Lit so a gated body decrypts, unsigned, with no on-chain write, and returns the real tree and CIDs; it
+is offered for an encrypted or unencrypted row and refused unless the publication's pinned manifest advertises
+`capabilities.unsignedRender`, because the shared layer throws in that case and the UI must not offer what
+throws. Both are refused on an offer: the render action treats a triggered genesis with no agreement as
+revoked, so the page is removed rather than written and the envelope comes back with no path. A successful
+envelope with an empty path is a failure in both modes, and the tab closes the tab it opened and reports. When
+the browser blocks the popup, the row keeps an “Open preview” link.
+
+**Sync site:** one button, two behaviours, the same `renderwithLitActions` call with the toolbar toggle choosing
+`dev` or `publish`. A dev sweep drops encrypted items; a publish sweep keeps them. The item list is
+`store.deals` and `store.offers` (the app's cache, not the module), and the result is `console.log`ged — no root
+is set, no header refresh. Details in
 [the storage child](SPEC-publication-storage.md#rendering-and-what-it-leaves-behind) and
 [the front door §render](SPEC-publication.md).
 

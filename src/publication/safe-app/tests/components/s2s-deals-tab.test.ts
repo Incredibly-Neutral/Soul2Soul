@@ -155,6 +155,10 @@ vi.mock('@s2s/soul2soul-shared', async () => {
     renderwithLitActions: vi.fn(),
     toBytes32Id: m.toBytes32Id,
     authorAddress,
+    // Stands in for shared's real previewLink; the tab's assertions match the
+    // string this builds, so the gateway's host shape is not duplicated here.
+    previewLink: (cid: string, path = '/') =>
+      `https://${cid}.preview.transport-union.dev${path}`,
   };
 });
 
@@ -183,15 +187,19 @@ type DealsTab = LitElement & {
   lit: unknown;
   offersChips: Record<string, string[]>;
   dealsChips: Record<string, string[]>;
-  previewMode: boolean;
+  devMode: boolean;
 };
 
 /**
  * The tab reads these off the store before it will render anything, mirroring
  * a publication that has a config record, a name and both loaded infos.
  * Typed through a cast because the mock only carries the slice this tab uses.
+ *
+ * `unsignedRender` defaults off: a publication whose manifest predates the
+ * `unsigned` input, which is what a Preview must refuse. Pass true for the
+ * release that reads it.
  */
-function seedRenderPrerequisites() {
+function seedRenderPrerequisites({ unsignedRender = false } = {}) {
   const s = store as unknown as {
     setRecord(r: { key: string; value: string; type: string }): void;
     setProtocolInfo(p: unknown): void;
@@ -199,7 +207,10 @@ function seedRenderPrerequisites() {
   };
   s.setRecord({ key: 'config', value: 'bafyConfig', type: 'string' });
   s.setRecord({ key: 'name', value: 'my-pub.soul2soul.eth', type: 'string' });
-  s.setProtocolInfo({ gateway: 'https://ipfs.transport-union.dev' });
+  s.setProtocolInfo({
+    gateway: 'https://ipfs.transport-union.dev',
+    capabilities: unsignedRender ? { unsignedRender: true } : {},
+  });
   s.setSafeInfo({ safeAddress: '0xSafe', s2sPublication: '0xPub', chainId: 8453 });
 }
 
@@ -297,6 +308,7 @@ function renderResult(cid: string, trace?: unknown[]) {
     success: true,
     cid,
     path: `/ipfs/${cid}`,
+    remove: [] as Array<{ path: string; replacedBy?: string }>,
     trace,
     error: undefined,
     maintainCache: undefined,
@@ -315,6 +327,7 @@ function renderFailure(error?: string) {
     success: false,
     cid: null,
     path: '',
+    remove: [] as Array<{ path: string; replacedBy?: string }>,
     trace: ['update action failed'],
     error,
     maintainCache: undefined,
@@ -336,8 +349,42 @@ async function withFakeTimers<T>(el: LitElement, body: () => Promise<T>): Promis
   }
 }
 
+/**
+ * One row's Dev or Preview control. Returns the inner <button> (where
+ * data-action/data-genesis live) and the host (where the title attribute is).
+ */
+function modeControl(root: ShadowRoot, action: 'dev' | 'preview', genesis: string) {
+  const host = [...root.querySelectorAll('s2s-button')].find(
+    (h) =>
+      h.shadowRoot
+        ?.querySelector(`button[data-action="${action}"]`)
+        ?.getAttribute('data-genesis') === genesis,
+  );
+  const btn = host?.shadowRoot?.querySelector<HTMLButtonElement>(
+    `button[data-action="${action}"]`,
+  );
+  return { host, btn };
+}
+
+/**
+ * A stand-in for the tab window.open returns. `location.href` is writable and
+ * readable, so navigation is observable without a real second tab.
+ */
+function fakeTab() {
+  return { opener: window as unknown, close: vi.fn(), location: { href: '' } };
+}
+
+/** window.open spies, restored before every test so none leaks into the next. */
+const openSpies: Array<{ mockRestore(): void }> = [];
+function stubWindowOpen(returns: Window | null) {
+  const spy = vi.spyOn(window, 'open').mockReturnValue(returns);
+  openSpies.push(spy);
+  return spy;
+}
+
 describe('s2s-deals-tab', () => {
   beforeEach(() => {
+    for (const spy of openSpies.splice(0)) spy.mockRestore();
     (store as unknown as { reset: () => void }).reset();
     vi.clearAllMocks();
     document.body.replaceChildren();
@@ -1412,6 +1459,8 @@ describe('s2s-deals-tab', () => {
 
     expect(root.textContent).toContain('Sync site');
     expect(root.textContent).not.toContain('Bulk Render');
+    // The toggle that selects the cheap bulk render is labelled dev.
+    expect(root.querySelector('toggle-button')?.getAttribute('label')).toBe('dev');
 
     const sweep = findRowButton(root, 'button[data-action="bulkrender"]');
     expect(sweep).not.toBeNull();
@@ -1424,7 +1473,7 @@ describe('s2s-deals-tab', () => {
     expect(args[8]).toEqual(['0xDeal1', '0xShared', '0xOffer1']);
   });
 
-  it('drops encrypted ids in preview and hides the row render action', async () => {
+  it('drops encrypted ids in a dev sweep and hides the row render action', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [rawDeal('0xPlain', '0xAuthorDeal'), rawDeal('0xSealed', '0xAuthorDeal')],
       offers: [rawDeal('0xOfferPlain', '0xAuthorOffer')],
@@ -1443,13 +1492,13 @@ describe('s2s-deals-tab', () => {
     await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (2)'));
 
     await withFakeTimers(el, async () => {
-      // Put a row in the render phase, so preview has something to hide.
+      // Put a row in the render phase, so the dev toggle has something to hide.
       findRowButton(root, 'button[data-action="accept"]')!.click();
       await vi.advanceTimersByTimeAsync(6_000);
       await flushUpdates(el);
       expect(root.textContent).toContain('Publish');
 
-      el.previewMode = true;
+      el.devMode = true;
       await flushUpdates(el);
       expect(rowRenderButton(root, '0xOfferPlain')).toBeNull();
       expect(root.textContent).not.toContain('Publish');
@@ -1462,6 +1511,307 @@ describe('s2s-deals-tab', () => {
       expect(args[0]).toBe('dev');
       expect(args[8]).toEqual(['0xPlain', '0xOfferPlain']);
     });
+  });
+
+  it('disables Dev on a sealed row, saying the runner has no key', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xSealed', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(encryptedItem('Sealed field notes'));
+    seedRenderPrerequisites({ unsignedRender: true });
+
+    const open = stubWindowOpen(fakeTab() as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    const { host, btn } = modeControl(root, 'dev', '0xSealed');
+    expect(btn).not.toBeNull();
+    expect(btn!.disabled).toBe(true);
+    expect(host!.getAttribute('title')).toBe('The dev runner has no key for an encrypted body');
+
+    btn!.click();
+    // The host is not the button: a click on its padding still dispatches, so
+    // the guard has to live in the handler too, not only in the disabled flag.
+    (host as HTMLElement).click();
+    await flushUpdates(el);
+    expect(open).not.toHaveBeenCalled();
+    expect(renderwithLitActions).not.toHaveBeenCalled();
+
+    // Preview is the way in for that same sealed row: it renders on Lit.
+    expect(modeControl(root, 'preview', '0xSealed').btn!.disabled).toBe(false);
+  });
+
+  it('previews a sealed row on Lit when the manifest advertises unsigned renders', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xSealed', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(encryptedItem('Sealed field notes'));
+    vi.mocked(renderwithLitActions).mockResolvedValue({
+      ...renderResult('bafyNew'),
+      path: '/posts/sealed',
+    });
+    seedRenderPrerequisites({ unsignedRender: true });
+
+    const tab = fakeTab();
+    const open = stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    modeControl(root, 'preview', '0xSealed').btn!.click();
+    await flushUpdates(el);
+
+    // Opened inside the gesture, before the render is awaited: a popup raised
+    // after it, or after the click returns, is blocked.
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(open.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(renderwithLitActions).mock.invocationCallOrder[0],
+    );
+    expect(renderwithLitActions).toHaveBeenCalledTimes(1);
+    const args = lastRenderCall();
+    expect(args[0]).toBe('preview');
+    expect(args[8]).toEqual(['0xSealed']);
+
+    expect(tab.opener).toBeNull();
+    expect(tab.location.href).toBe('https://bafyNew.preview.transport-union.dev/posts/sealed');
+    expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it('disables Preview when the pinned manifest does not advertise unsigned renders', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    seedRenderPrerequisites();
+
+    const open = stubWindowOpen(fakeTab() as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    const { host, btn } = modeControl(root, 'preview', '0xDeal1');
+    expect(btn).not.toBeNull();
+    expect(btn!.disabled).toBe(true);
+    expect(host!.getAttribute('title')).toBe(
+      'The pinned render action predates unsigned renders; release one to enable preview',
+    );
+
+    (host as HTMLElement).click();
+    await flushUpdates(el);
+    expect(open).not.toHaveBeenCalled();
+    expect(renderwithLitActions).not.toHaveBeenCalled();
+
+    // The refusal is about the pin, not the row: Dev still renders it.
+    expect(modeControl(root, 'dev', '0xDeal1').btn!.disabled).toBe(false);
+  });
+
+  it('disables both modes on an offer, saying the render treats it as revoked', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Pending offer'));
+    // The capability is advertised, so the only reason left is the offer.
+    seedRenderPrerequisites({ unsignedRender: true });
+
+    const open = stubWindowOpen(fakeTab() as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    const title = 'An offer has no agreement: the render treats it as revoked';
+    for (const mode of ['dev', 'preview'] as const) {
+      const { host, btn } = modeControl(root, mode, '0xOffer1');
+      expect(btn).not.toBeNull();
+      expect(btn!.disabled).toBe(true);
+      expect(host!.getAttribute('title')).toBe(title);
+      (host as HTMLElement).click();
+    }
+    await flushUpdates(el);
+    expect(open).not.toHaveBeenCalled();
+    expect(renderwithLitActions).not.toHaveBeenCalled();
+  });
+
+  it('renders one row in dev mode and opens the result in a new tab', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    vi.mocked(renderwithLitActions).mockResolvedValue({
+      ...renderResult('bafyDev'),
+      path: '/posts/hello',
+    });
+    seedRenderPrerequisites();
+
+    const tab = fakeTab();
+    stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    modeControl(root, 'dev', '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    const args = lastRenderCall();
+    expect(args[0]).toBe('dev');
+    expect(args[8]).toEqual(['0xDeal1']);
+    expect(tab.location.href).toBe('https://bafyDev.preview.transport-union.dev/posts/hello');
+    expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it('treats a dev render with no page path as a failed render', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    // A CID without a path names only the site root, which is not the page.
+    vi.mocked(renderwithLitActions).mockResolvedValue({ ...renderResult('bafyDev'), path: '' });
+    seedRenderPrerequisites();
+
+    const tab = fakeTab();
+    stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    modeControl(root, 'dev', '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.href).toBe('');
+    expect(notificationTexts()).toContain(
+      'Dev render failed: the render returned no page to open',
+    );
+    expect(root.querySelector('.preview-ready')).toBeNull();
+  });
+
+  it('treats a preview with no page path as a failed preview', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    vi.mocked(renderwithLitActions).mockResolvedValue({ ...renderResult('bafyNew'), path: '' });
+    seedRenderPrerequisites({ unsignedRender: true });
+
+    const tab = fakeTab();
+    stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    modeControl(root, 'preview', '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.href).toBe('');
+    expect(notificationTexts()).toContain('Preview failed: the render returned no page to open');
+    expect(root.querySelector('.preview-ready')).toBeNull();
+  });
+
+  it('closes the tab and reports the real error when the render fails', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    vi.mocked(renderwithLitActions).mockResolvedValue(renderFailure('render action exploded'));
+    seedRenderPrerequisites({ unsignedRender: true });
+
+    const tab = fakeTab();
+    stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    modeControl(root, 'preview', '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    expect(tab.close).toHaveBeenCalled();
+    // Not navigated, and the failure the action gave is the one shown.
+    expect(tab.location.href).toBe('');
+    expect(notificationTexts()).toContain('Preview failed: render action exploded');
+    expect(root.querySelector('.preview-ready')).toBeNull();
+  });
+
+  it('leaves an Open preview link when the popup is blocked', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    vi.mocked(renderwithLitActions).mockResolvedValue({
+      ...renderResult('bafyNew'),
+      path: '/posts/hello',
+    });
+    seedRenderPrerequisites({ unsignedRender: true });
+
+    stubWindowOpen(null);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    modeControl(root, 'preview', '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    const anchor = root.querySelector<HTMLAnchorElement>('.preview-ready');
+    expect(anchor).not.toBeNull();
+    expect(anchor!.getAttribute('href')).toBe(
+      'https://bafyNew.preview.transport-union.dev/posts/hello',
+    );
+    expect(anchor!.getAttribute('target')).toBe('_blank');
+    expect(anchor!.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('fires one render per row and mode, even when clicked twice', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    let resolveRender!: (v: unknown) => void;
+    vi.mocked(renderwithLitActions).mockReturnValue(
+      new Promise((resolve) => (resolveRender = resolve)) as never,
+    );
+    seedRenderPrerequisites({ unsignedRender: true });
+
+    const tab = fakeTab();
+    const open = stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    modeControl(root, 'preview', '0xDeal1').btn!.click();
+    await flushUpdates(el);
+    // In flight: the button is disabled, and the host click must not sneak a
+    // second render past it.
+    expect(modeControl(root, 'preview', '0xDeal1').btn!.disabled).toBe(true);
+    (modeControl(root, 'preview', '0xDeal1').host as HTMLElement).click();
+    await flushUpdates(el);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(renderwithLitActions).toHaveBeenCalledTimes(1);
+
+    resolveRender({ ...renderResult('bafyNew'), path: '/posts/hello' });
+    await flushUpdates(el);
+
+    expect(tab.location.href).toBe('https://bafyNew.preview.transport-union.dev/posts/hello');
+    expect(modeControl(root, 'preview', '0xDeal1').btn!.disabled).toBe(false);
   });
 
   it('reads a v2 creationDate and modifiedDate ahead of a stray v1 createdAt', async () => {
