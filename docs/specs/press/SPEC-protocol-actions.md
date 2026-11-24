@@ -152,8 +152,9 @@ render action that predates `unsigned` would ignore it on Lit and sign the page,
 `capabilities.unsignedRender`, before dispatching anything.
 
 The same release writes a second capability into the document it files, `capabilities.offerPreview`:
-the render action it pins gates decryption on `canPreview` and reads `hasOffer` in its revoke guard,
-so an offer may be previewed before it is accepted. Nothing in the press reads the flag; the safe-app
+the render action it pins gates decryption on `canPreview` and keeps an offer-only genesis live in
+its revoke guard by asking the module's `canRead(genesis, safe)`, so an offer may be previewed before
+it is accepted. Nothing in the press reads the flag; the safe-app
 requires it for an offer row, beside `unsignedRender`, which every preview still needs. The two
 arrive together because 0.1.4 is unfiled, so one pin enables the whole preview.
 
@@ -226,7 +227,7 @@ location. The `remove` array flows through `renderwithLitActions` unchanged into
 | `configCid`         | `string?`                                      | caller      |                                               |
 | `publication`       | ENS name                                       | caller      |                                               |
 | `unsigned`          | `boolean?`                                     | caller      | true for `dev` and `preview`; skips only the PKP key read inside `addAndSignMetadata`, so the colophon is embedded with its proof options and no `proofValue`. Absent/false keeps the signing attempt. Read by the render action released in 0.1.4; older actions ignore it. |
-| `preview`           | `boolean?`                                     | caller      | true for `dev` and `preview`, false for `publish`. Every deployed render reads it for the cache-refresh gate; the 0.1.4 render also uses it to ask `canPreview` instead of `canRead`, and to count an open offer as in force in its revoke guard. |
+| `preview`           | `boolean?`                                     | caller      | true for `dev` and `preview`, false for `publish`. Every deployed render reads it for the cache-refresh gate; the 0.1.4 render also uses it to ask `canPreview` instead of `canRead`, and to keep an offer-only genesis live in its revoke guard, which reads the module's `canRead(genesis, safe)`. |
 
 **Produces** `{ success, timestamp, job, html, logz, errors? }` where `job.html` = CID of the
 uploaded page, `job.path` = interpolated slug path, `job.revoked` set when the gate refused the
@@ -248,8 +249,10 @@ decryption, or when the genesis is out of force for this mode.
 7. if not revoked: `fetchCollections` → per-item `decrypt` (the same gate as the run) → `renderHTML` →
    `addAndSignMetadata` (the colophon; PKP sign unless `unsigned`, INV-5) → `uploadFile` → CID
 8. if the job is a triggered id and the page has a path: `isRevokedByAgreementState(job.id,
-   publicationModule, rpcs, preview)`. A publish revokes when `hasAgreement` is false; a preview
-   revokes only when `hasAgreement` and `hasOffer` are both false. A failed read revokes nothing
+   publicationModule, rpcs, preview)`. A publish revokes when `hasAgreement` is false. A preview
+   reads the module's `safe()` and then one `canRead(genesis, safe)`, which answers
+   agreement-or-offer in a single execution, and revokes on a definitive false. A failed read
+   revokes nothing
 9. a revoked job: `job.revoked = true`, empty html/path
 
 **Network/chain:** ETHEREUM+BASE reads (modules, config, gates), Lens testnet (body/collections),
@@ -442,12 +445,13 @@ input.remove[] →  per-entry (parallel)
 ```
 
 Every `hasAgreement(bytes32)` read in this section is the module's one agreement boolean, asked by
-`verifyPathAvailable`, `verifyRevocable` and the render revoke guard from bundle **0.1.2**; 0.1.0/0.1.1
-ask for `hasDeal`, which the module does not expose.
+`verifyPathAvailable`, `verifyRevocable` and the publish shape of the render revoke guard from bundle
+**0.1.2**; 0.1.0/0.1.1 ask for `hasDeal`, which the module does not expose.
 The render revoke guard has two shapes. A publish asks `hasAgreement` alone, so an ended agreement
-is a revoke. A preview asks `hasOffer` as well and revokes only when both are false, so an open offer
-is not a revoke; it also keeps the page live when either read fails, as the publish guard does on its
-one read.
+is a revoke. A preview reads the module's `safe()` and then one `canRead(genesis, safe)`, which
+answers agreement-or-offer in a single execution and cannot observe a deal mid-transition; it revokes
+on a definitive false, so an open offer is not a revoke, and it keeps the page live when either read
+fails, as the publish guard does on its one read.
 
 ### Execution order (structural invariant)
 
@@ -819,7 +823,7 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
 | dev sequence shape contract (prep→single input handoff)                       | `sequence.test.ts` “seam contract”       | ⚠ stale               | inherits the same `SINGLE_POST` fixture                                                                                                                                                                                                                                                                                                                                                                           |     | non-fatal trace survives (ok:true + trace, no error join) | `sequence.test.ts` Test 3 | ⊘ skipped | `describe.skip` — TODO, never authored. The fatal-vs-non-fatal rule (§I/O) is untested. |
 | stage-failure envelope (ok:false, string error, no throw)                      | `sequence.test.ts` Test 4                | ✅ (gated)            | runs only when `chainReady`; covers a no-modules publication                                                                                                                                                                                                                                                                                                                                                      |
 | stage transport per render mode + preview capability gate                     | `sequence.test.ts` (mode blocks)         | ✅                    | mocked `runAction`: runner/Lit per stage for `dev`, `preview`, `publish`; `preview`/`unsigned` input values; `preview` without `capabilities.unsignedRender` throws before any dispatch |
-| preview decrypt gate + preview revoke guard                                       | `press/actions/src/libs/decrypt.test.ts`, `render/revoke-guard.test.ts` | ✅                    | `decryptRaw` asks `canPreview` in a preview and `canRead` otherwise, and refuses on either answer; the guard asks only `hasAgreement` on a publish, keeps an offer-only genesis in a preview, revokes a preview only when both reads are false, and keeps the page live when either fails. `canPreview`'s three paths and its fail-closed reads are covered in `shared/src/gates/index.test.ts` |
+| preview decrypt gate + preview revoke guard                                       | `press/actions/src/libs/decrypt.test.ts`, `render/revoke-guard.test.ts` | ✅                    | `decryptRaw` asks `canPreview` in a preview and `canRead` otherwise, and refuses on either answer; the guard asks `hasAgreement` alone on a publish, and in a preview asks `safe()` then the module's one `canRead(genesis, safe)`, keeping an offer-only genesis live when it admits or when either read fails, and revoking on a definitive false even when a separate `hasOffer` would say true. `canPreview`'s three paths and its fail-closed reads are covered in `shared/src/gates/index.test.ts` |
 | INV-append / `makeOffer` / `hasAgreement` on-chain gating (the trust boundary)      | —                                        | ⛔ **missing**        | no `.t.sol`, no Hardhat tests under `protocol/`. The genesis-author append gate (INV-append) is entirely untested on-chain.                                                                                                                                                                                                                                                                                       |
 | INV-8 desync (records-updated-but-group-not, and inverse)                      | —                                        | ⛔ missing            | flagged as a contract test in §Test seams; not authored                                                                                                                                                                                                                                                                                                                                                           |
 | GAP-2 canonicalization (nested-key sort → verify fail)                         | —                                        | ⛔ missing            | flagged; not authored                                                                                                                                                                                                                                                                                                                                                                                             |

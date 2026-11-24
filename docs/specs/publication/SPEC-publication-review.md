@@ -145,8 +145,9 @@ Recorded here, decided elsewhere (an RFC, not a spec — per `docs/conventions.m
 
 - **A read never changes state.** The press's authorisation is an off-chain message
   (`extractSignerAddress` over `'lit actions auth'`); it costs nothing and writes nothing.
-- **`canRead` and `canPreview` are fail-closed.** Any read returning false denies; an RPC failure throws
-  in `canRead` and answers false in `canPreview`, so neither defaults to allow.
+- **`canRead` and `canPreview` are fail-closed.** A read returning false refuses the question it
+  answers; an RPC failure throws in `canRead` and answers false in `canPreview`, so neither defaults
+  to allow.
 - **A preview asks the deal question and the reviewer first, then the author's own question, and the
   publication Safe's ownership last.** `canPreview` asks `canReview`, `hasAgreement` and `hasOffer`
   together, refuses before any further read when neither the agreement nor the offer holds, then asks
