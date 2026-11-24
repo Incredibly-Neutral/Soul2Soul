@@ -7,7 +7,7 @@ import { runAction } from './helpers';
 import { runRenderActionWithRetry } from './sequence';
 
 // ============================================================================
-// runAction (preview branch) — defensive handling of the Bun runner response.
+// runAction (runner branch) — defensive handling of the Bun runner response.
 //
 // Regression: the PREP stage failed with a raw
 //   SyntaxError: Unexpected token 'I', "Internal S"... is not valid JSON
@@ -22,7 +22,7 @@ const RUNNER_URL = 'https://runner.test/run';
 const CID = 'bafytestcid';
 const INPUTS = { publication: 'test' };
 
-/** Minimal lit mock — never called in preview mode (runAction uses fetch only). */
+/** Minimal lit mock — never called on the runner branch (which uses fetch only). */
 const mockLit = {} as unknown as LitService;
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -49,11 +49,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('runAction preview branch', () => {
+describe('runAction runner branch', () => {
   it('rejects with an actionable non-JSON message (not a raw SyntaxError) on a plain-text 500', async () => {
     fetchMock.mockResolvedValue(textResponse('Internal Server Error', 500));
 
-    const err = await runAction(true, mockLit, CID, INPUTS).catch((e: unknown) => e);
+    const err = await runAction('runner', mockLit, CID, INPUTS).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(SyntaxError);
@@ -65,7 +65,7 @@ describe('runAction preview branch', () => {
   it('returns wrapped.response on the happy path (200 JSON envelope, success:true)', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, response: { ok: true } }));
 
-    const result = await runAction(true, mockLit, CID, INPUTS);
+    const result = await runAction('runner', mockLit, CID, INPUTS);
 
     expect(result).toEqual({ ok: true });
   });
@@ -73,7 +73,7 @@ describe('runAction preview branch', () => {
   it('preserves the request shape and attaches an AbortSignal.timeout to the fetch', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, response: { ok: true } }));
 
-    await runAction(true, mockLit, CID, INPUTS);
+    await runAction('runner', mockLit, CID, INPUTS);
 
     expect(fetchMock).toHaveBeenCalledWith(
       RUNNER_URL,
@@ -89,7 +89,7 @@ describe('runAction preview branch', () => {
   it('truncates long plain-text bodies to 200 chars in the error message', async () => {
     fetchMock.mockResolvedValue(textResponse('x'.repeat(500), 502));
 
-    const err = await runAction(true, mockLit, CID, INPUTS).catch((e: unknown) => e);
+    const err = await runAction('runner', mockLit, CID, INPUTS).catch((e: unknown) => e);
 
     expect((err as Error).message).toBe(`runner 502 returned non-JSON: ${'x'.repeat(200)}`);
   });
@@ -100,7 +100,7 @@ describe('runAction preview branch', () => {
       jsonResponse({ success: false, error: 'boom', response: { ok: false } }),
     );
 
-    const result = await runAction(true, mockLit, CID, INPUTS);
+    const result = await runAction('runner', mockLit, CID, INPUTS);
 
     expect(result).toEqual({ ok: false });
     expect(logSpy).toHaveBeenCalledWith('bun serverless call failed: boom');
@@ -127,7 +127,7 @@ describe('runRenderActionWithRetry — empty runner envelope (504-empty-JSON)', 
     fetchMock.mockResolvedValue(jsonResponse({ success: false, error: 'gateway timeout' }));
 
     const err: unknown = await runRenderActionWithRetry(
-      true, // preview (single attempt)
+      'dev', // runner, one attempt
       mockLit,
       CID,
       { id: 'j1' },
@@ -157,7 +157,7 @@ describe('runAction — missing response diagnostics', () => {
       jsonResponse({ has_error: false, logs: ['prep: rpc 403 eth_getBlockByNumber'] }),
     );
 
-    const err: unknown = await runAction(true, mockLit, CID, INPUTS, undefined, 'prep').catch(
+    const err: unknown = await runAction('runner', mockLit, CID, INPUTS, undefined, 'prep').catch(
       (e: unknown) => e,
     );
 
@@ -169,7 +169,7 @@ describe('runAction — missing response diagnostics', () => {
   it('withholds render logs unless S2S_DEBUG_ACTION_LOGS=1', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ has_error: false, logs: ['<p>plaintext</p>'] }));
 
-    const err: unknown = await runAction(true, mockLit, CID, INPUTS, undefined, 'render').catch(
+    const err: unknown = await runAction('runner', mockLit, CID, INPUTS, undefined, 'render').catch(
       (e: unknown) => e,
     );
 
@@ -183,11 +183,53 @@ describe('runAction — missing response diagnostics', () => {
     // only diagnosis there is (this is the 2026-11 prep failure).
     fetchMock.mockResolvedValue(jsonResponse({ error: 'Action code not found for CID' }));
 
-    const err: unknown = await runAction(true, mockLit, CID, INPUTS, undefined, 'prep').catch(
+    const err: unknown = await runAction('runner', mockLit, CID, INPUTS, undefined, 'prep').catch(
       (e: unknown) => e,
     );
 
     expect((err as Error).message).toContain('keys {error}');
     expect((err as Error).message).toContain('Action code not found for CID');
+  });
+});
+
+// ============================================================================
+// runAction — transport parameter.
+//
+// 'runner' takes the fetch branch; 'lit' fetches the action bundle and executes
+// it through LitService. The tests above cover the runner branch in detail;
+// these pin that the other value does not touch the runner URL.
+// ============================================================================
+
+describe('runAction transport parameter', () => {
+  it('lit: fetches the action bundle and executes it on Lit, not the runner', async () => {
+    const executeAction = vi.fn(async () => ({ response: { ok: true } }));
+    const lit = { executeAction } as unknown as LitService;
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('export const main = () => ({ ok: true });'),
+    } as unknown as Response);
+
+    const result = await runAction('lit', lit, CID, INPUTS, 'usage', 'render');
+
+    expect(result).toEqual({ ok: true });
+    expect(executeAction).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalledWith(RUNNER_URL, expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/ipfs/${CID}`),
+      expect.anything(),
+    );
+  });
+
+  it('runner: posts to the runner URL and never executes on Lit', async () => {
+    const executeAction = vi.fn();
+    const lit = { executeAction } as unknown as LitService;
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, response: { ok: true } }));
+
+    const result = await runAction('runner', lit, CID, INPUTS);
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(RUNNER_URL, expect.anything());
+    expect(executeAction).not.toHaveBeenCalled();
   });
 });

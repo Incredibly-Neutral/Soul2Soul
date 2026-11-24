@@ -267,6 +267,11 @@ export const SingleActionInputSchema = z.object({
   publication: z.string().min(1, 'publication ENS name is required'),
   configCid: z.string().optional(),
   preview: z.boolean().optional(),
+  // Whether the render action runs unsigned (no PKP signature, no on-chain
+  // write). True for dev and preview, false for publish. Optional because the
+  // deployed render actions predate it; the render action released in wave 2
+  // reads it.
+  unsigned: z.boolean().optional(),
   maintainCache: z.boolean().optional(),
   // The id(s) the caller rendered — the render action scopes its on-chain
   // hasAgreement revoke check to these ids ONLY. A cascade/ripple destination is

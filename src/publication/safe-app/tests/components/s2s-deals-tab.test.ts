@@ -690,7 +690,7 @@ describe('s2s-deals-tab', () => {
       // One render for that genesis only, not a sweep, and not a preview.
       expect(renderwithLitActions).toHaveBeenCalledTimes(1);
       const args = lastRenderCall();
-      expect(args[0]).toBe(false);
+      expect(args[0]).toBe('publish');
       expect(args[6]).toBe('0xSafe');
       expect(args[8]).toEqual(['0xOffer1']);
       // Done offers no action of its own: the row simply stops, and says
@@ -738,7 +738,7 @@ describe('s2s-deals-tab', () => {
 
       // The render decides removal itself; the tab passes no remove entry.
       const args = lastRenderCall();
-      expect(args[0]).toBe(false);
+      expect(args[0]).toBe('publish');
       expect(args[8]).toEqual(['0xDeal1']);
       expect(args[12]).toBeUndefined();
       // A completed removal leaves the row with no action at all — no green
@@ -1420,7 +1420,7 @@ describe('s2s-deals-tab', () => {
 
     expect(renderwithLitActions).toHaveBeenCalledTimes(1);
     const args = lastRenderCall();
-    expect(args[0]).toBe(false);
+    expect(args[0]).toBe('publish');
     expect(args[8]).toEqual(['0xDeal1', '0xShared', '0xOffer1']);
   });
 
@@ -1459,7 +1459,7 @@ describe('s2s-deals-tab', () => {
       await flushUpdates(el);
 
       const args = lastRenderCall();
-      expect(args[0]).toBe(true);
+      expect(args[0]).toBe('dev');
       expect(args[8]).toEqual(['0xPlain', '0xOfferPlain']);
     });
   });

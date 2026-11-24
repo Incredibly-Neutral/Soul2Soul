@@ -10,6 +10,18 @@
 import type { S2STemplateConfig } from '../publication/types';
 
 // ============================================================================
+// Render Mode
+//
+// Which stages the orchestrator runs where, and whether the run is a live
+// write. 'dev' is the cheap runner path for every stage. 'preview' renders on
+// Lit (the only runtime with Lit.Actions.Decrypt) while prep and update stay on
+// the runner, unsigned. 'publish' is the live path: render and update on Lit,
+// signed, with the on-chain root write.
+// ============================================================================
+
+export type RenderMode = 'dev' | 'preview' | 'publish';
+
+// ============================================================================
 // Template Data
 // ============================================================================
 

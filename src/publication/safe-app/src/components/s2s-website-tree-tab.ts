@@ -600,7 +600,7 @@ export class S2SWebsiteTreeTab extends LitElement {
       };
 
       const res = await renderwithLitActions(
-        false, // preview — a reset is a real write, not a preview
+        'publish', // mode — a reset is a real write, not a preview
         this.lit,
         signature,
         import.meta.env.VITE_LIT_USAGE_KEY as string,

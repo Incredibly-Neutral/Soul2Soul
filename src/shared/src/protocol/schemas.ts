@@ -33,4 +33,13 @@ export const manifestSchema = z.object({
     encrypt: z.string().min(1).optional(),
     decrypt: z.string().min(1).optional(),
   }),
+  // What the deployment's actions can do beyond their CID. Optional and
+  // absent-tolerant: an older document says nothing, and a reader must treat
+  // that as "no capability advertised". `unsignedRender` is set once the
+  // render action reads the `unsigned` input (wave 2).
+  capabilities: z
+    .object({
+      unsignedRender: z.boolean().optional(),
+    })
+    .optional(),
 });

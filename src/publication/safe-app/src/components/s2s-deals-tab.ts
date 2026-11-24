@@ -1,7 +1,7 @@
 // s2s-deals-tab.ts
 import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { LitService, renderwithLitActions, toBytes32Id } from '@s2s/soul2soul-shared';
+import { LitService, renderwithLitActions, toBytes32Id, type RenderMode } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -688,7 +688,7 @@ export class S2SDealsTab extends LitElement {
   private async renderRow(genesis: string) {
     this.setRowPhase(genesis, 'rendering');
     try {
-      const res = await this.performRender(false, [genesis]);
+      const res = await this.performRender('publish', [genesis]);
       console.log(res);
       // A `success:false` envelope is a render that wrote nothing, including
       // the contenthash write that moves the root. Marking it rendered would
@@ -764,7 +764,8 @@ export class S2SDealsTab extends LitElement {
 
   private async bulkRender(preview: boolean) {
     try {
-      const res = await this.performRender(preview, this.renderIds(preview));
+      const mode: RenderMode = preview ? 'dev' : 'publish';
+      const res = await this.performRender(mode, this.renderIds(preview));
       console.log(res);
       if (!res.success) {
         this.showNotification(
@@ -783,7 +784,7 @@ export class S2SDealsTab extends LitElement {
    * Throws when the records it needs are missing, so a caller can report it
    * instead of rendering nothing under a spinner.
    */
-  private async performRender(preview: boolean, genesisIds: string[]) {
+  private async performRender(mode: RenderMode, genesisIds: string[]) {
     const configCid = store.getRecord('config');
     if (configCid == null) throw new Error('no config record');
 
@@ -807,7 +808,7 @@ export class S2SDealsTab extends LitElement {
     };
 
     return await renderwithLitActions(
-      preview,
+      mode,
       this.lit,
       signature,
       import.meta.env.VITE_LIT_USAGE_KEY,

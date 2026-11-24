@@ -871,7 +871,7 @@ async function renderContent(
   const protocolInfo = await manifestFor(ctx, service);
 
   const res = await renderwithLitActions(
-    !opts.publish,
+    opts.publish ? 'publish' : 'dev',
     ctx.lit,
     signature,
     litUsageKey,

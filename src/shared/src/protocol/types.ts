@@ -73,6 +73,16 @@ export interface S2SManifest {
     // GATES-1. OPTIONAL, same rule as `encrypt`.
     decrypt?: string;
   };
+  /**
+   * What this deployment's actions can do beyond their CIDs. OPTIONAL: an
+   * older document says nothing, which a reader treats as "no capability
+   * advertised". `unsignedRender` is set once the render action reads the
+   * `unsigned` input, letting the safe-app refuse the decrypting preview on a
+   * publication pinned to an action that cannot.
+   */
+  capabilities?: {
+    unsignedRender?: boolean;
+  };
 }
 
 // ============================================================================

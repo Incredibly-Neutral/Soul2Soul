@@ -84,7 +84,8 @@ const MANIFEST_VERSIONED_ABI = [
  *
  *   version, gateway, ensRegistry, ensRecords, publicationFactory,
  *   recordsFactory, pkp, litActions{prep, render, update,
- *   maintainCache?, repointArchive?, encrypt?, decrypt?}
+ *   maintainCache?, repointArchive?, encrypt?, decrypt?},
+ *   capabilities?{unsignedRender?}
  *
  * Optional action CIDs are omitted when the action was never written, never
  * present as an empty string. There is no fallback: an empty module, unparsable
@@ -178,6 +179,7 @@ export const getManifest = async (
       encrypt: manifest.litActions.encrypt,
       decrypt: manifest.litActions.decrypt,
     },
+    capabilities: manifest.capabilities,
   };
 };
 

@@ -61,6 +61,12 @@ export interface SingleInput {
   publication: string;
   configCid?: string;
   preview?: boolean;
+  /**
+   * True when the render is unsigned: no PKP signature, no on-chain write.
+   * Dev and preview set it; publish does not. Optional because the deployed
+   * render actions predate it.
+   */
+  unsigned?: boolean;
   maintainCache?: boolean;
   // The id(s) the caller rendered (the orchestrator's contentIds). The render
   // action scopes its on-chain hasAgreement revoke check to these ids ONLY — a
