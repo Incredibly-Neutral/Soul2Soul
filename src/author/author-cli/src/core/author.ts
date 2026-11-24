@@ -28,6 +28,7 @@ import {
 import { canPreview } from '@s2s/soul2soul-shared/gates';
 import type { ParsedNote, S2SContentBody, S2SManifest } from '@s2s/soul2soul-shared';
 import type { PublicInputV2 } from '@s2s/soul2soul-shared';
+import { S2SPublicationModuleV0_1 } from '@s2s/publication-contracts';
 import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
@@ -56,7 +57,11 @@ import {
 } from './drafts';
 import { ipfsUri } from '../lib/ipfs-link';
 import { manifestFor, type CliContext } from './context';
-import { choosePreviewMode, type PreviewModeChoice } from './preview-mode';
+import {
+  choosePreviewMode,
+  type PreviewModeChoice,
+  type RenderEncryption,
+} from './preview-mode';
 import { PublicationService, type AuthorListing } from './service';
 
 // ===========================================================================
@@ -96,20 +101,6 @@ export interface RenderOutcome {
   rootTx: RootTxOutcome | undefined;
   /** Raw update-action trace: node list, previous root, new root, write result. */
   trace: unknown[];
-}
-
-/**
- * The encryption state the render mode is chosen from.
- *
- * `publish` renders this run's upload, so the local note's flag is the right
- * one. A preview renders the publication's current version, which is the
- * previously offered body: the flag comes from that item, and a failed read is
- * reported as `unreadable` rather than guessed at.
- */
-export interface RenderEncryption {
-  encrypted: boolean;
-  /** Present only when a preview could not read the published version's state. */
-  unreadable?: { reason: string };
 }
 
 /**
@@ -554,13 +545,11 @@ export async function authorWrite(
       objectId,
       author.address,
       opts,
-      // A preview renders the publication's current version, not this upload: its
-      // encryption flag is the published item's, read the way the downgrade
-      // guard reads it. Publish renders this run's upload, so the local flag is
-      // the right one.
-      opts.publish
-        ? { encrypted: parsed.encryption }
-        : await publishedVersionEncryption(ctx, parsed, notePath),
+      // The renderer reads the publication's latest entry on a preview and this
+      // upload on a publish, so the encryption state comes from the matching
+      // source; `renderEncryption` is that branch. The note's frontmatter `cid`
+      // is not the source: it records the last write, not the latest entry.
+      await renderEncryption(ctx, service, objectId, notePath, parsed, opts.publish),
     );
   }
 
@@ -881,6 +870,22 @@ function describePreviousReadFailure(err: unknown): { reason: string; remedy: st
   };
 }
 
+/**
+ * Why the item named by the publication's latest entry could not be read.
+ * The cid is the module's, not the note's frontmatter, so the message says so.
+ */
+function describeLatestReadFailure(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const status = /Failed to fetch from IPFS:\s*(\d{3})\b/.exec(message)?.[1] ?? '';
+  if (status.startsWith('4')) {
+    return `the cid the publication records does not resolve (${message})`;
+  }
+  if (/abort|timeout/i.test(message)) {
+    return `the gateway read timed out (${message})`;
+  }
+  return `the gateway could not be reached (${message})`;
+}
+
 // ===========================================================================
 // Render pipeline
 // ===========================================================================
@@ -888,47 +893,84 @@ function describePreviousReadFailure(err: unknown): { reason: string; remedy: st
 /**
  * The encryption state of the version a preview will render.
  *
- * A preview makes no offer, so the renderer reads the publication's CURRENT
- * version for the genesis, not the bytes this run uploaded. Taking the flag
- * from the local note would let a note marked plaintext over a published
- * ciphertext version read as plaintext, skip the gate, and render a revoked
- * page. The read is the one `guardEncryptionDowngrade` already makes: the
- * recorded CID, fetched and parsed by `fetchStoredItem`, classified by
- * `describePreviousReadFailure`. A failed read is never a guess: it becomes the
- * unreadable state, and the mode falls back to `dev` with a line saying why.
+ * A preview makes no offer, so the renderer reads the publication's LATEST
+ * entry for the genesis (`prep` calls `getLatest` and cats that cid), not the
+ * bytes this run uploaded and not the frontmatter `cid`. The frontmatter only
+ * matches when the last write was the last offer; a later write leaves it
+ * stale. Taking the flag from the note would let a note marked plaintext over
+ * a published ciphertext entry read as plaintext, skip the gate, and render a
+ * revoked page. The entry's cid is fetched and parsed by `fetchStoredItem`; a
+ * failed read is never a guess, it becomes the unreadable state.
  */
 export async function publishedVersionEncryption(
   ctx: CliContext,
-  parsed: ParsedNote,
+  service: PublicationService,
+  genesis: string,
   notePath: string,
-): Promise<RenderEncryption> {
-  const identity = parsed.genesis ?? parsed.contentId;
-  const previousCid = resolveKuboCid(undefined, parsed.frontmatter) ?? '';
-  if (typeof identity !== 'string' || identity.trim() === '' || previousCid === '') {
+): Promise<Pick<RenderEncryption, 'published' | 'unreadable'>> {
+  const module = service.publicationModule;
+  if (!module) {
+    return { unreadable: { reason: 'the publication module is not resolved' } };
+  }
+
+  let cid: string;
+  try {
+    const entry = await ctx.l2.readContract({
+      address: module,
+      abi: S2SPublicationModuleV0_1,
+      functionName: 'getLatest',
+      args: [toBytes32Id(genesis) as `0x${string}`],
+    });
+    cid = entry.cid;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
-      encrypted: false,
-      unreadable: { reason: 'the note records no published version to read' },
+      unreadable: { reason: `the publication's latest entry could not be read (${message})` },
     };
+  }
+  if (!cid) {
+    return { unreadable: { reason: 'the publication records no version for this genesis yet' } };
   }
 
   try {
-    const stored = await fetchStoredItem(ctx.ipfs, previousCid, notePath);
-    return { encrypted: stored.encryption };
+    const stored = await fetchStoredItem(ctx.ipfs, cid, notePath);
+    return { published: { encrypted: stored.encryption } };
   } catch (err) {
-    return { encrypted: false, unreadable: { reason: describePreviousReadFailure(err).reason } };
+    return { unreadable: { reason: describeLatestReadFailure(err) } };
   }
+}
+
+/**
+ * The encryption state handed to the renderer: publish renders this upload, so
+ * the local note's flag is the source; a preview renders the publication's
+ * latest entry, so the module read is. This is the branch that chooses between
+ * the two, and it is separate so the choice can be tested without a write.
+ */
+export async function renderEncryption(
+  ctx: CliContext,
+  service: PublicationService,
+  genesis: string,
+  notePath: string,
+  note: ParsedNote,
+  publish: boolean,
+): Promise<RenderEncryption> {
+  if (publish) return { noteEncrypted: note.encryption };
+  return {
+    noteEncrypted: note.encryption,
+    ...(await publishedVersionEncryption(ctx, service, genesis, notePath)),
+  };
 }
 
 /**
  * The render mode for this run, and the line to print when a preview has to
  * fall back to the cheap runner.
  *
- * Only a preview of an encrypted note asks the chain: publish names its own
- * mode, a plaintext preview never decrypts, and an unreadable published
- * version cannot be guessed at. Admission is asked through shared's
- * `canPreview`, never answered here, so the CLI and the decrypt action read the
- * same offer, agreement and drafts rules. A `canPreview` that throws means the
- * CLI could not ask at all; that is its own line, not a refusal.
+ * Only a preview of a ciphertext version asks the chain: publish names its own
+ * mode, a plaintext version never decrypts, and an unreadable version cannot
+ * be guessed at. Admission is asked through shared's `canPreview`, never
+ * answered here, so the CLI and the decrypt action read the same offer,
+ * agreement and drafts rules. A `canPreview` that throws means the CLI could
+ * not ask at all; that is its own line, not a refusal.
  */
 export async function previewMode(
   ctx: CliContext,
@@ -939,13 +981,14 @@ export async function previewMode(
   protocolInfo: S2SManifest,
 ): Promise<PreviewModeChoice> {
   const unsignedRender = protocolInfo.capabilities?.unsignedRender === true;
-  const { encrypted, unreadable } = encryption;
+  const { noteEncrypted, published, unreadable } = encryption;
   const signerAddress = ctx.eoaAddress;
 
-  if (publish || unreadable || !encrypted) {
+  if (publish || unreadable || !published?.encrypted) {
     return choosePreviewMode({
       publish,
-      encrypted,
+      noteEncrypted,
+      published,
       unreadable,
       admitted: false,
       unsignedRender,
@@ -975,7 +1018,8 @@ export async function previewMode(
 
   return choosePreviewMode({
     publish,
-    encrypted,
+    noteEncrypted,
+    published,
     admitted,
     unsignedRender,
     signerAddress,
@@ -989,7 +1033,7 @@ export async function renderContent(
   objectId: string,
   authorSafeAddress: Address,
   opts: AuthorWriteOptions,
-  /** The encryption state of the version the renderer will read. */
+  /** What is known about the encryption of the version the renderer will read. */
   encryption: RenderEncryption,
 ): Promise<RenderOutcome> {
   const signature = await ctx.signer.signMessage('lit actions auth');
@@ -1253,7 +1297,7 @@ export async function revokeContent(
         },
       ],
     },
-    { encrypted: parsed.encryption },
+    { noteEncrypted: parsed.encryption },
   );
 
   // The update action decides the removal after the fact: it skips the path

@@ -13,17 +13,30 @@
 
 import type { RenderMode } from '@s2s/soul2soul-shared';
 
-export interface PreviewModeInputs {
+/** The version the renderer will read, when it could be read at all. */
+export interface PublishedVersion {
+  encrypted: boolean;
+}
+
+/**
+ * What is known about encryption before the mode is chosen.
+ *
+ * `noteEncrypted` is the local note's flag. It does not choose the mode: a
+ * preview renders the published version, so `published` does. It only decides
+ * whether an unreadable published version is worth a line.
+ */
+export interface RenderEncryption {
+  /** The local note's encryption flag. */
+  noteEncrypted: boolean;
+  /** The version the renderer reads, when the publication's entry was readable. */
+  published?: PublishedVersion;
+  /** Set when the version the renderer would read could not be read. */
+  unreadable?: { reason: string };
+}
+
+export interface PreviewModeInputs extends RenderEncryption {
   /** `publish` names its own mode; the other facts are then unused. */
   publish: boolean;
-  /**
-   * The encryption state of the version the renderer will read. For publish
-   * that is this run's upload; for a preview it is the version already on the
-   * publication, which is not necessarily the local note.
-   */
-  encrypted: boolean;
-  /** Set when a preview could not read the published version's state. */
-  unreadable?: { reason: string } | undefined;
   /** Did shared's `canPreview` admit this signer for this genesis? */
   admitted: boolean;
   /** Does the PINNED manifest advertise `capabilities.unsignedRender`? */
@@ -41,8 +54,8 @@ export interface PreviewModeChoice {
 /**
  * A publication whose pinned render action predates the `unsigned` input would
  * sign its own preview page, so shared's renderer refuses `preview` there. The
- * fix is a pin, and the release that carries it is not named here because no
- * release notes file records a version with the capability yet.
+ * fix is a pin. The number is not named because 0.1.4 is still unfiled: the
+ * release notes describe it, but no pin records it yet.
  */
 export const UNSIGNED_PREVIEW_NOTICE =
   'the publication pins a render action that predates unsigned previews — pin a newer release to decrypt on Lit';
@@ -59,29 +72,38 @@ export function previewRefusedNotice(signerAddress: string): string {
   );
 }
 
-/** A preview must not guess the published version's state, so it says it could not read it. */
+/**
+ * A preview must not guess the published version's state, so it says it could
+ * not read the version it would render. "Nothing was decrypted" holds in every
+ * case this prints: the note is ciphertext and the dev runner has no key.
+ */
 export function previousStateUnreadableNotice(reason: string): string {
-  return `the published version's encryption state could not be read (${reason}), so nothing was decrypted`;
+  return `the version this preview would render could not be read (${reason}), so nothing was decrypted`;
 }
 
 /**
  * Choose the render mode for this run.
  *
- *   - publish                            → `publish`
- *   - the published version is unreadable → `dev` + the unreadable line
- *   - preview, plaintext                 → `dev` (the cheap runner stays)
- *   - preview, encrypted, admitted,
- *     unsigned render advertised         → `preview` (decrypt on Lit)
- *   - preview, encrypted, admitted,
- *     no unsigned render                 → `dev` + the pin line
- *   - preview, encrypted, refused        → `dev` + the address-specific line
+ *   - publish                                  → `publish`
+ *   - the version could not be read,
+ *     and the note is plaintext                → `dev`, silently: no key was needed
+ *   - the version could not be read,
+ *     and the note is ciphertext               → `dev` + the unreadable line
+ *   - the published version is plaintext       → `dev` (the cheap runner stays)
+ *   - the published version is ciphertext,
+ *     admitted, unsigned render advertised     → `preview` (decrypt on Lit)
+ *   - the published version is ciphertext,
+ *     admitted, no unsigned render             → `dev` + the pin line
+ *   - the published version is ciphertext,
+ *     refused                                  → `dev` + the address-specific line
  */
 export function choosePreviewMode(inputs: PreviewModeInputs): PreviewModeChoice {
   if (inputs.publish) return { mode: 'publish' };
   if (inputs.unreadable) {
+    if (!inputs.noteEncrypted) return { mode: 'dev' };
     return { mode: 'dev', notice: previousStateUnreadableNotice(inputs.unreadable.reason) };
   }
-  if (!inputs.encrypted) return { mode: 'dev' };
+  if (!inputs.published?.encrypted) return { mode: 'dev' };
   if (inputs.admitted && inputs.unsignedRender) return { mode: 'preview' };
   if (inputs.admitted) return { mode: 'dev', notice: UNSIGNED_PREVIEW_NOTICE };
   return { mode: 'dev', notice: previewRefusedNotice(inputs.signerAddress) };
