@@ -8,7 +8,7 @@
  *                                     rebuild of unchanged code keeps its CID)
  *   2. a group named s2s@<version> exists on the Lit AccountConfig
  *   3. the manifest module carries a document for <version>
- *   4. a publication's records module pins <version>   (when a publication is named)
+ *   4. a publication's records module pins <version>   (the one named by TEST_PUBLICATION)
  *
  * It proposes one Safe batch per run and stops, because each step is a separate
  * signature. Re-running after the approval continues at the first false fact. A
@@ -20,12 +20,15 @@
  *
  * Order matters within a step and not across them: the document names CIDs, not
  * a group id, and a publication pin only means something once the document
- * exists. So the pin is proposed last, and only for a publication whose Safe the
- * signer can actually propose to.
+ * exists. So the pin is checked last. That Safe is not the protocol Safe, so the
+ * script prints the record write and leaves it to the publication's owners.
+ *
+ * The publication is `.env`'s TEST_PUBLICATION: a pin is a per-publication
+ * record, not a release step every publication takes at once.
  *
  * Usage (repo root):
  *   pnpm update-protocol 0.1.1
- *   pnpm update-protocol 0.1.1 --publication test.soul2soul.eth
+ *   pnpm update-protocol d.0.6
  *   pnpm update-protocol 0.1.1 --dry-run
  */
 import fs from 'fs';
@@ -122,7 +125,7 @@ const VERSION_PATTERN = /^(?:\d+\.\d+\.\d+|d\.\d+\.\d+)$/;
 
 const version = process.argv.find((a) => VERSION_PATTERN.test(a)) ?? null;
 if (!version) {
-  console.error('Usage: pnpm update-protocol <major.minor.patch|d.major.minor> [--publication <ens>] [--dry-run]');
+  console.error('Usage: pnpm update-protocol <major.minor.patch|d.major.minor> [--dry-run]');
   process.exit(1);
 }
 
@@ -448,7 +451,7 @@ async function documentJson(actions: Array<{ name: string; cid: string }>): Prom
 // ── Run ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const publication = flag('--publication') ?? process.env.TEST_PUBLICATION ?? null;
+  const publication = process.env.TEST_PUBLICATION ?? null;
   console.log(`version ${version}`);
   const pinned = recordedActions();
   if (!pinned) buildBundles();
@@ -495,7 +498,7 @@ async function main(): Promise<void> {
       transactions,
       what: `setManifest(${version})`,
     });
-    return next(`approve ${safeTxHash}, then re-run to pin the publication`);
+    return next(`approve ${safeTxHash}, then re-run to check the publication pin`);
   }
 
   if (pin && pin.pinned !== version) {
@@ -512,7 +515,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log(`\nnothing to propose: ${version} is group ${bound}, filed, and pinned where asked.`);
+  console.log(`\nnothing to propose: ${version} is group ${bound}, filed, and pinned.`);
 }
 
 /** The chain's view of the Safe, to compare with the nonce the batch took. */
