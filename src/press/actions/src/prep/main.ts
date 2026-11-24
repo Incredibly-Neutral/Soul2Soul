@@ -6,6 +6,9 @@ import {
   S2SBody,
   S2SJob,
   S2STemplateConfig,
+  isCollectionContainer,
+  type CollectionBundleFields,
+  type S2SPublicationConfig,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { getManifest } from '../libs/protocol.factory';
@@ -21,6 +24,7 @@ import { requireFields, setRpcAuth } from '../libs/helpers';
 import { catFile } from '../libs/ipfs.factory';
 import { storedBody } from '../libs/item-integrity';
 import { createPath } from '../libs/paths';
+import { planCollectionJobs } from './collection-plan';
 import { rippleFiresForBody } from './ripple-gate';
 
 const ACTION = 'prep';
@@ -126,6 +130,21 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
           templateData: undefined,
           html: '',
         });
+      }
+
+      // A collection bundle is also a folder of pages: each member gets the job
+      // its own template earns, and a member that is gone or moved loses the
+      // page it used to occupy. The bundle's own job stays first; a bundle with
+      // no members adds no member job and still renders.
+      if (isCollectionContainer(body as { mediaType?: string })) {
+        const plan = planCollectionJobs({
+          config: config as S2SPublicationConfig,
+          body: body as CollectionBundleFields,
+          oldBody: oldBody as CollectionBundleFields | null,
+        });
+        jobs.push(...plan.jobs);
+        for (const entry of plan.remove)
+          if (!remove.some((r) => r.path === entry.path)) remove.push(entry);
       }
 
       if (contentIds.length === 1) {
