@@ -1,7 +1,9 @@
 // ============================================================================
-// s2s author preview <note> — upload + preview render (Bun runner).
-// Off-chain: ipfs upload + a preview render via the Bun runner; no on-chain
-// offer and no prod mutation (SPEC-author-hosts AD-4).
+// s2s author preview <note> — upload + a preview of the publication's current
+// version.
+// An admitted encrypted note renders on Lit so its body can be decrypted when
+// the pinned action runs unsigned; everything else stays on the dev runner.
+// Off-chain: no on-chain offer and no prod mutation (SPEC-author-hosts AD-4).
 // ============================================================================
 
 import type { CommandSpec } from '../lib/command';
@@ -12,7 +14,8 @@ import { NOTE_FLAGS } from './flags';
 
 export const preview: CommandSpec = {
   name: 'preview',
-  summary: 'Upload a note and render a preview (Bun runner, no on-chain offer, no prod mutation).',
+  summary:
+    "Upload a note and preview the publication's current version (Lit for an admitted encrypted note, dev runner otherwise; no on-chain offer, no prod mutation).",
   params: '<note>',
   flags: NOTE_FLAGS,
   async run(ctx, args) {
