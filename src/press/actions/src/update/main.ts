@@ -445,8 +445,14 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // Remove explicitly listed paths (slug changes, revoked posts)
     if (remove && remove.length > 0) {
       trace.push(`rm ${remove.length} paths`);
-      // Build a set of job genesis ids for the replacedBy check
-      const jobGenesisSet = new Set((jobs as any[]).map((j: any) => j.id).filter(Boolean));
+      // Build a set of job genesis ids for the replacedBy check. A collection
+      // member's job carries the bundle genesis as sourceId: the bundle was
+      // updated even when its own postType mapped to no page of its own.
+      const jobGenesisSet = new Set<string>();
+      for (const job of jobs) {
+        jobGenesisSet.add(job.id);
+        if (job.sourceId) jobGenesisSet.add(job.sourceId);
+      }
       await Promise.all(
         (remove as any[]).map(async (entry: { path: string; replacedBy?: string }) => {
           let cleanPath: string;
