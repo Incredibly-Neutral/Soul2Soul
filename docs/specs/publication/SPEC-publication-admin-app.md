@@ -131,14 +131,15 @@ version table. A factory that answers nothing is refused, not worked around: the
 expected and stops. Nothing in the app reads a version and nothing falls back to an older module's
 verb set.
 
-**Preview:** each deal row and each offer row carries one render action, Preview, beside its publish step, and it
+**Preview:** each deal row and each offer row carries one render action, Preview, beside its decision
+controls, and it
 opens `previewLink(cid, path)` in a new tab opened inside the click, before any await, so the popup is not
-blocked. Preview (`mode: 'preview'`) runs the render stage on Lit so a gated body decrypts, unsigned, with
-no on-chain write, and returns the real tree and CIDs. It is offered for an encrypted or unencrypted
+blocked. Preview (`mode: 'preview'`) runs the render stage on Lit so a gated body decrypts through
+`canPreview`, unsigned, with no on-chain write, and returns the real tree and CIDs. It is offered for an encrypted or unencrypted
 row, and for an offer as well as a deal: the publication's owner or a listed reviewer reads the
 manuscript before accepting. It is refused unless the pinned manifest document it renders from advertises
 `capabilities.unsignedRender`, and an offer row additionally needs `capabilities.offerPreview`, the
-press-side gate the sibling release adds beside it; a publication that has not moved its
+flag the sibling release writes beside it; a publication that has not moved its
 `manifest_version` record still reads the older document. `unsignedRender` is required in every case
 because the shared layer throws without it, and an absent flag reads as false; each missing flag disables
 the button with a title naming the pin. A successful envelope with an empty path is a failure: the tab
@@ -235,3 +236,6 @@ preview link), INV-10 (mutations are proposals), INV-11 (`assetsCid` producer).
   `publicationConfigSchema` and that `mapping` passes through unchanged.
 - `qa/qa.mjs`: five tabs, no page errors (already the regression net).
 - Row rendering: a gateway that 404s one item leaves a present-but-blank row, not a failed table.
+- Preview control: a manifest with `unsignedRender` only enables a deal row and disables an offer row,
+  the title naming the pin; a manifest with neither disables both. A blocked popup leaves the
+  "Open preview" link, and a preview per row runs one at a time.

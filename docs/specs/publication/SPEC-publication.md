@@ -44,6 +44,11 @@ A publication MUST be able to read any manuscript offered to it, through the rev
 authorised, from the moment the manuscript is offered until it declines it or the author withdraws
 it. The right ends when the offer ends; nothing already read is recalled.
 
+Note (this implementation): the press's preview gate, `canPreview`, is that reading. It admits a
+listed reviewer through the module's `canReview` and an owner of the publication Safe, and it
+requires an agreement or an offer, so the right ends when the offer does. Publishing keeps the
+author-side gate, `canRead`.
+
 ## PUBLICATION-6 — decline, and end from its side, at once
 
 A publication MUST be able to decline any manuscript, and to end any agreement from its side, with
@@ -109,12 +114,6 @@ Read against `src/publication/` (contracts), `src/press/actions` (the press),
 
 ## Gaps without a proposal
 
-- **PUBLICATION-5 — an offer cannot be reviewed.** The only decryption gate is the press's
-  `canRead`, which asks the module's `canRead(genesis, safe)` and then its own author check. The
-  module admits an offer, so the manuscript's own author can open one; a reviewer cannot, because
-  the author check wants an owner of the author Safe. `hasOffer` exists on the contract and no gate
-  reads it on this path. Reviewers can see that an offer exists and what its latest CID is, but
-  cannot open it — which makes "wait for review" a queue nobody can review.
 - **PUBLICATION-9 — there is no way to leave.** Nothing in the contracts implements a departure:
   no per-publication release of name control, no opt-out. And the name's record store is
   single-tenant by construction — one owner, one `protocolAddress`, per-node authorisation — so

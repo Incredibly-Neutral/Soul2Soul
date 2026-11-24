@@ -169,8 +169,9 @@ a label: it is unsigned, so any relayer can rewrite it.
 
 ## Gaps without a proposal
 
-- **PRESS-7 is unbuilt.** Nothing in the press encrypts a rendered page; `canRead` is checked before
-  *decryption*, and the resulting HTML is uploaded and pinned in the clear. A monetized manuscript is
+- **PRESS-7 is unbuilt.** Nothing in the press encrypts a rendered page; the gate is checked before
+  *decryption* (`canRead`, or `canPreview` on a preview), and the resulting HTML is uploaded and pinned
+  in the clear. A monetized manuscript is
   therefore protected where it is stored and not where it is read: the page that carries it is
   public, and the reader gate never sees it. The invariant stands; the implementation is behind it.
 - **PRESS-6 is unbuilt for configuration.** The renderer prefers the config recorded on the module
