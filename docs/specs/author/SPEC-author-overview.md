@@ -40,8 +40,8 @@ driving the same pure orchestration out of `shared`, with its own thin adapters.
   EIP-712 digest of that public part and **exists before publication** — it is derived from local
   bytes, and no CID is needed to compute it (`shared/src/identity/sign-content.ts`).
 - `plaintextHash` (keccak over the canonical body) lives **inside** the signed public metadata,
-  while the body itself does not — that is what lets an offer commit to a document nobody can read
-  yet.
+  while the body itself does not — that is what lets an offer commit to a document whose body stays
+  encrypted until a gate admits a reader.
 - `proof.signer` is the **EOA** (the key that signed); `author` is the **author Safe's bare `0x`
   address** (the identity that may publish). These are deliberately different fields — see the actor
   invariant below.

@@ -62,7 +62,7 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 | path                                                                                                                           | role                                                                                                             |
 | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `components/s2s-app.ts`                                                                                                        | root element; five tabs; reads the site root via `getText(node, "contenthash_wrapped")`; boots `FilecoinStorage` |
-| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions (Dev, Preview, Publish/Remove page), Sync site with a dev/publish toggle |
+| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions (Preview, Publish/Remove page), Sync site with a dev/publish toggle |
 | `components/s2s-whitelist-tab.ts`                                                                                              | author/dev lists                                                                                                 |
 | `components/s2s-records-tab.ts`                                                                                                | view/edit records; config + asset build entry; alias editing                                                     |
 | `components/s2s-storage-tab.ts`                                                                                                | CID inventory + Filecoin storage/Data-Sets tables, piece delete, dataset terminate                               |
@@ -131,21 +131,20 @@ version table. A factory that answers nothing is refused, not worked around: the
 expected and stops. Nothing in the app reads a version and nothing falls back to an older module's
 verb set.
 
-**Dev, preview, publish:** each deal row and each offer row carries two render actions beside its publish step,
-and both open `previewLink(cid, path)` in a new tab opened inside the click, before any await, so the
-popup is not blocked. **Dev** (`mode: 'dev'`) is the cheap Bun-runner render — unsigned, no decrypt —
-so it is offered only for an unencrypted row, and an encrypted row shows it disabled with a title
-saying the runner has no key. **Preview** (`mode: 'preview'`) runs the render stage on Lit so a gated
-body decrypts, unsigned, with no on-chain write, and returns the real tree and CIDs; it is offered
-for an encrypted or unencrypted row and refused unless the manifest document it renders from
-advertises `capabilities.unsignedRender` — a publication that has not moved its `manifest_version`
-record still reads the older document — because the shared layer throws in that case and the UI must
-not offer what throws; the title says the pinned action predates unsigned renders and to pin a newer
-release. On an offer both buttons are rendered and disabled: the render action treats a triggered
-genesis with no agreement as revoked, so the page is removed rather than written and the envelope
-comes back with no path. A successful envelope with an empty path is a failure in both modes, and
-the tab closes the tab it opened and reports. When the browser blocks the popup, the row keeps an
-“Open preview” link under either mode's button.
+**Preview:** each deal row and each offer row carries one render action, Preview, beside its decision
+controls, and it
+opens `previewLink(cid, path)` in a new tab opened inside the click, before any await, so the popup is not
+blocked. Preview (`mode: 'preview'`) runs the render stage on Lit so a gated body decrypts through
+`canPreview`, unsigned, with no on-chain write, and returns the real tree and CIDs. It is offered for an encrypted or unencrypted
+row, and for an offer as well as a deal: the publication's owner or a listed reviewer reads the
+manuscript before accepting. It is refused unless the pinned manifest document it renders from advertises
+`capabilities.unsignedRender`, and an offer row additionally needs `capabilities.offerPreview`, the
+flag the sibling release writes beside it; a publication that has not moved its
+`manifest_version` record still reads the older document. `unsignedRender` is required in every case
+because the shared layer throws without it, and an absent flag reads as false; each missing flag disables
+the button with a title naming the pin. A successful envelope with an empty path is a failure: the tab
+closes the tab it opened and reports. When the browser blocks the popup, the row keeps an “Open
+preview” link under the button. One preview runs per row at a time.
 
 **Sync site:** one button, two behaviours, the same `renderwithLitActions` call with the toolbar toggle choosing
 `dev` or `publish`. A dev sweep drops encrypted items; a publish sweep keeps them. The item list is
@@ -237,3 +236,6 @@ preview link), INV-10 (mutations are proposals), INV-11 (`assetsCid` producer).
   `publicationConfigSchema` and that `mapping` passes through unchanged.
 - `qa/qa.mjs`: five tabs, no page errors (already the regression net).
 - Row rendering: a gateway that 404s one item leaves a present-but-blank row, not a failed table.
+- Preview control: a manifest with `unsignedRender` only enables a deal row and disables an offer row,
+  the title naming the pin; a manifest with neither disables both. A blocked popup leaves the
+  "Open preview" link, and a preview per row runs one at a time.

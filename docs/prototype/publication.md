@@ -28,7 +28,7 @@ A publication can add an alias: a .eth name it buys and owns itself. It wraps th
 
 ## Permissions
 
-The owners keep three lists, recorded in the publication module and managed from the app. Each names the people the publication trusts with one thing. Authors on the author list take the fast track: what they offer becomes an agreement at once, while anyone else's offer waits for the owners to admit or decline it. Developers on the developer list can preview their work while they design new templates. Reviewers on the reviewer list can read the manuscripts offered to the publication. The gates read these lists from the module when they decide who can publish and who can read, so access follows the record on Base and nothing else.
+The owners keep three lists, recorded in the publication module and managed from the app. Each names the people the publication trusts with one thing. Authors on the author list take the fast track: what they offer becomes an agreement at once, while anyone else's offer waits for the owners to admit or decline it. Developers on the developer list may publish, so a template can be tried on a real page; their work still counts as an offer until the owners admit it. Reviewers on the reviewer list, and the publication's own owners, can preview an offered manuscript before accepting it. The gates read these lists from the module when they decide who can publish, who can review and who can read, so access follows the record on Base and nothing else.
 
 ## Templates and design
 
@@ -64,5 +64,5 @@ An excerpt from a publication's mapping. The home page lists the posts in a coll
 - **One owner or the threshold.** A publication decides which acts any single owner can take, such as admitting or declining a manuscript, and which need the Safe's full threshold, such as changing the lists, the config or the module.
 - **Its own IPFS services.** A publication configures the IPFS services its content is stored and pinned on.
 - **Invited authors.** A publication sends an author an invite, and only invited authors can make offers.
-- **A reading interface for reviewers.** Reviewers on the reviewer list read the manuscripts offered to the publication in an interface made for it.
+- **Review, in a place of its own.** A reviewer previews an offered manuscript from the deals row today; a surface made for reading, with access scoped to one manuscript and a record of who read it, is not built.
 - **No upgradeability.** The publication module becomes immutable, one per publication, and a new version is deployed and enabled rather than upgraded in place. The code a reader can check is then the code that runs.

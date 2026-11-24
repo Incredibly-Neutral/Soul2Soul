@@ -194,7 +194,9 @@ Two lists, both `onlySafe` to modify, both capped, both enumerable:
 - Removal does **not** revoke deals, retract offers, or affect the version log. It withdraws the
   privilege, not the history.
 - `canPublish(addr)` = `addr == safe ∨ whitelisted dev ∨ whitelisted author`. It is an **address**
-  check, so a Safe *owner* EOA does not pass. There is no reviewer list and no reviewer role.
+  check, so a Safe *owner* EOA does not pass. The reviewer list is separate and grants no publish
+  right: `setReviewer` (cap 20, `onlySafe`) is read by the module's `canRead` and `canReview`, never
+  by `canPublish`.
 
 ## Corrections to the folded spec
 

@@ -30,12 +30,17 @@ import { requireFields, setRpcAuth } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
 
 /**
- * On-chain revoke check: is `jobId`'s genesis currently NOT under an agreement?
+ * On-chain revoke check: is `jobId`'s genesis currently out of force?
  *
- * Conservative by design (reviewer C/G): this returns true ONLY when
- * hasAgreement is definitively false — a genuine on-chain revoke. On any RPC
- * failure it returns false (treat as still active) so a transport error can
- * never turn a live page into a revoked-and-removed one; the orchestrator's
+ * A publish run asks only `hasAgreement`: the published tree is built from the
+ * agreements in force, so agreement false is a revoke. A preview run asks
+ * `hasOffer` as well: an offer is not a revoke. The genesis is out of force
+ * only when neither an agreement nor an offer holds it.
+ *
+ * Conservative by design (reviewer C/G): revoked is answered ONLY on
+ * definitive `false` answers — a genuine on-chain revoke. On any RPC failure it
+ * returns false (treat as still active) so a transport error can never turn a
+ * live page into a revoked-and-removed one; the orchestrator's
  * runRenderActionWithRetry handles transient RPC failures. Mirrors the
  * established evmRead pattern in libs/gates.ts (canRead).
  */
@@ -43,11 +48,11 @@ export async function isRevokedByAgreementState(
   jobId: string,
   publicationModule: string,
   rpcs?: string[],
+  preview = false,
 ): Promise<boolean> {
   const genesis = toBytes32Id(jobId);
-  let agreementActive = true;
-  try {
-    agreementActive = await evmRead(
+  const hasAgreement = () =>
+    evmRead(
       'L2',
       publicationModule,
       ['function hasAgreement(bytes32 genesis) view returns (bool)'],
@@ -55,12 +60,40 @@ export async function isRevokedByAgreementState(
       [genesis],
       rpcs,
     );
-  } catch (e) {
-    console.log(
-      `hasAgreement read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
-    );
+
+  if (!preview) {
+    let agreementActive = true;
+    try {
+      agreementActive = await hasAgreement();
+    } catch (e) {
+      console.log(
+        `hasAgreement read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    return !agreementActive;
   }
-  return !agreementActive;
+
+  // Preview: an open offer is live too. Read both, and let a failure on either
+  // answer keep the page live rather than revoke it.
+  const [agreement, offer] = await Promise.allSettled([
+    hasAgreement(),
+    evmRead(
+      'L2',
+      publicationModule,
+      ['function hasOffer(bytes32 genesis) view returns (bool)'],
+      'hasOffer',
+      [genesis],
+      rpcs,
+    ),
+  ]);
+  if (agreement.status === 'rejected' || offer.status === 'rejected') {
+    const failed = agreement.status === 'rejected' ? agreement.reason : offer.reason;
+    console.log(
+      `hasAgreement/hasOffer read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${failed instanceof Error ? failed.message : String(failed)}`,
+    );
+    return false;
+  }
+  return agreement.value === false && offer.value === false;
 }
 
 // ENS records contract ABI (getText only) — local mirror of update/main.ts;
@@ -270,6 +303,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       publicationModule,
       rpcs?.L2,
       config.localePaths,
+      { preview },
     );
     trace.push(templateData);
 
@@ -305,7 +339,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     //      failures.
     const triggeredIds: string[] = triggeredContentIds ?? [];
     if (triggeredIds.includes(job.id) && !templateData.revoked && templateData.path) {
-      if (await isRevokedByAgreementState(job.id, publicationModule, rpcs?.L2)) {
+      if (await isRevokedByAgreementState(job.id, publicationModule, rpcs?.L2, preview)) {
         console.log(`hasAgreement false for ${job.id.slice(0, 12)}… — treating as revoked`);
         templateData.revoked = true;
       }
@@ -368,6 +402,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
                   publicationModule,
                   signerAddress,
                   rpcs?.L2,
+                  { preview },
                 );
                 if (!d) {
                   const errorMsg = `Failed to decrypt item ${item.id || 'unknown'}`;

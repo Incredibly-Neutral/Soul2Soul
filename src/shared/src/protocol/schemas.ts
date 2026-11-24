@@ -36,10 +36,13 @@ export const manifestSchema = z.object({
   // What the deployment's actions can do beyond their CID. Optional and
   // absent-tolerant: an older document says nothing, and a reader must treat
   // that as "no capability advertised". `unsignedRender` is set once the
-  // render action reads the `unsigned` input (release 0.1.4).
+  // render action reads the `unsigned` input (release 0.1.4). `offerPreview` is
+  // set when that render action also gates decryption on `canPreview`, so an
+  // offer can be previewed before it is accepted.
   capabilities: z
     .object({
       unsignedRender: z.boolean().optional(),
+      offerPreview: z.boolean().optional(),
     })
     .optional(),
 });

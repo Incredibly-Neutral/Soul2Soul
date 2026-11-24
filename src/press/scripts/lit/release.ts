@@ -440,8 +440,9 @@ async function documentJson(actions: Array<{ name: string; cid: string }>): Prom
   });
   const current = JSON.parse(json) as Record<string, unknown>;
   // The render action released from this build reads `unsigned`, so a preview
-  // can skip provenance instead of signing the page. Carry any capabilities
-  // the current document already advertises and add this one.
+  // can skip provenance instead of signing the page, and it gates decryption on
+  // `canPreview`, so an offer may be previewed before it is accepted. Carry any
+  // capabilities the current document already advertises and add these two.
   const currentCapabilities =
     current.capabilities &&
     typeof current.capabilities === 'object' &&
@@ -454,7 +455,7 @@ async function documentJson(actions: Array<{ name: string; cid: string }>): Prom
     litActions: Object.fromEntries(
       actions.map((a) => [a.name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase()), a.cid]),
     ),
-    capabilities: { ...currentCapabilities, unsignedRender: true },
+    capabilities: { ...currentCapabilities, unsignedRender: true, offerPreview: true },
   });
 }
 

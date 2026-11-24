@@ -82,6 +82,7 @@ export interface S2SManifest {
    */
   capabilities?: {
     unsignedRender?: boolean;
+    offerPreview?: boolean;
   };
 }
 

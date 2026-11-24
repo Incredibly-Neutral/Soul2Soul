@@ -33,6 +33,19 @@ Safe and a reviewer Safe are holders, not authors, and a holder may ask for a bu
 they do not own (GATES-4). `canAuthor` asks only the ownership question, since a draft was never
 offered and no agreement is involved.
 
+The preview gate is `canPreview`, beside `canRead` and `canReview`. It admits two identities: a
+listed reviewer, by the contract's `canReview(genesis, who)`, which already requires the genesis to
+sit under an agreement or an offer; or an owner of the publication Safe, taken from the module's own
+`safe()` getter and asked live through `isOwner`, while `hasAgreement` or `hasOffer` is true, so a
+publication owner cannot open a manuscript that was never offered to them. It never asks
+`canAuthor`: the author-Safe ownership that `canRead` requires is not what opens a preview; a
+manuscript's own author who is neither a listed reviewer nor an owner of the publication Safe is
+refused one, though a publish's `canRead` would admit them. No failed read admits: a throw or a
+non-`true` answer refuses the question it was asked, and a `safe()` that fails or is not a usable
+address refuses the owner path alone, since a listed reviewer's yes stands without it. The render action decrypts through it when the run is a preview,
+which is what lets a publication's owner or a listed reviewer read a manuscript between the offer
+and the agreement; a publish still decrypts through `canRead`.
+
 `canAuthor` answers at the append block. Where the drafts log's `blocksOf(genesis)` gives a finite
 block above 0, the owner history answers `isOwnerAt` there: a key rotated out still reads what it
 wrote, and a key added afterwards does not read what it did not. Where the log gives 0 — a version
@@ -65,6 +78,10 @@ that.
 
 Note: what was decrypted before the end stays decrypted. The gate governs future decryption, not
 memory.
+
+Note (this implementation): that window is what the preview gate opens, to a listed reviewer through
+the contract's `canReview` and to an owner of the publication Safe through its live owner set. Both
+readings end when the offer or the agreement does.
 
 ## GATES-3 — the renderer, under an agreement, on the approved version
 

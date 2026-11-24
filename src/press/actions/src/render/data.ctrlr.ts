@@ -284,6 +284,7 @@ export const initTemplateData = async (
   publicationModule: string,
   rpcs?: string[],
   localePaths?: Record<string, string>,
+  options: { preview?: boolean } = {},
 ) => {
   if (body.encryption) {
     const decrypted = await decryptRaw(
@@ -293,6 +294,7 @@ export const initTemplateData = async (
       publicationModule,
       signerAddress,
       rpcs,
+      options,
     );
     if (!decrypted)
       return {
@@ -483,7 +485,9 @@ export interface CollectionsDrift {
  *  - the job is the designated cache maintainer: `maintainCache === true` —
  *    the zod field has NO `.default(false)`, so `undefined` must be treated
  *    as falsy (never assume it is set);
- *  - not preview (preview runs on the free Bun runner and stays read-only);
+ *  - not preview (a preview writes nothing: prep always runs on the Bun
+ *    runner, while render runs on Lit for both preview and publish, so a
+ *    preview must not fire the write-back);
  *  - the read path used the archive AND reconcile() found missing/stale items
  *    (drift > 0). Steady state (drift === 0) performs zero writes — read-only.
  *
