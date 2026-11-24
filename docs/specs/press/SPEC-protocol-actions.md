@@ -40,7 +40,7 @@ by CID, executed on Lit nodes or on the Bun runner by the render mode. Globals: 
 | Path                       | Role                                                                                                                                                              | State                                                                              |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `prep/main.ts`             | Stage 1 — build `jobs[]` from contentIds (cheap, no signing)                                                                                                      | live                                                                               |
-| `render/main.ts`           | Stage 2 — per-job: gate → decrypt → render → sign (skipped when `unsigned`) → upload HTML                                                                          | live                                                                               |
+| `render/main.ts`           | Stage 2 — per-job: gate → decrypt → render → colophon (signed on publish, no `proofValue` when `unsigned`) → upload HTML                                                                          | live                                                                               |
 | `update/main.ts`           | Stage 3 (merged) — assemble MFS tree, **remove stale paths**, pin, write root                                                                                     | live                                                                               |
 | `cbor/`                    | old root-builder                                                                                                                                                  | **gone** — merged into `update` (GAP-5 ✅); no longer in the group's permitted set |
 | `renderer/`                | Handlebars render (`renderHTML`)                                                                                                                                  | live                                                                               |
@@ -132,7 +132,9 @@ async function runAction<T>(transport: 'runner' | 'lit', lit, cid, inputs, litUs
 `renderwithLitActions` takes a `RenderMode` (`'dev' | 'preview' | 'publish'`) and routes the three
 stages: prep is runner in every mode; render is runner in `dev`, Lit in `preview` and `publish`;
 update is runner in `dev` and `preview`, Lit in `publish`. `maintain-cache` runs only on publish, on
-Lit. Retries apply on publish only; `dev` and `preview` make one attempt.
+Lit. Every mode makes a single attempt, publish included: `RENDER_RETRY_ATTEMPTS` is 1 by operator
+directive (2026-10), because each retry re-fires the Lit action and re-drains a fresh session's
+50-request budget. Fail fast; the orchestrator marks the job failed.
 
 **Two error levels, verified:** a thrown action error returns `success:true, response:{ok:false}`, so
 runner `success:false` means **transport/crash only**, action `ok:false` means **logic failure**.
@@ -216,7 +218,7 @@ location. The `remove` array flows through `renderwithLitActions` unchanged into
 | `authorSafeAddress` | `address`                                      | caller      |                                               |
 | `configCid`         | `string?`                                      | caller      |                                               |
 | `publication`       | ENS name                                       | caller      |                                               |
-| `unsigned`          | `boolean?`                                     | caller      | true for `dev` and `preview`; skips `addAndSignMetadata` so the page is uploaded as rendered. Absent/false keeps the signing attempt. Read by the render action released in 0.1.4; older actions ignore it. |
+| `unsigned`          | `boolean?`                                     | caller      | true for `dev` and `preview`; skips only the PKP key read inside `addAndSignMetadata`, so the colophon is embedded with its proof options and no `proofValue`. Absent/false keeps the signing attempt. Read by the render action released in 0.1.4; older actions ignore it. |
 
 **Produces** `{ success, timestamp, job, html, logz, errors? }` where `job.html` = CID of the
 uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt/permission failed.
@@ -235,7 +237,7 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
    admission, then ownership of the author Safe at the append block, or live ownership of the
    reader Safe it named); sets `revoked`
 7. if not revoked: `fetchCollections` → per-item `decrypt` (gated) → `renderHTML` → `addAndSignMetadata`
-   (PKP sign, INV-5) unless `unsigned` is true → `uploadFile` → CID
+   (the colophon; PKP sign unless `unsigned`, INV-5) → `uploadFile` → CID
 8. else: `job.revoked = true`, empty html/path
 
 **Network/chain:** ETHEREUM+BASE reads (modules, config, gates), Lens testnet (body/collections),
@@ -442,12 +444,13 @@ trusts it. If copy loop throws, remove loop never runs.
   passes. 1+2 together = "PKP signed _this_ HTML claiming _this_ genesis."
 - **`canonicalize` must be identical on both sides (GAP-2).** Top-level key sort, current quirk.
   Co-evolve or share the function; a one-sided GAP-2 "fix" silently breaks every sig.
-- **A non-publishing tree is unsigned by design (INV-7/GAP-6).** The render action skips
-  `addAndSignMetadata` when `unsigned` is true, so a page from `dev` or `preview` carries no proof
-  at all; a `dev` render through an older pinned action instead lets the shim's `getPrivateKey`
-  throw, and the catch returns HTML with no `proofValue`. The update action therefore enforces the
-  verify gate only on the Lit/publish path (`if (!preview)`), and the runner path copies pages
-  unverified. Bonus: preview HTML can never enter the prod tree (OPEN-TASK-2's flip side).
+- **A non-publishing tree is unsigned by design (INV-7/GAP-6).** The render action skips only
+  the PKP key read when `unsigned` is true, so a page from `dev` or `preview` carries the full
+  colophon with a proof that has no `proofValue`; a `dev` render through an older pinned action
+  instead lets the shim's `getPrivateKey` throw, and the catch emits the same proof options. The
+  update action therefore enforces the verify gate only on the Lit/publish path (`if (!preview)`),
+  and the runner path copies pages unverified. Bonus: preview HTML can never enter the prod tree
+  (OPEN-TASK-2's flip side).
 - **Copy loop succeeds before remove loop runs.** If any job fails verification the entire update
   rejects, so `jobGenesisSet` always contains verified HTML. The rename guard
   `jobGenesisSet.has(replacedBy)` transitively proves the target is verified.

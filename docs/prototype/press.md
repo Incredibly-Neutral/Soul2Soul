@@ -60,7 +60,7 @@ Update writes the new root to the publication's name in one transaction, signed 
 
 A dev render runs the same actions outside Lit, on a Bun runner that fetches each action by its CID, as Lit does, and stands in for Lit with a shim that holds no key: it can't sign and can't decrypt. So it renders only unencrypted text, its colophons carry no signature, and update never writes to the ledger. It costs nothing.
 
-A preview render makes one paid call on Lit, for the render stage only. Lit holds the key, so a gated text opens; the page still carries no signature, because the render is told to skip signing, and update runs back on the runner so nothing is written. That one call is the price of seeing a gated page before publishing it.
+A preview render pays for a Lit call on the render stage only. Lit holds the key, so a gated text opens; the page keeps its colophon and carries no signature, because the render is told not to read the key, and update runs back on the runner so nothing is written. Prep emits a job for each destination a change ripples to, so a cascade costs one call per destination, not one for the whole run.
 
 Both build and pin a real tree, at `<cid>.preview.transport-union.dev`. The address is the root's CID: no one finds the render without it, and anyone who has it can open it.
 

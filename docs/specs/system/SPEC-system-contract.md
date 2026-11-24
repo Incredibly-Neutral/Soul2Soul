@@ -133,7 +133,7 @@ client (neutralpress) ── signature over "lit actions auth"
 [SINGLE]  render/main.ts      dev: runner · preview, publish: Lit   → job.html (CID)
         │   gate: canRead/canPublish (on-chain, Base)
         │   decrypt: Lit.Actions.Decrypt (Lit only)
-        │   sign: provenance JSON-LD on publish; skipped when `unsigned` ⚠ see GAP-1
+        │   colophon: JSON-LD always; signed on publish, proof without `proofValue` when `unsigned`
         ▼
 [MERGED]  update/main.ts      dev, preview: runner · publish: Lit   → new root CID
             builds IPFS MFS tree (delta pages + cp config.assetsCid → /assets),
@@ -157,15 +157,24 @@ stage has its own transport:
 `run.transport-union.dev`, which replicates the Lit Actions **without signing** (the shim's
 `Lit.Actions.getPrivateKey` has no signing capability) and without decrypting. `preview` keeps prep
 and update on the runner but renders on Lit with `unsigned: true`, because Lit is the only runtime
-with `Lit.Actions.Decrypt` and a gated body must open; the page is still unsigned and no root is
-written. Each preview render is a paid Lit invocation. `publish` renders and updates on Lit, signed,
-with the root write.
+with `Lit.Actions.Decrypt` and a gated body must open; the page still carries the full colophon,
+unsigned, and no root is written. Each preview render is a paid Lit invocation, and prep emits one
+job per destination a change ripples to, so a cascade pays one call per destination. `publish`
+renders and updates on Lit, signed, with the root write.
 
 The action inputs keep one boolean `preview`, true for `dev` and `preview`, false for `publish`,
 because deployed actions read it. The render action released in 0.1.4 reads `unsigned` (true in dev
 and preview); absent or false keeps the signing attempt. The manifest advertises
 `capabilities.unsignedRender`, and `renderwithLitActions` refuses `preview` on a document that does
 not, because an older render action would ignore `unsigned` and sign the page.
+
+Which document that is: `getManifest()` answers the protocol's current document, and
+`getManifest(version)` answers the snapshot at `manifest@x.y.z`, which never falls back. The app
+reads the current document only to find the module factory, then re-reads at the publication's own
+`manifest_version` record when it names another version. So filing 0.1.4 does not move a publication
+that pins an older version: it keeps the older document, and its render action, until its
+`manifest_version` record names 0.1.4. Pinning per publication is the rollout step, and
+`release.ts --pin` prints the record write for the publication's Safe.
 
 **One renderer, run three ways (INV-7).** There is a *single* renderer — the action renderer in
 `protocol/actions/renderer/`. It runs on **Lit** (preview, publish) and the **Bun runner** (dev). The
@@ -176,17 +185,20 @@ drift to police) — and `website-starter` reduces to templates + assets + `mapp
 with rendering delegated outward.
 
 **Why two runtimes (design intent):** a Lit render costs ≈ **$0.20–0.50 each**, too expensive for
-an author/dev iterating on templates and content. `dev` is the **free, no-provenance** path — it
-shows an unencrypted page as it will render as HTML, minus the signed proof. `preview` pays for the
-Lit render because it is the only way to see a *gated* page open without publishing it: unsigned, no
-ledger write. `publish` is the **paid, provenance-bearing** path.
+an author/dev iterating on templates and content. `dev` is the **free, unsigned** path — it
+shows an unencrypted page as it will render as HTML, colophon included, minus the signature.
+`preview` pays for the Lit render because it is the only way to see a *gated* page open without
+publishing it: colophon without a signature, no ledger write. `publish` is the **paid,
+provenance-bearing** path.
 
-**How the same action code serves all three (INV-7 mechanism):** the render reads `unsigned` and
-skips `addAndSignMetadata` entirely when it is true, uploading the page as rendered. When the input
-is absent (a render action older than 0.1.4, or publishing) the step still runs: `addAndSignMetadata`
-wraps signing in `try/catch`, and under the Bun shim the sign throws and the catch returns the
-**unsigned** HTML. So identical action source yields signed HTML on Lit and unsigned HTML in dev and
-preview.
+**How the same action code serves all three (INV-7 mechanism):** the render always calls
+`addAndSignMetadata`. With `unsigned` true it skips only the `Lit.Actions.getPrivateKey` read: the
+hashable region, schema fields, canonicalisation and insertion all run, and the proof carries the
+proof options with no `proofValue`. That is the same shape the catch emits. When the input is absent
+(a render action older than 0.1.4, or publishing) the step reads the key; `addAndSignMetadata` wraps
+that read in `try/catch`, and under the Bun shim the read throws and the catch emits the proof
+options with no `proofValue`. So the same action source yields a signed colophon on a signed run and
+an unsigned colophon in dev and preview, and every mode keeps the whole JSON-LD block.
 
 **IPFS endpoints (don't conflate):** the MERGED action builds the site tree on a **self-hosted Kubo
 node** (`ipfs.transport-union.dev`, MFS `files/*` + `pin/add`); **Pinata**
@@ -264,7 +276,7 @@ Each invariant lists the symptom if violated. If your edit touches a row, your c
 | **GAP-3** ✅ | `render/metadata.ts` | choose one signing primitive | **RESOLVED (see §2.1).** Lit V3/Chipotle is TEE-based, not threshold. `getPrivateKey` (active) is correct; `signAndCombineEcdsa` (commented) is the removed Datil/Naga threshold primitive — delete the dead block. | trust root is TEE attestation + on-chain Base permissions, not honest-majority nodes |
 | **GAP-4** | `protocol/actions/src` | one renderer, one gates impl | `__renderer` **and** `renderer` both present; gates duplicated in `libs/gates.ts` **and** `shared/src/lit/gates/` | divergence risk; agent may edit the dead copy |
 | **GAP-5** ✅ | `update/main.ts` | single merged action | **RESOLVED.** The `cbor` action is gone — not in `config.json`'s permitted set, no `cbor/` directory. The merged `update` action is the sole root-builder. (The old note about a lingering `cbor` action is stale.) | none |
-| **GAP-6** ✅ | dev/preview | — | **NOT A GAP — design decision (see §3).** `dev` intentionally omits signing/provenance to stay free, on the Bun runner; it is for template/content iteration, not trust validation. `preview` pays for a Lit render only to make a gated body open, and is unsigned and unwritten by the `unsigned` input, not by the shim. The cheap path and the decrypting path are now two modes, not one. | reader should not expect either non-publishing mode to produce a signed page; that is by design |
+| **GAP-6** ✅ | dev/preview | — | **NOT A GAP — design decision (see §3).** `dev` intentionally omits the signature, keeping the colophon, to stay free on the Bun runner; it is for template/content iteration, not trust validation. `preview` pays for a Lit render only to make a gated body open, and is unsigned and unwritten by the `unsigned` input, not by the shim. The cheap path and the decrypting path are now two modes, not one. | reader should not expect either non-publishing mode to produce a signed page; that is by design |
 | **GAP-7** | module upgradeability | consistent policy | `S2SPublicationModule` is UUPS-upgradeable; `S2SRecordsModuleV0_1` is immutable (`onlySafe`, constructor-bound) | asymmetric migration story |
 | **GAP-8** | `getProtocolControllerAndModules` (`shared/src/protocol/index.ts`) | one resolution path | `dev` branch resolves `dev.soul2soul.eth` instead of `soul2soul.eth` | **vestigial** — `dev.soul2soul.eth` was an abandoned preview idea, superseded by the Bun-runner dev mode (§3). Branch should be pruned; do **not** infer that preview needs a parallel on-chain deployment (note: the in-action `ens.factory` copy has no dev branch) |
 | **GAP-9** (was ⚠) | ~~`protocol/actions/src/libs/constants.ts`~~ — secrets injected, not embedded | **Action-side extraction complete 2026-08-07** (after the 2026-08-06 partial re-audit). `libs/constants.ts` **and** `renderer/constants.ts` are **deleted**; zero hardcoded endpoints/keys remain in `protocol/actions/src` (verified: no `transport-union.dev` / `drpc` / `alchemy` / `PINATA` hits). Gateway + RPCs now arrive via the `endpoints:` input field (`ipfsGateway?: string`, `rpcs: { L1: string[]; L2: string[] }`) on all three action inputs (prep/render/update), required via `requireFields`. Actions are now endpoint-source-agnostic. **Alchemy is NOT dead** (corrects the 2026-08-03 audit, per `handoff-actions-extract-constants.md` §1): it is live and a valid fallback; `rpcs` is an ordered **agnostic array** (`[drpc, alchemy]` today, anything tomorrow). Pinata keys were in `constants.ts` but already dead in the action path (Kubo-only, §3.2) — deleted with no parameter. | **Remaining (none on the action side):** (a) orchestrator source of `rpcs` is **still unwired** — `shared/src/rendering/sequence.ts` throws a `endpoints.rpcs not wired` placeholder per handoff §6; the caller must populate `endpoints.rpcs` before dispatch (publication records vs. protocol `rpc_base` vs. caller session — deferred decision). (b) **rotate the previously-exposed keys** (they lived in public immutable CIDs). See GAP-15. |
@@ -426,13 +438,13 @@ One sentence: what this component owns, and what it explicitly does NOT own.
     `ipfs.transport-union.dev/ipfs/...` author-preview link.
 
 - **OPEN-TASK-2 — pin down the non-publishing modes' unsigned guarantee (safety).** Preview HTML
-  must carry **no** proof rather than an *invalid* proof. Since 0.1.4 the render action reads
-  `unsigned` and skips provenance outright, so a dev or preview render through that action is
-  provably unsigned. Two cases remain on the old mechanism: `dev` against a render action pinned
-  before 0.1.4, where `metadata.ts`'s `try/catch` returns unsigned HTML when the Bun shim's
-  `getPrivateKey` throws, and any shim that returns a dummy key instead. A present-but-unverifiable
-  proof could then be emitted, which is dangerous if a preview page ever reached a production
-  origin. Releasing the 0.1.4 render action to every publication closes the first case.
+  must carry a proof with **no** `proofValue` rather than a *failing* one. Since 0.1.4 the render
+  action reads `unsigned` and skips only the key read, so a dev or preview render through that
+  action carries the full colophon, provably unsigned; a dev render against an action pinned before
+  0.1.4 reaches the same shape through `metadata.ts`'s `try/catch`, where the Bun shim's
+  `getPrivateKey` throws. One case remains: a shim that returns a dummy key instead, which would
+  emit a present-but-unverifiable `proofValue`, dangerous if a preview page ever reached a
+  production origin. Releasing and pinning the 0.1.4 render action closes the older-action case.
 
 - **OPEN-TASK-3 — object-ify + pre-flight-validate action I/O.** Refactor every Lit action to take a
   single **typed input object** (standardize away from scattered injected globals) and return a typed

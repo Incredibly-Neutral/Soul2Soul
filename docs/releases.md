@@ -20,13 +20,15 @@ reads it, and the next release is judged against the last release rather than ag
 
 ## 0.1.4 — 2026-11-24
 
-- `render` honors the `unsigned` input: an unsigned run skips provenance and uploads the page as
-  rendered. Absent or false keeps the PKP signing attempt.
+- `render` honors the `unsigned` input: an unsigned run skips only the PKP key read, keeps the
+  whole colophon, and uploads the page with the proof options present and no `proofValue`. Absent
+  or false keeps the signing attempt.
 - `preview` runs the render stage on Lit, the only runtime with `Lit.Actions.Decrypt`, so a gated
   body decrypts; `dev` stays on the runner.
-- The manifest advertises `capabilities.unsignedRender`, so the shared layer will run a preview on a
-  publication pinned to this build.
-- Pinning the release to a publication is a separate human step.
+- The manifest advertises `capabilities.unsignedRender`, so the shared layer will run a preview on
+  a publication pinned to this build.
+- Filing the document moves no publication: each one reads the manifest at its own
+  `manifest_version` record, so pinning this build to a publication stays a separate human step.
 
 ## 0.1.3 — 2026-11-19
 

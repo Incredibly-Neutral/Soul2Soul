@@ -131,17 +131,21 @@ version table. A factory that answers nothing is refused, not worked around: the
 expected and stops. Nothing in the app reads a version and nothing falls back to an older module's
 verb set.
 
-**Dev, preview, publish:** each Active Agreements row carries two render actions beside its publish step, and both
-open `previewLink(cid, path)` in a new tab opened inside the click. **Dev** (`mode: 'dev'`) is the cheap
-Bun-runner render — unsigned, no decrypt — so it is offered only for an unencrypted row, and an encrypted row
-shows it disabled with a title saying the runner has no key. **Preview** (`mode: 'preview'`) runs the render
-stage on Lit so a gated body decrypts, unsigned, with no on-chain write, and returns the real tree and CIDs; it
-is offered for an encrypted or unencrypted row and refused unless the publication's pinned manifest advertises
-`capabilities.unsignedRender`, because the shared layer throws in that case and the UI must not offer what
-throws. Both are refused on an offer: the render action treats a triggered genesis with no agreement as
-revoked, so the page is removed rather than written and the envelope comes back with no path. A successful
-envelope with an empty path is a failure in both modes, and the tab closes the tab it opened and reports. When
-the browser blocks the popup, the row keeps an “Open preview” link.
+**Dev, preview, publish:** each deal row and each offer row carries two render actions beside its publish step,
+and both open `previewLink(cid, path)` in a new tab opened inside the click, before any await, so the
+popup is not blocked. **Dev** (`mode: 'dev'`) is the cheap Bun-runner render — unsigned, no decrypt —
+so it is offered only for an unencrypted row, and an encrypted row shows it disabled with a title
+saying the runner has no key. **Preview** (`mode: 'preview'`) runs the render stage on Lit so a gated
+body decrypts, unsigned, with no on-chain write, and returns the real tree and CIDs; it is offered
+for an encrypted or unencrypted row and refused unless the manifest document it renders from
+advertises `capabilities.unsignedRender` — a publication that has not moved its `manifest_version`
+record still reads the older document — because the shared layer throws in that case and the UI must
+not offer what throws; the title says the pinned action predates unsigned renders and to pin a newer
+release. On an offer both buttons are rendered and disabled: the render action treats a triggered
+genesis with no agreement as revoked, so the page is removed rather than written and the envelope
+comes back with no path. A successful envelope with an empty path is a failure in both modes, and
+the tab closes the tab it opened and reports. When the browser blocks the popup, the row keeps an
+“Open preview” link under either mode's button.
 
 **Sync site:** one button, two behaviours, the same `renderwithLitActions` call with the toolbar toggle choosing
 `dev` or `publish`. A dev sweep drops encrypted items; a publish sweep keeps them. The item list is

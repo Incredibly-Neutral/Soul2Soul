@@ -812,7 +812,7 @@ export class S2SDealsTab extends LitElement {
       return 'The dev runner has no key for an encrypted body';
     }
     if (mode === 'preview' && store.protocolInfo?.capabilities?.unsignedRender !== true) {
-      return 'The pinned render action predates unsigned renders; release one to enable preview';
+      return 'The pinned render action predates unsigned renders; pin a newer release to enable preview';
     }
     return null;
   }

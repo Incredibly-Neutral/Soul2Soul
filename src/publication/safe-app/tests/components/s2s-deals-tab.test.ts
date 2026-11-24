@@ -1600,7 +1600,7 @@ describe('s2s-deals-tab', () => {
     expect(btn).not.toBeNull();
     expect(btn!.disabled).toBe(true);
     expect(host!.getAttribute('title')).toBe(
-      'The pinned render action predates unsigned renders; release one to enable preview',
+      'The pinned render action predates unsigned renders; pin a newer release to enable preview',
     );
 
     (host as HTMLElement).click();

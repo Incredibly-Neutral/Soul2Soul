@@ -101,7 +101,7 @@ client ── signature over "lit actions auth" ───▶
             (canRead: at the append block; the publication Safe and reviewers: live)
            PKP: Lit.Actions.Decrypt (gated collections; Lit only)
            render: Handlebars → HTML
-           provenance: sign and embed on publish; skip when `unsigned` is true
+           provenance: embed the colophon; sign on publish, and `unsigned` skips only the key read
            upload: HTML → IPFS
         ▼
 [UPDATE]   dev, preview: runner · publish: Lit   → new root CID
@@ -118,7 +118,7 @@ client ── signature over "lit actions auth" ───▶
   caller's signer from a sig over `"lit actions auth"`; runs the on-chain gates; decrypts gated
   collections where a key is available (Lit only); renders Handlebars HTML; on publish signs and
   embeds provenance; uploads HTML to IPFS. Dev and preview pass `unsigned: true`, so the page is
-  uploaded as rendered. Produces per-job HTML; it does **not** write the site root.
+  uploaded with its colophon and no signature. Produces per-job HTML; it does **not** write the site root.
 - **UPDATE/MERGED** — assembles the IPFS MFS tree from the rendered jobs and pins it in every mode;
   only publish **writes `contenthash_wrapped`** (the new site root) on-chain via the PKP. The single
   privileged root write.
