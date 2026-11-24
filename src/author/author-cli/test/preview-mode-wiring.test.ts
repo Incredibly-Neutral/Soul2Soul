@@ -36,7 +36,8 @@ import {
 import type { CliContext } from '../src/core/context';
 import {
   UNSIGNED_PREVIEW_NOTICE,
-  previousStateUnreadableNotice,
+  absentVersionNotice,
+  failedVersionNotice,
   previewRefusedNotice,
 } from '../src/core/preview-mode';
 import type { PublicationService } from '../src/core/service';
@@ -173,35 +174,66 @@ describe('previewMode', () => {
     expect(choice).toEqual({ mode: 'dev', notice: previewRefusedNotice(EOA) });
   });
 
-  it('does not ask the gate when the version is unreadable', async () => {
+  it('does not ask the gate when the version read failed', async () => {
     const choice = await previewMode(
       fakeCtx(),
       service,
       GENESIS,
-      { noteEncrypted: true, unreadable: { reason: 'the gateway read timed out' } },
+      {
+        noteEncrypted: true,
+        unreadable: { kind: 'failed', reason: 'the gateway read timed out' },
+      },
       false,
       manifest(true),
     );
     expect(canPreview).not.toHaveBeenCalled();
     expect(choice).toEqual({
       mode: 'dev',
-      notice: previousStateUnreadableNotice('the gateway read timed out'),
+      notice: failedVersionNotice('the gateway read timed out', true),
     });
   });
 
-  it('is silent when the version is unreadable and the note is plaintext', async () => {
+  it('names a failed read even when the note is plaintext', async () => {
     const choice = await previewMode(
       fakeCtx(),
       service,
       GENESIS,
       {
         noteEncrypted: false,
-        unreadable: { reason: 'the publication records no version for this genesis yet' },
+        unreadable: { kind: 'failed', reason: 'the gateway read timed out' },
       },
       false,
       manifest(true),
     );
+    expect(choice).toEqual({
+      mode: 'dev',
+      notice: failedVersionNotice('the gateway read timed out', false),
+    });
+    expect(choice.notice).not.toContain('nothing was decrypted');
+  });
+
+  it('is silent when no version exists and the note is plaintext', async () => {
+    const choice = await previewMode(
+      fakeCtx(),
+      service,
+      GENESIS,
+      { noteEncrypted: false, unreadable: { kind: 'absent' } },
+      false,
+      manifest(true),
+    );
     expect(choice).toEqual({ mode: 'dev' });
+  });
+
+  it('says no version exists when the note is ciphertext', async () => {
+    const choice = await previewMode(
+      fakeCtx(),
+      service,
+      GENESIS,
+      { noteEncrypted: true, unreadable: { kind: 'absent' } },
+      false,
+      manifest(true),
+    );
+    expect(choice).toEqual({ mode: 'dev', notice: absentVersionNotice() });
   });
 
   it('says it could not ask the gate when canPreview throws', async () => {
@@ -254,6 +286,27 @@ describe('renderEncryption', () => {
     const choice = await previewMode(ctx, service, GENESIS, state, false, manifest(true));
     expect(choice).toEqual({ mode: 'preview' });
   });
+
+  it('names a failed read for a plaintext note instead of going silent', async () => {
+    const ctx = fakeCtx();
+    vi.mocked(ctx.l2.readContract).mockRejectedValue(new Error('rpc down'));
+    const state = await renderEncryption(
+      ctx,
+      service,
+      GENESIS,
+      'note.md',
+      note({ encryption: false }),
+      false,
+    );
+    expect(state.unreadable).toEqual({
+      kind: 'failed',
+      reason: "the publication's latest entry could not be read (rpc down)",
+    });
+    const choice = await previewMode(ctx, service, GENESIS, state, false, manifest(true));
+    expect(choice.mode).toBe('dev');
+    expect(choice.notice).toContain('latest entry could not be read');
+    expect(choice.notice).not.toContain('nothing was decrypted');
+  });
 });
 
 describe('renderContent', () => {
@@ -293,10 +346,10 @@ describe('renderContent', () => {
       GENESIS,
       SAFE,
       { render: true, publish: false, offer: false },
-      { noteEncrypted: true, unreadable: { reason: 'stale cid' } },
+      { noteEncrypted: true, unreadable: { kind: 'failed', reason: 'stale cid' } },
     );
     expect(renderwithLitActions.mock.calls[0]?.[0]).toBe('dev');
-    expect(ctx.out.warn).toHaveBeenCalledWith(previousStateUnreadableNotice('stale cid'));
+    expect(ctx.out.warn).toHaveBeenCalledWith(failedVersionNotice('stale cid', true));
   });
 
   it('does not print the line for a plaintext note with no version', async () => {
@@ -310,11 +363,26 @@ describe('renderContent', () => {
       { render: true, publish: false, offer: false },
       {
         noteEncrypted: false,
-        unreadable: { reason: 'the publication records no version for this genesis yet' },
+        unreadable: { kind: 'absent' },
       },
     );
     expect(renderwithLitActions.mock.calls[0]?.[0]).toBe('dev');
     expect(ctx.out.warn).not.toHaveBeenCalled();
+  });
+
+  it('prints the failure for a plaintext note whose version read failed', async () => {
+    const ctx = fakeCtx();
+    await renderContent(
+      ctx,
+      service,
+      PUBLICATION,
+      GENESIS,
+      SAFE,
+      { render: true, publish: false, offer: false },
+      { noteEncrypted: false, unreadable: { kind: 'failed', reason: 'stale cid' } },
+    );
+    expect(renderwithLitActions.mock.calls[0]?.[0]).toBe('dev');
+    expect(ctx.out.warn).toHaveBeenCalledWith(failedVersionNotice('stale cid', false));
   });
 });
 
@@ -338,14 +406,17 @@ describe('publishedVersionEncryption', () => {
     vi.mocked(ctx.l2.readContract).mockRejectedValue(new Error('rpc down'));
     const state = await publishedVersionEncryption(ctx, service, GENESIS, 'note.md');
     expect(state.published).toBeUndefined();
-    expect(state.unreadable?.reason).toContain("latest entry could not be read");
+    expect(state.unreadable).toEqual({
+      kind: 'failed',
+      reason: expect.stringContaining('latest entry could not be read'),
+    });
   });
 
-  it('reports a genesis with no entry as having no version', async () => {
+  it('reports a genesis with no entry as absent, not failed', async () => {
     const ctx = fakeCtx();
     vi.mocked(ctx.l2.readContract).mockResolvedValue({ ...latestEntry, cid: '' });
     const state = await publishedVersionEncryption(ctx, service, GENESIS, 'note.md');
-    expect(state.unreadable?.reason).toContain('records no version');
+    expect(state.unreadable).toEqual({ kind: 'absent' });
     expect(ctx.ipfs.fetchFromKubo).not.toHaveBeenCalled();
   });
 
@@ -355,6 +426,9 @@ describe('publishedVersionEncryption', () => {
       new Error('Failed to fetch from IPFS: 404 Not Found'),
     );
     const state = await publishedVersionEncryption(ctx, service, GENESIS, 'note.md');
-    expect(state.unreadable?.reason).toContain('the cid the publication records does not resolve');
+    expect(state.unreadable).toEqual({
+      kind: 'failed',
+      reason: expect.stringContaining('the cid the publication records does not resolve'),
+    });
   });
 });

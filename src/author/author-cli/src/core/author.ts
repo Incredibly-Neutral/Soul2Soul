@@ -910,7 +910,7 @@ export async function publishedVersionEncryption(
 ): Promise<Pick<RenderEncryption, 'published' | 'unreadable'>> {
   const module = service.publicationModule;
   if (!module) {
-    return { unreadable: { reason: 'the publication module is not resolved' } };
+    return { unreadable: { kind: 'failed', reason: 'the publication module is not resolved' } };
   }
 
   let cid: string;
@@ -925,18 +925,21 @@ export async function publishedVersionEncryption(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
-      unreadable: { reason: `the publication's latest entry could not be read (${message})` },
+      unreadable: {
+        kind: 'failed',
+        reason: `the publication's latest entry could not be read (${message})`,
+      },
     };
   }
   if (!cid) {
-    return { unreadable: { reason: 'the publication records no version for this genesis yet' } };
+    return { unreadable: { kind: 'absent' } };
   }
 
   try {
     const stored = await fetchStoredItem(ctx.ipfs, cid, notePath);
     return { published: { encrypted: stored.encryption } };
   } catch (err) {
-    return { unreadable: { reason: describeLatestReadFailure(err) } };
+    return { unreadable: { kind: 'failed', reason: describeLatestReadFailure(err) } };
   }
 }
 

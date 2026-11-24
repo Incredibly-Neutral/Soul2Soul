@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   UNSIGNED_PREVIEW_NOTICE,
+  absentVersionNotice,
   choosePreviewMode,
-  previousStateUnreadableNotice,
+  failedVersionNotice,
   previewRefusedNotice,
 } from '../src/core/preview-mode';
 
 const SIGNER = '0x1111111111111111111111111111111111111111';
+const REASON = 'the gateway read timed out (Failed to fetch from IPFS: timeout)';
 
 const base = {
   publish: false,
@@ -49,26 +51,44 @@ describe('choosePreviewMode', () => {
     expect(choice).toEqual({ mode: 'dev', notice: previewRefusedNotice(SIGNER) });
   });
 
-  it('prints the unreadable line when a ciphertext note could not be resolved', () => {
-    const choice = choosePreviewMode({
-      ...base,
-      published: undefined,
-      unreadable: { reason: 'the gateway read timed out' },
-    });
-    expect(choice).toEqual({
-      mode: 'dev',
-      notice: previousStateUnreadableNotice('the gateway read timed out'),
-    });
-  });
-
-  it('is silent for a plaintext note with no version to read', () => {
+  it('is silent when no version exists and the note is plaintext', () => {
     const choice = choosePreviewMode({
       ...base,
       noteEncrypted: false,
       published: undefined,
-      unreadable: { reason: 'the publication records no version for this genesis yet' },
+      unreadable: { kind: 'absent' },
     });
     expect(choice).toEqual({ mode: 'dev' });
+  });
+
+  it('says no version exists and nothing was decrypted when the note is ciphertext', () => {
+    const choice = choosePreviewMode({
+      ...base,
+      published: undefined,
+      unreadable: { kind: 'absent' },
+    });
+    expect(choice).toEqual({ mode: 'dev', notice: absentVersionNotice() });
+  });
+
+  it('names the failure without the decryption clause when the note is plaintext', () => {
+    const choice = choosePreviewMode({
+      ...base,
+      noteEncrypted: false,
+      published: undefined,
+      unreadable: { kind: 'failed', reason: REASON },
+    });
+    expect(choice).toEqual({ mode: 'dev', notice: failedVersionNotice(REASON, false) });
+    expect(choice.notice).not.toContain('nothing was decrypted');
+  });
+
+  it('names the failure and the missing key when the note is ciphertext', () => {
+    const choice = choosePreviewMode({
+      ...base,
+      published: undefined,
+      unreadable: { kind: 'failed', reason: REASON },
+    });
+    expect(choice).toEqual({ mode: 'dev', notice: failedVersionNotice(REASON, true) });
+    expect(choice.notice).toContain('nothing was decrypted');
   });
 
   it('publishes regardless of encryption, admission, unreadability or the capability', () => {
@@ -76,7 +96,11 @@ describe('choosePreviewMode', () => {
       for (const published of [undefined, { encrypted: false }, { encrypted: true }]) {
         for (const admitted of [false, true]) {
           for (const unsignedRender of [false, true]) {
-            for (const unreadable of [undefined, { reason: 'x' }]) {
+            for (const unreadable of [
+              undefined,
+              { kind: 'absent' as const },
+              { kind: 'failed' as const, reason: 'x' },
+            ]) {
               expect(
                 choosePreviewMode({
                   ...base,
@@ -110,9 +134,7 @@ describe('choosePreviewMode', () => {
   });
 
   it('does not claim a published version existed when there was none to read', () => {
-    const notice = previousStateUnreadableNotice(
-      'the publication records no version for this genesis yet',
-    );
+    const notice = absentVersionNotice();
     expect(notice).toContain('records no version');
     expect(notice).toContain('nothing was decrypted');
     expect(notice).not.toContain('the published version');
