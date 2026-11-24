@@ -137,14 +137,19 @@ encrypted items, and the result is `console.log`ged — no root is set, no heade
 [the storage child](SPEC-publication-storage.md#rendering-and-what-it-leaves-behind) and
 [the front door §render](SPEC-publication.md).
 
-**Per-row preview:** every offer and deal row carries its own Preview button, independent of the preview
-toggle (which changes only what the bulk Sync site call does). It renders that one genesis with
-`preview` true and opens `previewLink(cid, path)` in a new browser tab: the tab is opened inside the
-click gesture and navigated once the render answers, because a popup raised after the awaits is blocked,
-with an "Open preview" link left beside the button when the browser blocks it anyway. A failed render
-closes the tab and names the error. An encrypted row's button is rendered but disabled — the render has
-no key, and `renderIds()` already drops those items from a preview — and the handler refuses that row too,
-since a click on the control's host still dispatches.
+**Per-row preview:** deal rows carry their own Preview button, independent of the preview toggle
+(which changes only what the bulk Sync site call does). It renders that one genesis with `preview` true
+and opens `previewLink(cid, path)` in a new browser tab: the tab is opened inside the click gesture and
+navigated once the render answers, because a popup raised after the awaits is blocked, with an "Open
+preview" link left beside the button when the browser blocks it anyway. The path is the page, so a
+successful envelope without one is a failed preview: the tab is closed and the error reported rather
+than the site root opened. The handler enforces both refusals as well as the disabled state, so a
+programmatic click cannot bypass them. An encrypted manuscript has no key here, and `renderIds()` drops
+it from a preview too. An offer has no page to show: the render action treats a triggered genesis with
+no agreement as revoked, so the page is removed from the preview tree and the envelope comes back
+pathless — a preview would show the site without the manuscript. Offer rows keep the button, disabled,
+titled "Preview is available once the agreement is in force". Enabling them needs a press-side flag
+and a new action release; that is a known limitation, not work this branch does.
 
 **Config build:** `AssetsBuilder` (GitHub → `assetsCid`) → `ConfigBuilder.buildConfig(...)` → one
 `setRecord('config')` proposal. The build itself belongs to

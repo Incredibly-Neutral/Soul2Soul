@@ -762,28 +762,31 @@ export class S2SDealsTab extends LitElement {
   /**
    * Preview one row's page and open it in a new tab. The window is opened
    * here, inside the click gesture, before any await: a popup raised after the
-   * render returns is blocked, and Safe's iframe makes that worse.
+   * render returns is blocked, and Safe's iframe makes that worse. Everything
+   * after the open sits inside the try, so the in-flight flag is always
+   * cleared, even when the open itself throws.
    *
-   * The encrypted check is repeated here rather than left to the disabled
-   * button: a click on the <s2s-button> host (its padding) still dispatches,
-   * and the render has no key for that item.
+   * The refusal is repeated here rather than left to the disabled button: a
+   * programmatic click on the <s2s-button> host reaches this handler, and the
+   * render has no key for an encrypted item and no page for an offer.
    */
   private async previewRow(genesis: string) {
-    if (this.previewing[genesis] || this.isSealed(genesis)) return;
+    if (this.previewing[genesis] || this.previewUnavailable(genesis) !== null) return;
 
     // A new attempt supersedes the link the last blocked one left behind.
     this.setPreviewReady(genesis, null);
     this.setPreviewing(genesis, true);
 
-    const tab = window.open('', '_blank');
+    let tab: Window | null = null;
     try {
+      tab = window.open('', '_blank');
       const res = await this.performRender(true, [genesis]);
-      // A preview without a CID wrote nothing to look at; say why rather than
-      // sending the tab to an empty page.
-      if (!res.success || !res.cid) {
-        throw new Error(res.error ?? 'the update action returned no preview CID');
+      // The path is the page. An envelope with a CID but no path names only
+      // the site root, which is not this manuscript: fail rather than open it.
+      if (!res.success || !res.cid || !res.path) {
+        throw new Error(res.error ?? 'the render returned no page to open');
       }
-      const url = previewLink(res.cid, res.path || '/');
+      const url = previewLink(res.cid, res.path);
       if (tab) {
         // Sever the opener so the preview cannot reach back into the Safe app.
         tab.opener = null;
@@ -799,17 +802,31 @@ export class S2SDealsTab extends LitElement {
     }
   }
 
-  /**
-   * Whether a row's manuscript is encrypted, read as truthiness like
-   * renderIds does: the flag is copied off the stored item unvalidated, so a
-   * non-boolean truthy value has to be refused here exactly as a sweep refuses
-   * it, or the row would offer a preview the bulk preview already drops.
-   */
-  private isSealed(genesis: string): boolean {
-    const row = [...store.deals, ...store.offers, ...this.retainedOffers].find(
+  /** The row a genesis names, deal before offer (a genesis can be listed as both). */
+  private rowFor(genesis: string): Deal | undefined {
+    return [...store.deals, ...store.offers, ...this.retainedOffers].find(
       (d) => d.genesis === genesis,
     );
-    return Boolean(row?.encryption);
+  }
+
+  /**
+   * Why a row cannot be previewed, or null when it can.
+   *
+   * Encryption is read as truthiness like renderIds does: the flag is copied
+   * off the stored item unvalidated, so a non-boolean truthy value has to be
+   * refused here exactly as a sweep refuses it.
+   *
+   * An offer has no page to show: the render action treats a triggered
+   * genesis with no agreement as revoked (press/actions/src/render/main.ts),
+   * so the page is removed from the preview tree instead of written, and the
+   * envelope comes back with no path. Enabling offers needs a press-side flag
+   * and a new action release, not a change here.
+   */
+  private previewUnavailable(genesis: string): string | null {
+    const row = this.rowFor(genesis);
+    if (Boolean(row?.encryption)) return 'Encrypted manuscripts cannot be previewed';
+    if (row?.status !== 'deal') return 'Preview is available once the agreement is in force';
+    return null;
   }
 
   /** Immutable copy-on-write, so Lit sees a new map and re-renders the row. */
@@ -826,17 +843,17 @@ export class S2SDealsTab extends LitElement {
 
   /**
    * The Preview control every row carries, off in no mode toggle: `previewMode`
-   * only changes what the bulk Sync site call does. An encrypted manuscript has
-   * no key here, so its button is rendered but cannot fire.
+   * only changes what the bulk Sync site call does. A row that cannot be
+   * previewed keeps the button, disabled, with the reason as its title.
    */
   private renderPreview(deal: Deal): TemplateResult {
     const busy = this.previewing[deal.genesis] ?? false;
-    const sealed = this.isSealed(deal.genesis);
+    const blocked = this.previewUnavailable(deal.genesis);
     const ready = this.previewReady[deal.genesis];
     return html`
       <s2s-button action="preview" genesis="${deal.genesis}" type="secondary"
-        ?disabled=${busy || sealed}
-        title=${sealed ? 'Encrypted manuscripts cannot be previewed' : nothing}
+        ?disabled=${busy || blocked !== null}
+        title=${blocked ?? nothing}
         @click=${() => void this.previewRow(deal.genesis)}>
         ${busy
           ? html`<span class="row-spinner" aria-hidden="true"></span> Previewing`

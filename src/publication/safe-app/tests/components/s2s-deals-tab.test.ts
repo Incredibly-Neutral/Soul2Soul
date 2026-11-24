@@ -1527,8 +1527,12 @@ describe('s2s-deals-tab', () => {
     btn!.click();
     await flushUpdates(el);
 
-    // Opened inside the gesture, then navigated once the render answered.
+    // Opened inside the gesture, before the render is awaited: a popup raised
+    // after it, or after the click returns, is blocked.
     expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(open.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(renderwithLitActions).mock.invocationCallOrder[0],
+    );
     expect(renderwithLitActions).toHaveBeenCalledTimes(1);
     const args = lastRenderCall();
     expect(args[0]).toBe(true);
@@ -1537,6 +1541,64 @@ describe('s2s-deals-tab', () => {
     expect(tab.opener).toBeNull();
     expect(tab.location.href).toBe('https://bafyNew.preview.transport-union.dev/posts/hello');
     expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it('renders the Preview button disabled on an offer, and it fires nothing', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Pending offer'));
+    seedRenderPrerequisites();
+
+    const open = stubWindowOpen(fakeTab() as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    const { host, btn } = previewControl(root, '0xOffer1');
+    expect(btn).not.toBeNull();
+    expect(btn!.disabled).toBe(true);
+    expect(host!.getAttribute('title')).toBe(
+      'Preview is available once the agreement is in force',
+    );
+
+    (host as HTMLElement).click();
+    await flushUpdates(el);
+    expect(open).not.toHaveBeenCalled();
+    expect(renderwithLitActions).not.toHaveBeenCalled();
+  });
+
+  it('treats a successful render with no page path as a failed preview', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    // A CID without a path names only the site root, which is not the page.
+    vi.mocked(renderwithLitActions).mockResolvedValue({
+      ...renderResult('bafyNew'),
+      path: '',
+    });
+    seedRenderPrerequisites();
+
+    const tab = fakeTab();
+    stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    previewControl(root, '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.href).toBe('');
+    expect(notificationTexts()).toContain(
+      'Preview failed: the render returned no page to open',
+    );
+    expect(root.querySelector('.preview-ready')).toBeNull();
   });
 
   it('renders the Preview button disabled on an encrypted row, and it fires nothing', async () => {
