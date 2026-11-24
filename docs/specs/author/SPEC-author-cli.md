@@ -70,7 +70,7 @@ s2s author init      [--json]                                                   
 s2s author migrate   [--json]                                                                     # move an installed Safe onto the modules the current factory predicts
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins + drafts append (no offer)
 s2s author offer     <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]      # drafts append + on-chain offer only
-s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain, no append)
+s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + render of the publication's current version (Lit when admitted, else dev; no offer, no append)
 s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + append + offer + render + pins; refuses an author whose append would be an offer
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
 s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--emit <path>] [--emit-batch <path>] [--json]   # file a key and propose it as one owner of a deployed Safe
@@ -793,7 +793,7 @@ Draft = { module: string;          // the drafts module the Safe sent append to
   objectId: string; cid: string; txHash: string;
   draft: Draft }
 
-// s2s author preview <note> [--publication <ens>] [--json]    — ipfs + preview render (off-chain, no append)
+// s2s author preview <note> [--publication <ens>] [--json]    — ipfs + render of the publication's current version (no offer, no append)
 { action: 'preview'; note: string; publication: string; subdomain: string;
   objectId: string; cid: string;
   render?: { cid: string; path: string; previewUrl: string } }
