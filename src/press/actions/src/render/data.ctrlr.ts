@@ -284,6 +284,7 @@ export const initTemplateData = async (
   publicationModule: string,
   rpcs?: string[],
   localePaths?: Record<string, string>,
+  options: { preview?: boolean } = {},
 ) => {
   if (body.encryption) {
     const decrypted = await decryptRaw(
@@ -293,6 +294,7 @@ export const initTemplateData = async (
       publicationModule,
       signerAddress,
       rpcs,
+      options,
     );
     if (!decrypted)
       return {
