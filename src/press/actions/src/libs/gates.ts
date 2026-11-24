@@ -77,8 +77,10 @@ export const canReview = (
 
 /**
  * May this signer open this manuscript before the offer is accepted? Admits a
- * listed reviewer, or an owner of the publication Safe while the genesis is
- * under an agreement or an offer. See `canPreview` in the shared gates.
+ * listed reviewer, the manuscript's author recorded by the publication and
+ * named by its drafts log, or an owner of the publication Safe. Every path
+ * requires the genesis to sit under an agreement or an offer. See `canPreview`
+ * in the shared gates.
  */
 export const canPreview = (
     contentId: string,

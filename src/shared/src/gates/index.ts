@@ -41,15 +41,15 @@
 // ownership half. A caller that wants the reviewer path alone asks `canReview`.
 //
 // `canPreview` is the gate for opening a manuscript before the offer is
-// accepted. Three identities are admitted, in this order: the reader who may
-// review (the contract's `canReview`, which already requires an agreement or an
-// offer), the manuscript's author (the module's `authorOf` names the author
-// Safe, and `canAuthor` judges its owner, with no publication question at all),
-// and the owner of the publication Safe (live `isOwner` of the module's
-// `safe()`), the last only while the genesis sits under an agreement or an
-// offer. The author's path deliberately asks neither `hasAgreement` nor
-// `hasOffer`; the owner's does. An author previews without an offer, an owner
-// of the publication Safe does not.
+// accepted. All three admitted paths require the genesis to sit under an
+// agreement or an offer, so a preview never outlives the deal: a genesis the
+// publication never recorded, or whose offer is over, is refused even to its
+// author. The identities are the reader who may review (the contract's
+// `canReview`, which already requires agreement or offer), the manuscript's
+// author (the publication's recorded `authorOf` names the author Safe, the
+// drafts log must then name the same Safe, and `canAuthor` judges its owner at
+// the append block), and the owner of the publication Safe (live `isOwner` of
+// the module's `safe()`).
 //
 // Runtime note: the Lit Action runtime supplies ethers (an action's `require`
 // resolves it, and a bare global is also present), which is what the default
@@ -97,9 +97,10 @@ const IS_OWNER_AT_ABI = ['function isOwnerAt(address who, uint256 blockNumber) v
 const CAN_READ_ABI = ['function canRead(bytes32 genesis, address reader) view returns (bool)'];
 const CAN_REVIEW_ABI = ['function canReview(bytes32 genesis, address who) view returns (bool)'];
 /**
- * DraftsModuleV1 and S2SPublicationModuleV0_1 — the Safe a genesis's first
- * append named. Both expose the same getter; a preview asks the publication,
- * and `canAuthor` asks the author Safe's drafts log.
+ * DraftsModuleV1 and S2SPublicationModuleV0_1 — the recorded author of a
+ * genesis. Both expose the same getter; a preview asks the publication, where
+ * the first `makeOffer` writes it, and `canAuthor` asks the author Safe's
+ * drafts log.
  */
 const AUTHOR_OF_ABI = ['function authorOf(bytes32 genesis) view returns (address)'];
 /** DraftsModuleV1 — the block behind each version, index for index with history(). */
@@ -508,43 +509,46 @@ const answeredTrue = async (question: () => Promise<boolean>): Promise<boolean> 
  * accepted?
  *
  * A preview is the step between an offer and an agreement: the reader wants to
- * see the manuscript, and the author has not accepted yet. Three identities are
- * admitted, and they are asked in this order:
+ * see the manuscript, and the author has not accepted yet. Every path requires
+ * the genesis to sit under an agreement or an offer, because a preview must not
+ * outlive the deal. A genesis the publication never recorded, or whose offer is
+ * over, is refused to everyone.
+ *
+ * Three identities are admitted, and they are asked in this order:
  *
  *   - A listed reviewer. The contract's `canReview(genesis, who)` answers this,
  *     and it already requires the genesis to sit under an agreement or an
  *     offer. No ownership read: a reviewer is an address on the publication.
- *     Asked first, in parallel with the author lookup; a true answer is the
- *     admission on its own.
- *   - The manuscript's author. The module's `authorOf(genesis)` names the Safe
- *     that wrote the genesis, and {@link canAuthor} answers whether the signer
- *     owns it. The author path stands alone: it requires neither an agreement
- *     nor an offer, because an author's right does not turn on the
- *     publication's decision; an author still opens the genesis when neither is
- *     in force, a declined offer included. The publication's record is the
- *     entry condition, not a deal: a genesis it never recorded has no
- *     `authorOf`, and this path refuses it. An `authorOf` that answers nothing
- *     usable (a missing answer, a non-address, the zero address) refuses this
- *     path only.
+ *     A true answer is the admission on its own; the agreement and offer reads
+ *     run alongside it and cannot undo it.
+ *   - The manuscript's author. The publication's `authorOf(genesis)` names its
+ *     recorded author of the genesis, not the writer of any particular append.
+ *     The drafts log must then name that same Safe, and {@link canAuthor}
+ *     answers whether the signer owned it at the append block. An `authorOf`
+ *     that answers nothing usable (a missing answer, a non-address, the zero
+ *     address) refuses this path only, and so does a drafts log that names
+ *     another Safe.
  *   - An owner of the publication Safe. The module names that Safe in its own
  *     `safe()` getter; ownership is asked live, because a preview is asked for
- *     now. The genesis must also be under an agreement or an offer, so a
- *     publication owner cannot open a manuscript that was never offered to
- *     them.
+ *     now.
  *
- * The asymmetry is the point: the author previews without an offer; an owner of
- * the publication Safe still needs an agreement or an offer; a reviewer's
- * condition comes from the contract. The difference from {@link canRead}:
- * `canRead` admits the author at the append block and every other reader live.
+ * The agreement and offer reads come first, together with the reviewer
+ * question: when neither is true, the preview is refused before any author or
+ * Safe read is spent. A failed agreement or offer read is a refusal, not a
+ * fall-open. A reviewer yes is still admitted on its own, because the
+ * contract's condition already implies agreement-or-offer and the extra two
+ * reads must not undo it.
  *
- * The reads are ordered: `canReview` and `authorOf` in parallel, `canAuthor`'s
- * reads only when `authorOf` named a usable Safe, and `safe()`, `isOwnerAt`,
- * `hasAgreement` and `hasOffer` only when the author path answered false. A
- * reviewer yes is the admission on its own, so a throwing `authorOf` or
- * `safe()` costs a listed reviewer nothing; those reads feed the later paths. A
- * read failure is never a way in: a throw or a non-boolean answer refuses the
- * path it was asked on, and an `authorOf` or `safe()` that is not a usable
- * address (or is the zero address) refuses its path.
+ * The difference from {@link canRead}: `canRead` admits the author at the append
+ * block and every other reader live.
+ *
+ * The reads are ordered: `canReview`, `hasAgreement` and `hasOffer` in
+ * parallel; `authorOf` and `safe()` in parallel only when one of the two holds;
+ * `canAuthor`'s reads only when `authorOf` named a usable Safe, and `isOwnerAt`
+ * on the publication Safe only when the author path answered false. A read
+ * failure is never a way in: a throw or a non-boolean answer refuses the path
+ * it was asked on, and an `authorOf` or `safe()` that is not a usable address
+ * (or is the zero address) refuses its path.
  *
  * `contentId` is normalised as {@link canRead} normalises it; pass `toId` when
  * your host has no ethers.
@@ -559,22 +563,38 @@ export const canPreview = async (
 ): Promise<boolean> => {
   const genesis = toId(contentId);
 
-  const [reviewerAnswer, authorAnswer] = await Promise.allSettled([
+  // The deal question, asked with the reviewer's. Every path needs an
+  // agreement or an offer, so neither answer true refuses before any other read
+  // is spent. A failed read answers false here: a refusal, not a fall-open.
+  const [reviewerAnswer, agreementAnswer, offerAnswer] = await Promise.allSettled([
     read(publicationModule, CAN_REVIEW_ABI, 'canReview', [genesis, signerAddress]),
-    readValue(publicationModule, AUTHOR_OF_ABI, 'authorOf', [genesis]),
+    read(publicationModule, HAS_AGREEMENT_ABI, 'hasAgreement', [genesis]),
+    read(publicationModule, HAS_OFFER_ABI, 'hasOffer', [genesis]),
   ]);
 
-  // A reviewer yes is the admission on its own. The author lookup runs alongside
-  // it, so a module whose `authorOf` reverts must not refuse a reviewer the
-  // contract already admitted.
+  // A reviewer yes is the admission on its own. The contract's condition
+  // already requires an agreement or an offer, so the two reads alongside it
+  // must not undo it.
   if (reviewerAnswer.status === 'fulfilled' && (reviewerAnswer.value as unknown) === true)
     return true;
 
-  // The author path. `authorOf` names the Safe that wrote the genesis; a
-  // missing, malformed or zeroed answer refuses this path only, because the
-  // owner path below may still admit. `authorVerdict` is `canAuthor` over the id
-  // already normalised, so the id is not hashed twice. No agreement and no offer
-  // is asked: the author's right does not involve the publication.
+  const held =
+    (agreementAnswer.status === 'fulfilled' && (agreementAnswer.value as unknown) === true) ||
+    (offerAnswer.status === 'fulfilled' && (offerAnswer.value as unknown) === true);
+  if (!held) return false;
+
+  // The author and owner paths, asked together: `authorOf` is the publication's
+  // recorded author of the genesis, `safe()` is the publication Safe.
+  const [authorAnswer, safeAnswer] = await Promise.allSettled([
+    readValue(publicationModule, AUTHOR_OF_ABI, 'authorOf', [genesis]),
+    readValue(publicationModule, SAFE_ABI, 'safe', []),
+  ]);
+
+  // The author path. `authorOf` names the publication's recorded author, not the
+  // writer of an append; a missing, malformed or zeroed answer refuses this path
+  // only, because the owner path below may still admit. `authorVerdict` is
+  // `canAuthor` over the id already normalised, so the id is not hashed twice,
+  // and it asks the drafts log to name the same Safe.
   const authorSafe = authorAnswer.status === 'fulfilled' ? authorAnswer.value : undefined;
   if (typeof authorSafe === 'string' && ADDRESS.test(authorSafe) && !ZERO_ADDRESS.test(authorSafe)) {
     const isAuthor = await answeredTrue(async () =>
@@ -583,29 +603,14 @@ export const canPreview = async (
     if (isAuthor) return true;
   }
 
-  // The owner path, reached only when neither reviewer nor author answered yes.
-  // It needs a real Safe to ask. A module that answers nothing or whose read
-  // failed, a non-address, or the zero address cannot make its answer an
-  // owner's.
-  let publicationSafe: unknown;
-  try {
-    publicationSafe = await readValue(publicationModule, SAFE_ABI, 'safe', []);
-  } catch {
-    return false;
-  }
+  // The owner path, reached only when the author path did not admit. It needs a
+  // real Safe to ask. A module that answers nothing or whose read failed, a
+  // non-address, or the zero address cannot make its answer an owner's.
+  const publicationSafe = safeAnswer.status === 'fulfilled' ? safeAnswer.value : undefined;
   if (typeof publicationSafe !== 'string' || !ADDRESS.test(publicationSafe)) return false;
   if (ZERO_ADDRESS.test(publicationSafe)) return false;
 
-  const isOwner = await answeredTrue(() => isOwnerAt(read, publicationSafe, signerAddress));
-  if (!isOwner) return false;
-
-  // Offered or agreed, never neither. Either answer being `true` is enough;
-  // a failed read answers false, so a transport error cannot open the door.
-  const [hasAgreement, hasOffer] = await Promise.all([
-    answeredTrue(() => read(publicationModule, HAS_AGREEMENT_ABI, 'hasAgreement', [genesis])),
-    answeredTrue(() => read(publicationModule, HAS_OFFER_ABI, 'hasOffer', [genesis])),
-  ]);
-  return hasAgreement || hasOffer;
+  return answeredTrue(() => isOwnerAt(read, publicationSafe, signerAddress));
 };
 
 export * from './modules';
