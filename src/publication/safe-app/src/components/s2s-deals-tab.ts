@@ -176,6 +176,40 @@ const POLL_INTERVAL_MS = 6_000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1_000;
 
 /**
+ * What a preview tab shows between the click and the render. Static: nothing
+ * from the row is interpolated into it. The style block keeps one centred line
+ * legible in light and dark before the manuscript page replaces it.
+ */
+const PREVIEW_PLACEHOLDER_HTML = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Preview</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    background: #ffffff;
+    color: #1a1a1a;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16181c; color: #e6e6e6; }
+  }
+</style>
+</head>
+<body>
+<p>Preview is rendering. This tab will open it when it is ready.</p>
+</body>
+</html>`;
+
+/**
  * Immutable chips-state update: copy, set `key` to `values`, delete the key
  * when `values` is empty (matches <s2s-table>'s clear-filters chip, which
  * emits values: []). The host owns the chips state, mirroring the chip-filter
@@ -824,6 +858,7 @@ export class S2SDealsTab extends LitElement {
     let tab: Window | null = null;
     try {
       tab = window.open('', '_blank');
+      this.writePreviewPlaceholder(tab);
       const res = await this.performRender('preview', [genesis]);
       // The path is the page. An envelope with a CID but no path names only
       // the site root, which is not this manuscript: fail rather than open it.
@@ -839,11 +874,27 @@ export class S2SDealsTab extends LitElement {
         this.setRenderReady(genesis, url);
       }
     } catch (error: any) {
-      tab?.close();
+      // Leave the tab open with the reason: the notification is ephemeral, and
+      // a closed tab tells the reader nothing. textContent, not markup, so an
+      // action's error text cannot inject anything.
+      if (tab) {
+        tab.opener = null;
+        const body = tab.document?.body;
+        if (body) body.textContent = `Preview failed: ${error.message}`;
+      }
       this.showNotification(`Preview failed: ${error.message}`, 'error');
     } finally {
       this.setRenderBusy(genesis, false);
     }
+  }
+
+  /** Write the stand-in page into the tab the click just opened, before any await. */
+  private writePreviewPlaceholder(tab: Window | null) {
+    const doc = tab?.document;
+    if (!doc) return;
+    doc.open();
+    doc.write(PREVIEW_PLACEHOLDER_HTML);
+    doc.close();
   }
 
   /** Copy-on-write, and a revision bump so the table re-renders the row. */
