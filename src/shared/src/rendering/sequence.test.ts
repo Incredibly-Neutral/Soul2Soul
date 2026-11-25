@@ -1064,8 +1064,10 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
 
   let updateCalls: any[] = [];
 
-  beforeEach(() => {
-    updateCalls = [];
+  // The three stages, driven off one job list: prep answers with it, render
+  // answers with the job it was given, update records the call and writes a
+  // root named after it.
+  const mockStages = (jobList: S2SJob[]) => {
     vi.mocked(runAction).mockImplementation(((
       _mode: string,
       _lit: unknown,
@@ -1076,7 +1078,7 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
         return Promise.resolve({
           ok: true,
           action: 'prep',
-          data: { jobs, remove: undefined },
+          data: { jobs: jobList, remove: undefined },
           trace: [],
         });
       }
@@ -1094,6 +1096,11 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
       }
       return Promise.reject(new Error('unexpected cid ' + cid));
     }) as any);
+  };
+
+  beforeEach(() => {
+    updateCalls = [];
+    mockStages(jobs);
   });
 
   afterEach(() => {
@@ -1147,24 +1154,7 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
   it('gives a revoke a one-page final batch, so six pages ride as 2 + 2 + 1 + 1', async () => {
     const six = jobs.slice(0, 6);
     const revoked = { path: '/posts/revoked' };
-    vi.mocked(runAction).mockImplementation(((_mode: string, _lit: unknown, cid: string, inputs: any) => {
-      if (cid === 'cid-prep') {
-        return Promise.resolve({ ok: true, action: 'prep', data: { jobs: six }, trace: [] });
-      }
-      if (cid === 'cid-render') {
-        return Promise.resolve({ ok: true, action: 'render', data: { job: inputs.job }, trace: [] });
-      }
-      if (cid === 'cid-update') {
-        updateCalls.push(inputs);
-        return Promise.resolve({
-          ok: true,
-          action: 'evm-update',
-          data: { cid: `bafyroot${String(updateCalls.length)}` },
-          trace: [`batch ${String(updateCalls.length)}`],
-        });
-      }
-      return Promise.reject(new Error('unexpected cid ' + cid));
-    }) as any);
+    mockStages(six);
 
     const res: any = await call([revoked]);
 
@@ -1175,6 +1165,21 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     expect(updateCalls[1].remove).toBeUndefined();
     expect(updateCalls[2].remove).toBeUndefined();
     expect(updateCalls[3].remove).toEqual([revoked]);
+    expect(res.success).toBe(true);
+  });
+
+  it('splits two pages when a revoke rides them, so each batch holds one page', async () => {
+    const two = jobs.slice(0, 2);
+    const revoked = { path: '/posts/revoked' };
+    mockStages(two);
+
+    // A single call of two pages plus a revoke reaches 52 with the two mirrored
+    // root txt files; one page per call keeps it under the cap.
+    const res: any = await call([revoked]);
+
+    expect(updateCalls.map((c) => c.jobs.length)).toEqual([1, 1]);
+    expect(updateCalls[0].remove).toBeUndefined();
+    expect(updateCalls[1].remove).toEqual([revoked]);
     expect(res.success).toBe(true);
   });
 

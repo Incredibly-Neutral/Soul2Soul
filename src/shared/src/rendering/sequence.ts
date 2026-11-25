@@ -499,13 +499,16 @@ export const renderwithLitActions = async (
     for (let i = 0; i < updateJobs.length; i += UPDATE_BATCH_SIZE) {
       batches.push(updateJobs.slice(i, i + UPDATE_BATCH_SIZE));
     }
+  }
 
-    // The revoke rides the last batch, so that batch must hold one page. Give
-    // each page of the last batch a call of its own rather than letting the
-    // revoke's four requests stack on two pages. A reset is never split this
-    // way: it starts from an empty tree and is a single call by design.
+  // The revoke rides the last batch, so that batch must hold one page. This is
+  // checked after the batches exist rather than inside the loop, because the
+  // small case is the one it matters most for: two pages and a revoke would
+  // otherwise be a single call of two pages, and the revoke's four requests on
+  // top of 43-48 reaches 52. A reset is one call by design and is never split.
+  if (!reset) {
     const last = batches[batches.length - 1];
-    if (last.length > 1 && allRemove.some((entry) => !entry.replacedBy)) {
+    if (last && last.length > 1 && allRemove.some((entry) => !entry.replacedBy)) {
       batches.pop();
       for (const job of last) batches.push([job]);
     }
