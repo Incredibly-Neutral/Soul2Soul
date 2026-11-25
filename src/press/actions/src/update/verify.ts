@@ -11,7 +11,7 @@ import {
   PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { ADDRESS_RE } from '../libs/address';
-import { evmRead } from '../libs/evm';
+import { evmRead, readFresh } from '../libs/evm';
 import { isOutOfForce } from '../libs/gates';
 import { accountAddress } from '../../../../shared/dist/manuscript/identity/author-address';
 
@@ -306,17 +306,39 @@ const HAS_AGREEMENT_ABI = ['function hasAgreement(bytes32 genesis) view returns 
 
 const HEX32_RE = /^0x[0-9a-fA-F]{64}$/;
 
-// `evmRead`'s per-invocation cache answers an identical read for the rest of the
-// run. A retry exists precisely because the first answer may be the stale one,
-// so every attempt after the first asks again. Worker A's `fresh` bypass on
-// `evmRead` is not in this branch yet; this wrapper is the one place to swap
-// when it lands (the first attempt stays on the ordinary read — same answer,
-// same call).
-const isOutOfForceFresh = (
+/**
+ * `isOutOfForce` with the read cache bypassed — the same question, the same
+ * three rules (`=== false` is out of force, a throw is in force, `genesis` is
+ * already bytes32), asked of the chain through `readFresh` instead of
+ * `evmRead`.
+ *
+ * A retry exists precisely because the answer in the cache may predate the
+ * revoke this update is carrying; `evmRead` would hand back that same answer
+ * for the rest of the session. Narrow by design: only the repeated
+ * `hasAgreement` asks go this way.
+ */
+const isOutOfForceFresh = async (
   genesis: string,
   publicationModule: string,
   rpcs?: string[],
-): Promise<boolean> => isOutOfForce(genesis, publicationModule, rpcs);
+): Promise<boolean> => {
+  try {
+    return (
+      (await readFresh(
+        'L2',
+        publicationModule,
+        HAS_AGREEMENT_ABI,
+        'hasAgreement',
+        [genesis],
+        rpcs,
+      )) === false
+    );
+  } catch {
+    // A transport error must never make a live page look removable — the gate's
+    // rule, kept here so a retry cannot turn a broken replica into a permission.
+    return false;
+  }
+};
 
 /**
  * Verify that content at an MFS path is revocable:
@@ -349,7 +371,11 @@ export async function verifyRevocable(
 
   // Only the chain question is retried: the page was read once above, and a
   // read that failed has already thrown. A replica that has not caught up with
-  // the revoke still answers `in force`, so ask again before believing it.
+  // the revoke still answers `in force`, so ask again before believing it —
+  // and ask the chain, not the session's read cache, which is exactly what
+  // remembered the stale answer. The first attempt keeps the ordinary read: a
+  // cached hit there is another caller's answer to the same question, and a
+  // stale one can only cost a retry, never change the verdict.
   for (let attempt = 0; ; attempt++) {
     const outOfForce =
       attempt === 0
