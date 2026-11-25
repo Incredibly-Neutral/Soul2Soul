@@ -481,12 +481,13 @@ export const renderwithLitActions = async (
   // the rest of the fifty is not spare room: after the first batch the previous
   // root copy has already put the mirrored root txt files in place, so robots.txt
   // and llms.txt cost three requests each (stat, the rm that clears the copy,
-  // then the copy that cannot overwrite), six in all, which is 43-48. A revoke
-  // rides the last batch and costs three more — the revocable check, its retries,
-  // then the rm — so a run that also removes a page sits at the top of that
-  // range. A bulk render therefore splits its pages into batches and runs the
-  // update once per batch, sequentially: each call writes a contenthash at its
-  // end and the next one copies that tree forward.
+  // then the copy that cannot overwrite), which takes the session to 43-48.
+  //
+  // A revoke costs up to four more — hasAgreement, its retries, then the rm —
+  // so it rides a batch of its own that holds a single page: 42 at worst plus
+  // its four is 46, under the cap. A bulk render therefore splits its pages
+  // into batches and runs the update once per batch, sequentially: each call
+  // writes a contenthash at its end and the next one copies that tree forward.
   const UPDATE_BATCH_SIZE = 2;
   const updateJobs = resetOnly ? [] : activeJobs;
   const batches: any[][] = [];
@@ -497,6 +498,16 @@ export const renderwithLitActions = async (
   } else {
     for (let i = 0; i < updateJobs.length; i += UPDATE_BATCH_SIZE) {
       batches.push(updateJobs.slice(i, i + UPDATE_BATCH_SIZE));
+    }
+
+    // The revoke rides the last batch, so that batch must hold one page. Give
+    // each page of the last batch a call of its own rather than letting the
+    // revoke's four requests stack on two pages. A reset is never split this
+    // way: it starts from an empty tree and is a single call by design.
+    const last = batches[batches.length - 1];
+    if (last.length > 1 && allRemove.some((entry) => !entry.replacedBy)) {
+      batches.pop();
+      for (const job of last) batches.push([job]);
     }
   }
 

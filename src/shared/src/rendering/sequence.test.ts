@@ -1144,6 +1144,40 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     expect(updateCalls[3].remove).toEqual([revoked]);
   });
 
+  it('gives a revoke a one-page final batch, so six pages ride as 2 + 2 + 1 + 1', async () => {
+    const six = jobs.slice(0, 6);
+    const revoked = { path: '/posts/revoked' };
+    vi.mocked(runAction).mockImplementation(((_mode: string, _lit: unknown, cid: string, inputs: any) => {
+      if (cid === 'cid-prep') {
+        return Promise.resolve({ ok: true, action: 'prep', data: { jobs: six }, trace: [] });
+      }
+      if (cid === 'cid-render') {
+        return Promise.resolve({ ok: true, action: 'render', data: { job: inputs.job }, trace: [] });
+      }
+      if (cid === 'cid-update') {
+        updateCalls.push(inputs);
+        return Promise.resolve({
+          ok: true,
+          action: 'evm-update',
+          data: { cid: `bafyroot${String(updateCalls.length)}` },
+          trace: [`batch ${String(updateCalls.length)}`],
+        });
+      }
+      return Promise.reject(new Error('unexpected cid ' + cid));
+    }) as any);
+
+    const res: any = await call([revoked]);
+
+    // The revoke's four requests ride a batch that holds one page, not two.
+    expect(updateCalls.map((c) => c.jobs.length)).toEqual([2, 2, 1, 1]);
+    for (const c of updateCalls) expect(c.jobs.length).toBeLessThanOrEqual(2);
+    expect(updateCalls[0].remove).toBeUndefined();
+    expect(updateCalls[1].remove).toBeUndefined();
+    expect(updateCalls[2].remove).toBeUndefined();
+    expect(updateCalls[3].remove).toEqual([revoked]);
+    expect(res.success).toBe(true);
+  });
+
   it('rides a removal whose replacement is in no batch on the last batch', async () => {
     const orphan = { path: '/posts/orphan', replacedBy: '0x' + 'de'.repeat(32) };
     await call([orphan]);
