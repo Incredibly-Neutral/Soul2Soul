@@ -477,12 +477,16 @@ export const renderwithLitActions = async (
   // (manifest, owner and modules, canPublish, config, previous contenthash,
   // aliases, root copy) and 12-15 in the tail (assets stat/rm/cp, two txt
   // listings, root stat, pin/add, cleanup, and the on-chain write's nonce, gas
-  // estimate, send and receipt polling). Two pages therefore costs 37-42, which
-  // leaves eight requests of the fifty for the tree dressing: every mirrored
-  // root txt file adds two and every stale one adds one, so robots.txt and
-  // llms.txt fit with room to spare. A bulk render therefore splits its pages
-  // into batches and runs the update once per batch, sequentially: each call
-  // writes a contenthash at its end and the next one copies that tree forward.
+  // estimate, send and receipt polling). Two pages therefore costs 37-42, and
+  // the rest of the fifty is not spare room: after the first batch the previous
+  // root copy has already put the mirrored root txt files in place, so robots.txt
+  // and llms.txt cost three requests each (stat, the rm that clears the copy,
+  // then the copy that cannot overwrite), six in all, which is 43-48. A revoke
+  // rides the last batch and costs three more — the revocable check, its retries,
+  // then the rm — so a run that also removes a page sits at the top of that
+  // range. A bulk render therefore splits its pages into batches and runs the
+  // update once per batch, sequentially: each call writes a contenthash at its
+  // end and the next one copies that tree forward.
   const UPDATE_BATCH_SIZE = 2;
   const updateJobs = resetOnly ? [] : activeJobs;
   const batches: any[][] = [];

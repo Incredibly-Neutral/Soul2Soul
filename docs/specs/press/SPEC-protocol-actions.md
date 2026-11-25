@@ -811,15 +811,19 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   execution — a fresh invocation starts empty, so nothing stale survives into the next session.
   The update action turns the same cache on at the top of `main()`; its path gate asks
   `hasAgreement` through `evmRead` rather than building a provider of its own, and the
-  per-page `files/stat` is now one `files/ls?long=true` per parent directory.
+  per-page `files/stat` is now one `files/ls?long=true` of the page's own directory, since the
+  path it lists ends in that page's `/index.html`.
 - **Update batches (2026-11-25):** an update session writes every page it is given, and each
   page costs six IPFS requests (five for the page plus one `files/ls`, which is per page because
   the path it lists ends in that page's `/index.html`) on top of a fixed 25-30 calls: 13-15 in
   the prologue reads and gates, 12-15 in the tail (assets, two txt listings, root stat, pin/add,
   cleanup, and the on-chain write's nonce, gas estimate, send and receipt polling). Two pages
-  therefore costs 37-42, leaving eight requests of the fifty for the tree dressing, where every
-  mirrored root txt file adds two and every stale one adds one: robots.txt and llms.txt fit with
-  room left. `sequence.ts` splits the pages of a bulk render into batches of two and runs the
+  therefore costs 37-42, and the rest of the fifty is not spare room: after the first batch the
+  previous root copy has already put the mirrored root txt files in place, so each one costs
+  three requests (stat, rm, copy) rather than two, and robots.txt plus llms.txt comes to six,
+  which is 43-48. A revoke rides the last batch and costs three more — the revocable check, its
+  retries, then the rm — so a run that also removes a page sits at the top of that range.
+  `sequence.ts` splits the pages of a bulk render into batches of two and runs the
   update once per batch, sequentially: each call writes a contenthash and the next copies that
   tree forward. A removal rides with the batch that carries the genesis named in its
   `replacedBy` (the update only applies it when that genesis is among its own jobs), and one
