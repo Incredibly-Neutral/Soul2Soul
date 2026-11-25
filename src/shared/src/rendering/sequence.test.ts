@@ -1030,12 +1030,12 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
 // ============================================================================
 // A bulk render's pages go to the update action in batches.
 //
-// One update run spends about 17 requests before the first page and 13-15 after
-// the last, and each page adds four. Six pages is therefore 41, a revocation on
-// top of that is 48, and seven pages with a revocation would be 52. The budget
-// is 45, so pages ride in batches of six, five when a revocation is pending,
-// sequentially, and each batch writes the contenthash the next one copies
-// forward.
+// One update run spends about 17 requests in total, roughly nine before the
+// first page and eight after the last, and each page adds four. Six pages is
+// therefore 41, a revocation on top of that is 46, and six pages with a
+// revocation is 46 as well. The budget is 45, so pages ride in batches of six,
+// five when a revocation is pending, sequentially, and each batch writes the
+// contenthash the next one copies forward.
 // ============================================================================
 
 describe('renderwithLitActions — the update stage runs in batches', () => {
