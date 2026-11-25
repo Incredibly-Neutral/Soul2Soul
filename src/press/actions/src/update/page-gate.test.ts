@@ -304,6 +304,8 @@ describe('evm-update — REFRESH (the page at the destination is this job’s)',
       '0x' + '55'.repeat(20),
       gateway,
       expect.any(Array),
+      // The one cat of the source page, shared with the byte comparison.
+      expect.any(Promise),
     );
   });
 
@@ -327,6 +329,8 @@ describe('evm-update — REFRESH (the page at the destination is this job’s)',
       '0x' + '55'.repeat(20),
       gateway,
       expect.any(Array),
+      // The one cat of the source page, shared with the byte comparison.
+      expect.any(Promise),
     );
   });
 });

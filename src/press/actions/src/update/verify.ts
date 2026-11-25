@@ -110,9 +110,39 @@ export const pageIdentityOf = (schema: any): PageIdentity => {
 };
 
 /**
+ * Cat a page's HTML from IPFS. The one request that reads the source bytes, so
+ * a caller that also needs those bytes (update/main.ts verifies the page and
+ * then compares it with the destination) starts this once and hands the
+ * promise to {@link verifyProvenance} instead of paying for a second cat.
+ */
+export async function fetchPageHtml(gateway: string, htmlCid: string): Promise<string> {
+  const resp = await fetchWithTimeout(
+    `${gateway}/api/v0/cat?arg=${htmlCid}`,
+    { method: 'POST' },
+    30_000,
+  );
+  if (!resp.ok) {
+    throw `Failed to fetch HTML ${htmlCid.slice(0, 12)}… for verify: ${resp.status}`;
+  }
+  return resp.text();
+}
+
+/**
+ * The answer {@link readPageIdentity} gives, for bytes already in hand.
+ * Unparseable bytes are not a page (null), exactly as a failed read is not.
+ */
+export function identityOfText(html: string): PageIdentity | null {
+  try {
+    return pageIdentityOf(extractSchema(html));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Verify that the HTML at `htmlCid` carries a valid PKP provenance signature.
  *
- * 1. Cat the HTML from IPFS.
+ * 1. Cat the HTML from IPFS (or take the caller's cat of the same page).
  * 2. Extract JSON-LD schema, separate proof, canonicalize both, recover address.
  * 3. Verify recovered address matches expected PKP.
  * 4. Verify sha256 of HTML body matches schema claim.
@@ -126,17 +156,11 @@ export async function verifyProvenance(
   pkpEthAddress: string,
   gateway: string,
   trace?: any[],
+  prefetchedHtml?: Promise<string>,
 ): Promise<PageIdentity> {
-  // Fetch the HTML content from IPFS
-  const resp = await fetchWithTimeout(
-    `${gateway}/api/v0/cat?arg=${htmlCid}`,
-    { method: 'POST' },
-    30_000,
-  );
-  if (!resp.ok) {
-    throw `Failed to fetch HTML ${htmlCid.slice(0, 12)}… for verify: ${resp.status}`;
-  }
-  const html = await resp.text();
+  // The bytes, from the caller's cat when it started one (same request, same
+  // error text — fetchPageHtml's rejection is what the await below throws).
+  const html = await (prefetchedHtml ?? fetchPageHtml(gateway, htmlCid));
 
   const schema = extractSchema(html);
 
@@ -282,6 +306,18 @@ const HAS_AGREEMENT_ABI = ['function hasAgreement(bytes32 genesis) view returns 
 
 const HEX32_RE = /^0x[0-9a-fA-F]{64}$/;
 
+// `evmRead`'s per-invocation cache answers an identical read for the rest of the
+// run. A retry exists precisely because the first answer may be the stale one,
+// so every attempt after the first asks again. Worker A's `fresh` bypass on
+// `evmRead` is not in this branch yet; this wrapper is the one place to swap
+// when it lands (the first attempt stays on the ordinary read — same answer,
+// same call).
+const isOutOfForceFresh = (
+  genesis: string,
+  publicationModule: string,
+  rpcs?: string[],
+): Promise<boolean> => isOutOfForce(genesis, publicationModule, rpcs);
+
 /**
  * Verify that content at an MFS path is revocable:
  *  - Extract genesis from the existing HTML at ${mfsRoot}/${cleanPath}/index.html
@@ -299,6 +335,8 @@ export async function verifyRevocable(
   cleanPath: string,
   publicationModule: string,
   rpcs: string[] | undefined,
+  attempts = 1,
+  retryDelayMs = 0,
 ): Promise<void> {
   // Tree entries are directory nodes containing index.html files
   const filePath = `${mfsRoot}/${cleanPath}/index.html`;
@@ -309,8 +347,19 @@ export async function verifyRevocable(
     ? genesis.toLowerCase()
     : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(genesis));
 
-  if (!(await isOutOfForce(bytes32Genesis, publicationModule, rpcs))) {
-    throw `Refusing to remove: genesis ${bytes32Genesis.slice(0, 12)}… is still in force`;
+  // Only the chain question is retried: the page was read once above, and a
+  // read that failed has already thrown. A replica that has not caught up with
+  // the revoke still answers `in force`, so ask again before believing it.
+  for (let attempt = 0; ; attempt++) {
+    const outOfForce =
+      attempt === 0
+        ? await isOutOfForce(bytes32Genesis, publicationModule, rpcs)
+        : await isOutOfForceFresh(bytes32Genesis, publicationModule, rpcs);
+    if (outOfForce) return;
+    if (attempt >= attempts - 1) {
+      throw `Refusing to remove: genesis ${bytes32Genesis.slice(0, 12)}… is still in force`;
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
   }
 }
 
@@ -329,7 +378,7 @@ export async function readPageIdentity(
       30_000,
     );
     if (!resp.ok) return null;
-    return pageIdentityOf(extractSchema(await resp.text()));
+    return identityOfText(await resp.text());
   } catch {
     return null;
   }

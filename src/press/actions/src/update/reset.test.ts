@@ -105,6 +105,10 @@ vi.mock('./verify', () => ({
   verifyRevocable: vi.fn(async () => {}),
   // No page at any destination — every job is an ADD.
   readPageIdentity: vi.fn(async () => null),
+  // main.ts's shared source read: the bytes are not what these tests assert, so
+  // the cat answers a constant and no destination parses as a page.
+  fetchPageHtml: vi.fn(async () => 'QmSourceHtml'),
+  identityOfText: vi.fn(() => null),
   sanitizeRemovePath: (p: string) => p,
 }));
 
@@ -156,8 +160,7 @@ const sampleJob = {
   path: '/hello-world',
 };
 
-const hasCall = (needle: string): boolean =>
-  mocks.gatewayUrls.some((u) => u.includes(needle));
+const hasCall = (needle: string): boolean => mocks.gatewayUrls.some((u) => u.includes(needle));
 
 beforeEach(() => {
   mocks.gatewayUrls = [];
@@ -313,7 +316,9 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
     // These two kinds are read from the factory the document names and nowhere
     // else, so an unreadable document is a refusal, never a discovery without
     // the module check.
-    vi.mocked(getManifest).mockRejectedValueOnce(new Error("manifest: no 'manifest' record on 0xrecord"));
+    vi.mocked(getManifest).mockRejectedValueOnce(
+      new Error("manifest: no 'manifest' record on 0xrecord"),
+    );
     const result: any = await main({
       ...baseInput,
       signature: await makeSignature(),
@@ -383,9 +388,7 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
     });
 
     expect(result.ok).toBe(true);
-    expect(await batchNodesOf()).toEqual([
-      ethers.utils.namehash('alice.soul2soul.eth'),
-    ]);
+    expect(await batchNodesOf()).toEqual([ethers.utils.namehash('alice.soul2soul.eth')]);
   });
 
   it('writes contenthash_wrapped in the CIDv1 form even when the root is CIDv0', async () => {
@@ -423,9 +426,7 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
     });
 
     expect(result.ok).toBe(true);
-    expect(await batchNodesOf()).toEqual([
-      ethers.utils.namehash('custom.soul2soul.eth'),
-    ]);
+    expect(await batchNodesOf()).toEqual([ethers.utils.namehash('custom.soul2soul.eth')]);
     // The write target changed, not the publication identity — the canonical
     // publication node is NOT in the batch (identical to today's swap).
     const nodes = (await batchNodesOf()) ?? [];
@@ -453,9 +454,7 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
       (c: any[]) => c[4] === 'batchSetRecords',
     );
     expect(batchCalls.length).toBe(1);
-    const setTextCalls = (evmWrite as any).mock.calls.filter(
-      (c: any[]) => c[4] === 'setText',
-    );
+    const setTextCalls = (evmWrite as any).mock.calls.filter((c: any[]) => c[4] === 'setText');
     expect(setTextCalls.length).toBe(0);
   });
 
@@ -477,11 +476,7 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
       ['contenthash_wrapped'],
       ['contenthash_wrapped'],
     ]);
-    expect(values).toEqual([
-      [encoded, '["a.eth","b.eth"]'],
-      [encoded],
-      [encoded],
-    ]);
+    expect(values).toEqual([[encoded, '["a.eth","b.eth"]'], [encoded], [encoded]]);
   });
 
   it('dedupes the node list when an alias duplicates the publication name or another alias', async () => {

@@ -60,6 +60,9 @@ const mocks = vi.hoisted(() => ({
   txtBody: 'file does not exist',
   // Root-relative paths that already exist in the temp tree, and their kind.
   rootEntries: {} as Record<string, 'file' | 'dir'>,
+  // Root entries whose listed hash the tests control (assets unchanged, root
+  // txt unchanged) — `files/ls` of the tree root answers from here.
+  rootHashes: {} as Record<string, string>,
   txtLsCalls: 0,
   // Set when the new /assets cp has been issued: the assets/txt ls AFTER it is
   // the new tree, the one BEFORE it is the previous tree.
@@ -118,6 +121,10 @@ vi.mock('./verify', () => ({
   verifyRevocable: vi.fn(async () => {}),
   // No page at any destination — every job is an ADD.
   readPageIdentity: vi.fn(async () => null),
+  // main.ts's shared source read: the bytes are not what these tests assert, so
+  // the cat answers a constant and no destination parses as a page.
+  fetchPageHtml: vi.fn(async () => 'QmSourceHtml'),
+  identityOfText: vi.fn(() => null),
   sanitizeRemovePath: (p: string) => p,
 }));
 
@@ -152,8 +159,19 @@ const gatewayResponse = (url: string): Response => {
       if (status !== 200) return new Response(errorBody(body), { status });
       return new Response(JSON.stringify({ Entries: entries }), { status: 200 });
     }
-    // Debug ls of the whole tree.
-    return new Response(JSON.stringify({ Entries: [] }), { status: 200 });
+    // The tree root, listed once by the action: the previous-root copy put
+    // `rootEntries` there, and `rootHashes` overrides a listed hash where a test
+    // pins one (the assets comparison).
+    const entries = Object.entries(mocks.rootEntries).map(([rel, kind]) => {
+      const name = rel.replace(/^\//, '');
+      return {
+        Name: name,
+        Type: kind === 'dir' ? 1 : 0,
+        Hash: mocks.rootHashes[rel] ?? 'QmExisting',
+        Size: 1,
+      };
+    });
+    return new Response(JSON.stringify({ Entries: entries }), { status: 200 });
   }
 
   if (url.includes('files/cp')) {
@@ -259,6 +277,7 @@ beforeEach(() => {
   mocks.txtStatus = 200;
   mocks.txtBody = 'file does not exist';
   mocks.rootEntries = {};
+  mocks.rootHashes = {};
   mocks.txtLsCalls = 0;
   mocks.assetsCopied = false;
   vi.stubGlobal(
@@ -426,6 +445,9 @@ describe('evm-update — stale root txt cleanup', () => {
     mocks.prevTxtStatus = 200;
     mocks.prevTxtEntries = [txtFile('robots.txt'), txtFile('llms.txt')];
     mocks.txtEntries = [txtFile('llms.txt')];
+    // The previous-root copy left the stale copy at the root; the listing is
+    // what says so now.
+    mocks.rootEntries['/robots.txt'] = 'file';
     const result: any = await main({ ...baseInput, signature: await makeSignature() });
 
     expect(result.ok).toBe(true);
@@ -439,6 +461,7 @@ describe('evm-update — stale root txt cleanup', () => {
     mocks.config = {}; // no assetsCid → nothing to mirror…
     mocks.prevTxtStatus = 200;
     mocks.prevTxtEntries = [txtFile('robots.txt')];
+    mocks.rootEntries['/robots.txt'] = 'file';
     const result: any = await main({ ...baseInput, signature: await makeSignature() });
 
     expect(result.ok).toBe(true);
@@ -465,6 +488,7 @@ describe('evm-update — stale root txt cleanup', () => {
   it('a failed stale rm is a trace, never a throw', async () => {
     mocks.prevTxtStatus = 200;
     mocks.prevTxtEntries = [txtFile('robots.txt')];
+    mocks.rootEntries['/robots.txt'] = 'file';
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {

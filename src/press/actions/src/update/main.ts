@@ -13,7 +13,8 @@ import {
   sanitizeRemovePath,
   verifyRevocable,
   verifyPathAvailable,
-  readPageIdentity,
+  fetchPageHtml,
+  identityOfText,
   type PageIdentity,
 } from './verify';
 
@@ -203,19 +204,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       `owner: ${multisig}, configModule ${configModule}, publicationModule ${publicationModule}`,
     );
 
-    // A reset is publication-owner gated (stricter than canPublish): the signer
-    // must be an owner of the publication Safe (`multisig`), not merely an owner
-    // of a whitelisted author Safe. Everything else is gated PER PAGE in the
-    // jobs loop: an ADD needs canPublish, a REFRESH of the page already at its
-    // own path needs nothing (it introduces no path and displaces no page), and
-    // a remove is a repair that verifyRevocable alone decides. A reset is the
-    // one exception to the ADD rule: canReset already judged the signer, so the
-    // pages a reset rebuilds are not asked about again.
-    if (reset) {
-      if (!(await canReset(multisig, signerAddress, rpcs?.L2))) {
-        throw 'reset requires publication owner';
-      }
-    }
+    const canonicalNode = ethers.utils.namehash(publication);
 
     // canPublish answers the same question for every page in the request, so it
     // is asked at most once however many pages are added. The PROMISE is what is
@@ -229,12 +218,71 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       return publishGate;
     };
 
+    // Warm-up. One invocation is one 50-request session, and these reads are
+    // independent of each other and of the decisions below, so they start here
+    // and are awaited further down where the code used to make the calls: the
+    // same requests go out, earlier, and every check and every error still
+    // happens at the await, in the old order. Each promise carries a no-op catch
+    // so a rejection that surfaces first somewhere else cannot become an
+    // unhandled rejection — the await still throws it.
+    //
+    // mayPublish is deliberately NOT warmed: a refresh-only request never asks
+    // it, and warming it would spend canPublish's reads on a run that the
+    // per-page gate means to leave unasked.
+    const resetGate: Promise<boolean> | null = reset
+      ? canReset(multisig, signerAddress, rpcs?.L2)
+      : null;
+    const configPromise = getConfig(undefined, configModule, rpcs?.L2, gateway);
+    // `nodes[0]` decides the contenthash_wrapped read and depends on the
+    // config, so the write-target resolution rides on the config read rather
+    // than waiting for the gate below.
+    const writeTargetsPromise = configPromise.then((prevConfig) =>
+      resolveWriteTargets(prevConfig, publication),
+    );
+    const prevEncodedPromise = writeTargetsPromise.then(({ nodes: writeNodes }) =>
+      evmRead(
+        'L2',
+        protocolInfo.ensRecords,
+        RECORDS_CONTRACT_ABI,
+        'getText',
+        [writeNodes[0], 'contenthash_wrapped'],
+        rpcs?.L2,
+      ),
+    );
+    // The alias-tracking record is keyed on the canonical node, not the write
+    // targets, so it does not wait for the config read at all.
+    const prevAliasesPromise = evmRead(
+      'L2',
+      protocolInfo.ensRecords,
+      RECORDS_CONTRACT_ABI,
+      'getText',
+      [canonicalNode, ALIASES_TRACKING_KEY],
+      rpcs?.L2,
+    );
+    for (const warm of [resetGate, configPromise, prevEncodedPromise, prevAliasesPromise]) {
+      warm?.catch(() => undefined);
+    }
+
+    // A reset is publication-owner gated (stricter than canPublish): the signer
+    // must be an owner of the publication Safe (`multisig`), not merely an owner
+    // of a whitelisted author Safe. Everything else is gated PER PAGE in the
+    // jobs loop: an ADD needs canPublish, a REFRESH of the page already at its
+    // own path needs nothing (it introduces no path and displaces no page), and
+    // a remove is a repair that verifyRevocable alone decides. A reset is the
+    // one exception to the ADD rule: canReset already judged the signer, so the
+    // pages a reset rebuilds are not asked about again.
+    if (reset) {
+      if (!(await resetGate)) {
+        throw 'reset requires publication owner';
+      }
+    }
+
     if (!protocolInfo?.pkp) {
       throw 'Failed to fetch protocol info';
     }
     trace.push(`pinfo: ${protocolInfo}`);
 
-    const config = await getConfig(undefined, configModule, rpcs?.L2, gateway);
+    const config = await configPromise;
     trace.push(`config: ${config}`);
 
     // The WRITE nodes may differ from the publication identity: the config can
@@ -244,24 +292,12 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // ownership/discovery (getDomainOwnerAndModules(publication),
     // canPublish/canReset) stays keyed on the original `publication` identity,
     // not the configured domain/aliases.
-    const { nodes, isLegacyDomain } = resolveWriteTargets(config, publication);
-    const canonicalNode = ethers.utils.namehash(publication);
+    const { nodes, isLegacyDomain } = await writeTargetsPromise;
     trace.push(`nodes: ${JSON.stringify(nodes)}`);
 
-    // The primary node drives the previous-tree copy decision below. In the
-    // additive/default paths this is the canonical publication node; in the
-    // legacy `domain` path it is namehash(domain) — matching today's behaviour.
-    const node = nodes[0];
-
-    // Read previous contenthash_wrapped on-chain (primary node)
-    const prevEncoded = await evmRead(
-      'L2',
-      protocolInfo.ensRecords,
-      RECORDS_CONTRACT_ABI,
-      'getText',
-      [node, 'contenthash_wrapped'],
-      rpcs?.L2,
-    );
+    // Read previous contenthash_wrapped on-chain (primary node) — the warmed
+    // promise, awaited here exactly where the call used to be made.
+    const prevEncoded = await prevEncodedPromise;
     trace.push(`prev: ${prevEncoded}`);
 
     // Read the previously-tracked alias names (auxiliary 'aliases' record on
@@ -270,14 +306,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // simply means there is nothing tracked yet (first run after upgrade).
     let prevAliases: string[] = [];
     try {
-      const prevAliasJson = await evmRead(
-        'L2',
-        protocolInfo.ensRecords,
-        RECORDS_CONTRACT_ABI,
-        'getText',
-        [canonicalNode, ALIASES_TRACKING_KEY],
-        rpcs?.L2,
-      );
+      const prevAliasJson = await prevAliasesPromise;
       const parsed = typeof prevAliasJson === 'string' ? JSON.parse(prevAliasJson) : null;
       if (Array.isArray(parsed)) {
         prevAliases = parsed.filter((a: unknown) => typeof a === 'string');
@@ -358,6 +387,34 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       return (await listing).get(name) ?? '';
     };
 
+    // A tree with no previous root (or a reset) has nothing at any destination,
+    // so the destination reads below are skipped rather than answered by a call.
+    const treeIsFresh = !hasPrevRoot;
+    // What the overwrite decision knows when the bytes at the destination differ
+    // from the source: a different CID follows from different bytes, so the
+    // directory listing is not needed to prove it.
+    const PRESENT_AND_DIFFERENT = '(present, bytes differ)';
+    // One `files/read` answers both questions about a destination — is a page
+    // there, and which identity does it claim — where the identity read plus the
+    // `files/ls` (or `files/stat`) cost two. `unknown` keeps an unreadable path
+    // on the old path: the listing still decides, exactly as it did before.
+    const readMfsText = async (
+      path: string,
+    ): Promise<{ state: 'present'; text: string } | { state: 'absent' } | { state: 'unknown' }> => {
+      try {
+        const res = await fetchWithTimeout(
+          `${gateway}/api/v0/files/read?arg=${encodeURIComponent(path)}`,
+          { method: 'POST' },
+          30_000,
+        );
+        const text = await res.text();
+        if (res.ok) return { state: 'present', text };
+        return isMissingMfsPath(text) ? { state: 'absent' } : { state: 'unknown' };
+      } catch {
+        return { state: 'unknown' };
+      }
+    };
+
     // Copy delta jobs in parallel — blocks already on the kubo node
     trace.push(`cp ${jobs.length} files`);
     await Promise.all(
@@ -393,9 +450,31 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         // A preview writes nothing and is never a refresh, so it still needs
         // canPublish.
         //
-        // The identity read here is the one the path gate below needs, so it is
-        // handed over rather than read twice.
-        const existingPage = preview ? undefined : await readPageIdentity(gateway!, destPath);
+        // The source page is cat'd once per job: the bytes verifyProvenance
+        // checks are the bytes compared with the destination below.
+        let existingPage: PageIdentity | null = null;
+        // What the destination read found: its bytes when it is a page, and
+        // whether it is there at all (`fresh` = the tree has nothing at any
+        // path, `unknown` = the read failed and the listing still decides).
+        let pageState: 'present' | 'absent' | 'unknown' | 'fresh' = 'fresh';
+        let pageText = '';
+        // A preview writes nothing and verifies nothing, so it never cats.
+        const sourceHtml: Promise<string> = preview
+          ? Promise.resolve('')
+          : fetchPageHtml(gateway!, sourceCid);
+        if (!preview) {
+          // The fast path below can return before anyone awaits it; a run that
+          // skips the page must not surface the rejected fetch.
+          sourceHtml.catch(() => undefined);
+          if (!treeIsFresh) {
+            const read = await readMfsText(destPath);
+            pageState = read.state;
+            if (read.state === 'present') pageText = read.text;
+          } else {
+            pageState = 'absent';
+          }
+          existingPage = pageState === 'present' ? identityOfText(pageText) : null;
+        }
         const isRefresh = !preview && existingPage?.identifier === signerId;
         if (isRefresh) {
           trace.push(`refresh: ${filePath}`);
@@ -417,6 +496,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
               protocolInfo.pkp!,
               gateway!,
               trace,
+              sourceHtml,
             );
           } catch (e) {
             throw `Rejected ${job.path}: provenance verify failed — ${typeof e === 'string' ? e : String(e)}`;
@@ -424,8 +504,22 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         }
 
         // Check if dest entry already exists (from previous run's root copy)
-        // Kubo files/cp does NOT overwrite — must rm first
-        const prevHash: string = await hashAt(destPath);
+        // Kubo files/cp does NOT overwrite — must rm first.
+        //
+        // Different bytes are a different CID, so the listing is only needed
+        // when the read found the same bytes (the unchanged skip still compares
+        // CIDs exactly) or could not decide (`unknown`, and the listing answers
+        // "" for an absent path just as it always did).
+        let prevHash: string;
+        if (preview) {
+          prevHash = treeIsFresh ? '' : await hashAt(destPath);
+        } else if (pageState === 'absent') {
+          prevHash = '';
+        } else if (pageState === 'present' && pageText !== (await sourceHtml)) {
+          prevHash = PRESENT_AND_DIFFERENT;
+        } else {
+          prevHash = await hashAt(destPath);
+        }
 
         // Fast path: skip if dest already matches source
         if (prevHash && prevHash === sourceCid) {
@@ -502,26 +596,29 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
             return;
           }
 
-          // Revoke (no replacedBy): verify no active deal before removing
+          // Revoke (no replacedBy): verify no active deal before removing.
+          // verifyRevocable reads the page once and re-asks ONLY the chain
+          // question, so a lagging replica is retried without re-reading a
+          // page that cannot have changed in between.
           if (!entry.replacedBy && !preview) {
-            // A revoke retracts on-chain immediately before this update, and a
-            // replica that has not caught up yet still answers hasAgreement
-            // true. That refusal is terminal for this path and leaves the page
-            // live, so ask again a couple of times before believing it.
             let refusal: unknown;
-            for (let attempt = 0; attempt < 3; attempt++) {
-              try {
-                await verifyRevocable(gateway!, mfsPath, cleanPath, publicationModule, rpcs?.L2);
-                refusal = undefined;
-                break;
-              } catch (e) {
-                refusal = e;
-                if (!/still in force/i.test(String(e)) || attempt === 2) break;
-                await new Promise((resolve) => setTimeout(resolve, 2000));
-              }
+            try {
+              await verifyRevocable(
+                gateway!,
+                mfsPath,
+                cleanPath,
+                publicationModule,
+                rpcs?.L2,
+                3,
+                2000,
+              );
+            } catch (e) {
+              refusal = e;
             }
             if (refusal !== undefined) {
-              trace.push(`skip remove ${entry.path}: ${typeof refusal === 'string' ? refusal : String(refusal)}`);
+              trace.push(
+                `skip remove ${entry.path}: ${typeof refusal === 'string' ? refusal : String(refusal)}`,
+              );
               return;
             }
           }
@@ -551,51 +648,95 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // tree's own assets/txt now, before the assets copy below replaces /assets
     // wholesale. A file that has since disappeared from the site repo — or a
     // config that has since lost its assetsCid — must not leave its copy at the
-    // root forever.
+    // root forever. The listing is kept: when the assets are unchanged it IS the
+    // new assets/txt listing, so the mirror does not ask for it twice.
     const assetsDestPath = `${mfsPath}/assets`;
     const txtDirPath = `${assetsDestPath}/txt`;
+    const previousTxtEntries: TxtEntry[] | null = hasPrevRoot
+      ? await lsMfsDir(gateway!, txtDirPath)
+      : null;
     const previousRootTxtNames = new Set<string>();
-    if (hasPrevRoot) {
-      for (const entry of (await lsMfsDir(gateway!, txtDirPath)) ?? []) {
-        if (entry.Type === 0 && typeof entry.Name === 'string')
-          previousRootTxtNames.add(entry.Name);
-      }
+    for (const entry of previousTxtEntries ?? []) {
+      if (entry.Type === 0 && typeof entry.Name === 'string') previousRootTxtNames.add(entry.Name);
     }
+
+    // The tree root, listed once. This one request answers every per-name
+    // question below — does the name exist, is it a directory, is it already the
+    // file we would copy — that used to cost one `files/stat` each. A failure is
+    // not fatal and not a claim that the tree is empty: `null` sends every check
+    // back to its own `files/stat` (occupantAt), so the outcome is unchanged.
+    interface RootEntry {
+      Type?: number | string;
+      Hash?: string;
+      Size?: number;
+    }
+    let rootEntries: Map<string, RootEntry> | null = null;
+    try {
+      const listed = await lsMfsDir(gateway!, mfsPath);
+      rootEntries = new Map(
+        (listed ?? [])
+          .filter((e): e is TxtEntry & { Name: string } => typeof e.Name === 'string')
+          .map((e) => [e.Name, { Type: e.Type, Hash: e.Hash }]),
+      );
+    } catch (e) {
+      trace.push(`warn: root ls failed, checking names one by one: ${String(e)}`);
+    }
+
+    /** `files/stat` on a root name — the check every caller made before the listing. */
+    const occupantAt = async (name: string): Promise<RootEntry | null> => {
+      const res = await fetchWithTimeout(
+        `${gateway}/api/v0/files/stat?arg=${encodeURIComponent(`${mfsPath}/${name}`)}`,
+        { method: 'POST' },
+        TIMEOUTS.stat,
+      );
+      if (!res.ok) return null;
+      return (await res.json().catch(() => ({}))) as RootEntry;
+    };
 
     // Copy assets into /assets
     const mirroredRootTxt = new Set<string>();
     if (config.assetsCid) {
-      trace.push(`cp assets ${config.assetsCid} → ${assetsDestPath}`);
+      // Same assetsCid at /assets means the same blocks: the rm + cp would
+      // rebuild the very directory node already there, so both are skipped and
+      // the previous assets/txt listing is the new one (the copy is what would
+      // have changed it).
+      const listedAssets = rootEntries?.get('assets');
+      let txtEntries: TxtEntry[] | null;
+      if (hasPrevRoot && listedAssets && listedAssets.Hash === config.assetsCid) {
+        trace.push(`✓ assets (${config.assetsCid.slice(0, 9)}) already in place`);
+        txtEntries = previousTxtEntries;
+      } else {
+        trace.push(`cp assets ${config.assetsCid} → ${assetsDestPath}`);
 
-      // Remove existing /assets if present
-      try {
-        await fetchWithTimeout(
-          `${gateway}/api/v0/files/stat?arg=${encodeURIComponent(assetsDestPath)}`,
-          { method: 'POST' },
-          TIMEOUTS.stat,
-        );
-        await fetchWithTimeout(
-          `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(assetsDestPath)}&recursive=true`,
-          { method: 'POST' },
-          TIMEOUTS.rm,
-        ).catch((e) => trace.push(`warn: rm assets failed: ${String(e)}`));
-      } catch {}
-      const assetsUrl =
-        `${gateway}/api/v0/files/cp?` +
-        `arg=/ipfs/${encodeURIComponent(config.assetsCid)}` +
-        `&arg=${encodeURIComponent(assetsDestPath)}` +
-        `&parents=true&flush=false`;
-      const assetsRes = await fetchWithTimeout(assetsUrl, { method: 'POST' }, TIMEOUTS.cpFile);
-      if (!assetsRes.ok) {
-        const text = await assetsRes.text();
-        throw `Failed to cp assets: ${text}`;
+        // Remove existing /assets if present. The listing already knows whether
+        // it is there, except when the listing failed — then the rm is tried
+        // blind and a failure stays a warning, as it always was.
+        if (!rootEntries || listedAssets) {
+          await fetchWithTimeout(
+            `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(assetsDestPath)}&recursive=true`,
+            { method: 'POST' },
+            TIMEOUTS.rm,
+          ).catch((e) => trace.push(`warn: rm assets failed: ${String(e)}`));
+        }
+        const assetsUrl =
+          `${gateway}/api/v0/files/cp?` +
+          `arg=/ipfs/${encodeURIComponent(config.assetsCid)}` +
+          `&arg=${encodeURIComponent(assetsDestPath)}` +
+          `&parents=true&flush=false`;
+        const assetsRes = await fetchWithTimeout(assetsUrl, { method: 'POST' }, TIMEOUTS.cpFile);
+        if (!assetsRes.ok) {
+          const text = await assetsRes.text();
+          throw `Failed to cp assets: ${text}`;
+        }
+        trace.push(`✓ assets (${config.assetsCid.slice(0, 9)})`);
+
+        txtEntries = await lsMfsDir(gateway!, txtDirPath);
+        rootEntries?.set('assets', { Type: 1, Hash: config.assetsCid });
       }
-      trace.push(`✓ assets (${config.assetsCid.slice(0, 9)})`);
 
       // Mirror every file in assets/txt (robots.txt, llms.txt, …) to the tree
       // ROOT, so the published site answers both /assets/txt/robots.txt and
       // /robots.txt. The DIRECTORY is the opt-in: any file in it is mirrored.
-      const txtEntries = await lsMfsDir(gateway!, txtDirPath);
       if (txtEntries === null) {
         trace.push(`no ${txtDirPath}: no root txt files`);
       } else {
@@ -612,23 +753,28 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           }
 
           const txtDestPath = `${mfsPath}/${txtName}`;
-          // Kubo files/cp does not overwrite, and the previous-root copy
-          // already put last run's /robots.txt (etc.) at the root — clear it
-          // first. A stat on a path that is not there is simply "no entry".
-          const txtStatRes = await fetchWithTimeout(
-            `${gateway}/api/v0/files/stat?arg=${encodeURIComponent(txtDestPath)}`,
-            { method: 'POST' },
-            TIMEOUTS.stat,
-          );
-          if (txtStatRes.ok) {
-            const existing = (await txtStatRes.json().catch(() => ({}))) as { Type?: unknown };
-            // A page whose slug is this name owns a DIRECTORY here. The page
-            // wins: never rm recursively, never cp over it, never throw — the
-            // prev tree is re-copied every run, so a wedge here never recovers.
-            if (existing.Type === 1 || existing.Type === 'directory') {
-              trace.push(`skip root txt ${txtName}: a page occupies this path`);
+          // The root listing answers what the `files/stat` here used to ask.
+          const existing = rootEntries ? rootEntries.get(txtName) : await occupantAt(txtName);
+
+          // A page whose slug is this name owns a DIRECTORY here. The page
+          // wins: never rm recursively, never cp over it, never throw — the
+          // prev tree is re-copied every run, so a wedge here never recovers.
+          if (existing && (existing.Type === 1 || existing.Type === 'directory')) {
+            trace.push(`skip root txt ${txtName}: a page occupies this path`);
+            continue;
+          }
+          if (existing) {
+            // The root entry carries the same hash as the assets/txt file, so
+            // the cp would write the bytes already there — the outcome of rm +
+            // cp is this tree, unchanged, so neither is issued.
+            if (typeof entry.Hash === 'string' && existing.Hash === entry.Hash) {
+              trace.push(`✓ root txt ${txtName} (unchanged)`);
+              mirroredRootTxt.add(txtName);
               continue;
             }
+            // Kubo files/cp does not overwrite, and the previous-root copy
+            // already put last run's /robots.txt (etc.) at the root — clear it
+            // first.
             await fetchWithTimeout(
               `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(txtDestPath)}`,
               { method: 'POST' },
@@ -652,6 +798,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           }
           trace.push(`✓ root txt ${txtName}`);
           mirroredRootTxt.add(txtName);
+          rootEntries?.set(txtName, { Type: 0, Hash: entry.Hash });
         }
       }
     }
@@ -660,12 +807,17 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // longer in assets/txt — or that has no assets at all any more — must not
     // linger. Non-recursive on purpose: where a page now owns the path it is a
     // directory, the rm fails and is traced; a page is never deleted to clear a
-    // txt file, and a failed rm is never fatal.
+    // txt file, and a failed rm is never fatal. A name the listing does not
+    // carry is already gone, so no request is spent on it.
     for (const oldName of previousRootTxtNames) {
       if (mirroredRootTxt.has(oldName)) continue;
       const reserved = rootTxtSkipReason(oldName);
       if (reserved) {
         trace.push(`skip stale root txt ${oldName}: ${reserved}`);
+        continue;
+      }
+      if (rootEntries && !rootEntries.has(oldName)) {
+        trace.push(`skip stale root ${oldName}: not present`);
         continue;
       }
       const stalePath = `${mfsPath}/${oldName}`;
@@ -675,14 +827,27 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           { method: 'POST' },
           TIMEOUTS.rm,
         );
-        trace.push(
-          staleRes.ok
-            ? `rm stale root ${oldName}`
-            : `warn: rm stale root ${oldName} failed: ${await staleRes.text()}`,
-        );
+        if (staleRes.ok) {
+          rootEntries?.delete(oldName);
+          trace.push(`rm stale root ${oldName}`);
+        } else {
+          trace.push(`warn: rm stale root ${oldName} failed: ${await staleRes.text()}`);
+        }
       } catch (e) {
         trace.push(`warn: rm stale root ${oldName} failed: ${String(e)}`);
       }
+    }
+
+    // What the root now holds, from the listing that replaced the per-name
+    // stats and the debug `files/ls`: printed, not read again. A failed listing
+    // already said so above, and re-listing to print it would spend the request
+    // this change exists to save.
+    if (rootEntries) {
+      const entries = [...rootEntries.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+      console.log(
+        `[update] MFS tree at ${mfsPath}: ` +
+          entries.map(([name, e]) => (e.Type === 1 ? `${name}/` : name)).join(' '),
+      );
     }
 
     // Wrap in try/finally so temp always cleans up (even on evmWrite failure)
