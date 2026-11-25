@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   evmRead,
   evmGetCode,
@@ -6,6 +6,8 @@ import {
   toHexString,
   enableReadCache,
   disableReadCache,
+  readFresh,
+  rpcEnqueue,
 } from './evm';
 import { decodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
@@ -67,6 +69,7 @@ function withFakeEthers(scenario: () => any) {
 
 const ABI = ['function NAME() view returns (string)'];
 const RPC_URLS = ['https://rpc.example'];
+const realFetch = (globalThis as any).fetch;
 
 // ============================================================================
 // evmWrite receipt-wait retry (WRITE-CONFIRMATION path only).
@@ -238,8 +241,7 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     expect(receiptCalls()).toBe(1);
   });
 
-  it('does NOT wait when confirm is false (fire-and-forget unchanged)', async () => {
-    // confirm:false must not touch getTransactionReceipt at all.
+  it('does NOT wait when confirm is false (fire-and-forget unchanged)', async () => {    // confirm:false must not touch getTransactionReceipt at all.
     let called = false;
     const { receiptCalls } = withFakeEthersWrite(() => {
       called = true;
@@ -260,6 +262,41 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     expect(result.success).toBe(true);
     expect(called).toBe(false);
     expect(receiptCalls()).toBe(0);
+  });
+
+  it('polls the first receipt only after one block (2000 ms)', async () => {
+    // A tx cannot be in a block before ~2s on Base; ethers' own 0ms first poll
+    // could never see a receipt and only spent session requests. The first ask
+    // now waits one block.
+    vi.useFakeTimers();
+    const savedFetch = (globalThis as any).fetch;
+    (globalThis as any).fetch = async () => {
+      throw new Error('offline');
+    };
+    try {
+      const { receiptCalls } = withFakeEthersWrite(() => minedReceipt(1, 1));
+      const done = evmWrite(
+        'L2',
+        '0x' + '11'.repeat(20),
+        '0x' + '22'.repeat(20),
+        ABI,
+        'setText',
+        ['contenthash_wrapped', '0xabc'],
+        true,
+        'https://rpc.example',
+      );
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(receiptCalls()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(receiptCalls()).toBe(1);
+
+      await done;
+    } finally {
+      vi.useRealTimers();
+      (globalThis as any).fetch = savedFetch;
+    }
   });
 });
 
@@ -401,6 +438,344 @@ describe('read cache (one invocation, one budget)', () => {
     );
     await expect(evmRead('L2', '0xF', ABI, 'safe', [], RPC_URLS)).resolves.toBe('0xSafe');
     expect(contractCalls()).toBe(2);
+  });
+});
+
+describe('readFresh (a retry must reach the chain)', () => {
+  beforeEach(() => {
+    delete (globalThis as any).ethers;
+    enableReadCache();
+  });
+
+  afterEach(() => {
+    disableReadCache();
+  });
+
+  it('skips the cache for that call, and only that call', async () => {
+    const { contractCalls } = withFakeEthers(() => 'true');
+
+    await evmRead('L2', '0xF', ABI, 'hasAgreement', ['0x01'], RPC_URLS);
+    await evmRead('L2', '0xF', ABI, 'hasAgreement', ['0x01'], RPC_URLS);
+    // The cache answered the second ask without a request.
+    expect(contractCalls()).toBe(1);
+
+    await readFresh('L2', '0xF', ABI, 'hasAgreement', ['0x01'], RPC_URLS);
+    expect(contractCalls()).toBe(2);
+
+    // The cached answer stays the cached answer: the bypass is per call.
+    await evmRead('L2', '0xF', ABI, 'hasAgreement', ['0x01'], RPC_URLS);
+    expect(contractCalls()).toBe(2);
+  });
+});
+
+// ============================================================================
+// JSON-RPC batching — independent reads made in one tick share one request.
+//
+// Every request spends one of Lit's 50 per session. Two reads that start in the
+// same tick go out as one batch; a lone read falls through to the per-URL path
+// unchanged; and no failure shape is allowed to change the caller's answer.
+// ============================================================================
+
+describe('JSON-RPC batching', () => {
+  const fakeInterface = () =>
+    class FakeInterface {
+      getFunction(method: string) {
+        return { method, outputs: [{ type: 'bytes' }] };
+      }
+      encodeFunctionData(fragment: any) {
+        return '0xcall' + fragment.method;
+      }
+      decodeFunctionResult(_fragment: any, raw: any) {
+        return [raw];
+      }
+    };
+
+  // Fake `ethers` with the call path the batch uses (Interface/hexValue) and
+  // the per-URL fallback (Contract) so both can be counted.
+  const withBatchEthers = (contractAnswer: (method: string) => any = () => '0xfallback') => {
+    const contractCalls: string[] = [];
+    const FakeInterface = fakeInterface();
+    class FakeContract {
+      constructor(_a: string, _b: any, _p: any) {
+        return new Proxy(this, {
+          get: (_t: any, prop: string) => () => {
+            contractCalls.push(prop);
+            const outcome = contractAnswer(prop);
+            if (outcome instanceof Error) throw outcome;
+            return outcome;
+          },
+        });
+      }
+    }
+    (globalThis as any).ethers = {
+      providers: { StaticJsonRpcProvider: FakeStaticJsonRpcProvider },
+      Contract: FakeContract,
+      utils: { Interface: FakeInterface, hexValue: (n: number) => '0x' + n.toString(16) },
+    };
+    return { contractCalls };
+  };
+
+  const stubFetch = (answer: (url: string, body: any[]) => any) => {
+    const seen: Array<{ url: string; body: any[] }> = [];
+    (globalThis as any).fetch = async (url: string, init: any) => {
+      const body = JSON.parse(init.body);
+      seen.push({ url, body });
+      return { json: async () => answer(url, body) };
+    };
+    return seen;
+  };
+
+  beforeEach(() => {
+    delete (globalThis as any).ethers;
+    disableReadCache();
+  });
+
+  afterEach(() => {
+    (globalThis as any).fetch = realFetch;
+  });
+
+  it('answers two reads made in one tick with one HTTP request', async () => {
+    withBatchEthers();
+    const seen = stubFetch((_url, body) =>
+      body.map((call) => ({
+        jsonrpc: '2.0',
+        id: call.id,
+        result: call.params[0].data === '0xcalla' ? '0xaaa' : '0xbbb',
+      })),
+    );
+
+    const [a, b] = await Promise.all([
+      evmRead('L2', '0xaddr', ABI, 'a', [], RPC_URLS),
+      evmRead('L2', '0xaddr', ABI, 'b', [], RPC_URLS),
+    ]);
+
+    expect(a).toBe('0xaaa');
+    expect(b).toBe('0xbbb');
+    expect(seen).toHaveLength(1);
+    expect(seen[0].body).toHaveLength(2);
+    expect(seen[0].body.map((call) => call.method)).toEqual(['eth_call', 'eth_call']);
+  });
+
+  it('sends a lone read through the per-URL path, not a one-call batch', async () => {
+    const { contractCalls } = withBatchEthers(() => '0xsolo');
+    const seen = stubFetch(() => {
+      throw new Error('a lone read must not be sent as a batch');
+    });
+
+    const value = await evmRead('L2', '0xaddr', ABI, 'a', [], RPC_URLS);
+
+    expect(value).toBe('0xsolo');
+    expect(seen).toHaveLength(0);
+    expect(contractCalls).toEqual(['a']);
+  });
+
+  it('falls back to the per-URL path when the node refuses the batch', async () => {
+    const { contractCalls } = withBatchEthers(() => '0xfallback');
+    const seen = stubFetch(() => ({ error: { code: -32000, message: 'batch refused' } }));
+
+    const [a, b] = await Promise.all([
+      evmRead('L2', '0xaddr', ABI, 'a', [], RPC_URLS),
+      evmRead('L2', '0xaddr', ABI, 'b', [], RPC_URLS),
+    ]);
+
+    expect([a, b]).toEqual(['0xfallback', '0xfallback']);
+    // One refused batch, then each read's own request.
+    expect(seen).toHaveLength(1);
+    expect(contractCalls).toEqual(['a', 'b']);
+  });
+
+  it('rejects only the errored entry of a batch, keeping the node message', async () => {
+    stubFetch((_url, body) =>
+      body.map((call) =>
+        call.id === 0
+          ? { jsonrpc: '2.0', id: 0, error: { code: -32000, message: 'execution reverted: nope' } }
+          : { jsonrpc: '2.0', id: 1, result: '0xok' },
+      ),
+    );
+
+    const bad = rpcEnqueue(RPC_URLS, 'eth_call', [{}]);
+    const good = rpcEnqueue(RPC_URLS, 'eth_call', [{}]);
+
+    const err: any = await bad.catch((e) => e);
+    await expect(good).resolves.toBe('0xok');
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe('execution reverted: nope');
+    // The node answered, it just said no — distinct from a transport failure.
+    expect(err.rpcAnswered).toBe(true);
+  });
+});
+
+// ============================================================================
+// evmWrite — the nonce and the gas estimate are independent reads, so they go
+// out in one batch instead of two sequential requests.
+// ============================================================================
+
+describe('evmWrite nonce and gas in one request', () => {
+  const HASH = '0x' + 'ab'.repeat(32);
+
+  const withWriteBatchEthers = () => {
+    const providerCalls = { nonce: 0, gas: 0 };
+    let signedTx: any;
+    class FakeBigNumber {
+      bn: number;
+      constructor(n: any) {
+        this.bn = Number(n);
+      }
+      toNumber() {
+        return this.bn;
+      }
+      mul(x: any) {
+        return new FakeBigNumber(this.bn * Number(x));
+      }
+      div(x: any) {
+        return new FakeBigNumber(Math.floor(this.bn / Number(x)));
+      }
+      toString() {
+        return String(this.bn);
+      }
+    }
+    class FakeProvider {
+      connection: any;
+      constructor(connection: any) {
+        this.connection = connection;
+      }
+      async getTransactionCount() {
+        providerCalls.nonce++;
+        return 11;
+      }
+      async estimateGas() {
+        providerCalls.gas++;
+        return new FakeBigNumber(50000);
+      }
+      async sendTransaction() {
+        return { hash: HASH };
+      }
+    }
+    class FakeContract {
+      interface = { encodeFunctionData: () => '0xdeadbeef' };
+      constructor(_a: any, _b: any, _p: any) {}
+    }
+    class FakeWallet {
+      async signTransaction(tx: any) {
+        signedTx = tx;
+        return '0x' + 'cd'.repeat(32);
+      }
+    }
+    (globalThis as any).ethers = {
+      providers: { StaticJsonRpcProvider: FakeProvider },
+      Contract: FakeContract,
+      Wallet: FakeWallet,
+      utils: { parseUnits: () => ({ toString: () => '0' }) },
+      BigNumber: { from: (n: any) => new FakeBigNumber(n) },
+    };
+    (globalThis as any).Lit = {
+      Actions: { getPrivateKey: async () => '0x' + '11'.repeat(32) },
+    };
+    return { providerCalls, signedTx: () => signedTx };
+  };
+
+  const stubFetch = (answer: (body: any[]) => any) => {
+    const seen: any[][] = [];
+    (globalThis as any).fetch = async (_url: string, init: any) => {
+      const body = JSON.parse(init.body);
+      seen.push(body);
+      return { json: async () => answer(body) };
+    };
+    return seen;
+  };
+
+  beforeEach(() => {
+    delete (globalThis as any).ethers;
+    delete (globalThis as any).Lit;
+  });
+
+  afterEach(() => {
+    (globalThis as any).fetch = realFetch;
+  });
+
+  it('asks for the nonce and the estimate in one request', async () => {
+    const { providerCalls, signedTx } = withWriteBatchEthers();
+    const seen = stubFetch((body) =>
+      body.map((call) => ({
+        jsonrpc: '2.0',
+        id: call.id,
+        result: call.method === 'eth_getTransactionCount' ? '0x7' : '0x5208',
+      })),
+    );
+
+    const result = await evmWrite(
+      'L2',
+      '0x' + '11'.repeat(20),
+      '0x' + '22'.repeat(20),
+      ABI,
+      'setText',
+      ['contenthash_wrapped', '0xabc'],
+      false,
+      'https://rpc.example',
+    );
+
+    expect(result.success).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].map((call) => call.method)).toEqual([
+      'eth_getTransactionCount',
+      'eth_estimateGas',
+    ]);
+    // The batch answered both, so the provider was not asked either.
+    expect(providerCalls).toEqual({ nonce: 0, gas: 0 });
+    expect(signedTx().nonce).toBe(7);
+    // 21000 estimated + the 20% buffer.
+    expect(signedTx().gasLimit.toString()).toBe('25200');
+  });
+
+  it('keeps 60000 when the node answers the estimate with an error', async () => {
+    const { providerCalls, signedTx } = withWriteBatchEthers();
+    stubFetch((body) =>
+      body.map((call) =>
+        call.method === 'eth_getTransactionCount'
+          ? { jsonrpc: '2.0', id: call.id, result: '0x5' }
+          : {
+              jsonrpc: '2.0',
+              id: call.id,
+              error: { code: -32000, message: 'gas estimation reverted' },
+            },
+      ),
+    );
+
+    const result = await evmWrite(
+      'L2',
+      '0x' + '11'.repeat(20),
+      '0x' + '22'.repeat(20),
+      ABI,
+      'setText',
+      ['contenthash_wrapped', '0xabc'],
+      false,
+      'https://rpc.example',
+    );
+
+    expect(result.success).toBe(true);
+    expect(providerCalls).toEqual({ nonce: 0, gas: 0 });
+    expect(signedTx().nonce).toBe(5);
+    expect(signedTx().gasLimit.toString()).toBe('72000');
+  });
+
+  it('retries a transport failure through ethers, still logging the message', async () => {
+    const { providerCalls } = withWriteBatchEthers();
+    stubFetch(() => {
+      throw new Error('missing response');
+    });
+
+    await evmWrite(
+      'L2',
+      '0x' + '11'.repeat(20),
+      '0x' + '22'.repeat(20),
+      ABI,
+      'setText',
+      ['contenthash_wrapped', '0xabc'],
+      false,
+      'https://rpc.example',
+    );
+
+    expect(providerCalls).toEqual({ nonce: 1, gas: 1 });
   });
 });
 

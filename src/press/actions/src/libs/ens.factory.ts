@@ -45,17 +45,19 @@ const ENS_REGISTRY_ADDRESS = '0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5';
 // kinds above are the module addresses this package resolves, and the named
 // factory is their only source.
 //
-// Request budget, one request per RPC URL tried and never retried in-session
-// (see evm.ts; Lit caps a session at 50 HTTP requests):
+// Request budget. One request per RPC URL tried and never retried in-session
+// (see evm.ts; Lit caps a session at 50 HTTP requests), and independent reads
+// made in the same tick share one JSON-RPC batch:
 //
-//   getDomainOwnerAndModules   nameWrapper + ownerOf (2), then one
-//                              moduleAddress per kind (2) and one evmGetCode
-//                              per non-zero answer (at most 2)
+//   getDomainOwnerAndModules   nameWrapper + ownerOf (2, sequential), then one
+//                              batch for both moduleAddress reads (1) and one
+//                              batch for the getCode reads of the non-zero
+//                              answers (at most 1)
 //
-// The bound is per URL list, because a failed request spends every URL in its
-// chain's list: at most 6 requests with one URL per chain, at most 8 with two
-// (the two ENS reads once, the two kind reads on both URLs, the two code reads
-// once), and at most 10 if a code read fails over too, which throws.
+// So discovery costs at most 4 requests with one URL per chain, and at most 6
+// with two (the two ENS reads once, each batch failing over to both URLs). A
+// batch that is refused falls through to the per-kind per-URL loop, which
+// costs what it did before.
 // ============================================================================
 
 // `keccak256("s2s.module.publication")` and `keccak256("s2s.module.records")`,
@@ -136,8 +138,17 @@ export const getDomainOwnerAndModules = async (
     rpcs?.L1,
   );
 
-  const configModule = await moduleAt(publicationFactory, multisig, RECORDS_KIND, rpcs);
-  const publicationModule = await moduleAt(publicationFactory, multisig, PUBLICATION_KIND, rpcs);
+  // Both kinds are independent reads of the same factory: ask for them in the
+  // same tick so they share one batch. Errors still surface in the original
+  // order — the records module's error wins.
+  const [configAnswer, publicationAnswer] = await Promise.allSettled([
+    moduleAt(publicationFactory, multisig, RECORDS_KIND, rpcs),
+    moduleAt(publicationFactory, multisig, PUBLICATION_KIND, rpcs),
+  ]);
+  if (configAnswer.status === 'rejected') throw configAnswer.reason;
+  if (publicationAnswer.status === 'rejected') throw publicationAnswer.reason;
+  const configModule = configAnswer.value;
+  const publicationModule = publicationAnswer.value;
 
   return {
     multisig,
