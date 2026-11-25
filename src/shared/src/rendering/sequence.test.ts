@@ -1030,9 +1030,9 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
 // ============================================================================
 // A bulk render's pages go to the update action in batches.
 //
-// One update session spends about five IPFS requests per page on top of ~14
-// fixed reads, so seven pages in one call die on the 50-request cap. The pages
-// ride in batches of six, sequentially, and each batch writes the contenthash
+// One update session spends about five IPFS requests per page on top of ~22
+// fixed calls, so six pages in one call die on the 50-request cap. The pages
+// ride in batches of three, sequentially, and each batch writes the contenthash
 // the next one copies forward.
 // ============================================================================
 
@@ -1116,17 +1116,18 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
       remove,
     );
 
-  it('splits seven pages into 6 + 1 and writes the last batch\'s root', async () => {
+  it('splits seven pages into 3 + 3 + 1 and writes the last batch\'s root', async () => {
     const res: any = await call();
 
-    expect(updateCalls).toHaveLength(2);
-    expect(updateCalls[0].jobs).toHaveLength(6);
-    expect(updateCalls[1].jobs).toHaveLength(1);
-    expect(updateCalls[1].jobs[0].id).toBe(jobs[6].id);
+    expect(updateCalls).toHaveLength(3);
+    expect(updateCalls[0].jobs).toHaveLength(3);
+    expect(updateCalls[1].jobs).toHaveLength(3);
+    expect(updateCalls[2].jobs).toHaveLength(1);
+    expect(updateCalls[2].jobs[0].id).toBe(jobs[6].id);
     expect(res.success).toBe(true);
     // The root the site resolves is the one the last batch wrote.
-    expect(res.cid).toBe('bafyroot2');
-    expect(res.trace).toEqual(['batch 1', 'batch 2']);
+    expect(res.cid).toBe('bafyroot3');
+    expect(res.trace).toEqual(['batch 1', 'batch 2', 'batch 3']);
   });
 
   it('sends a removal with the batch that carries its replacement, and a revoke last', async () => {
@@ -1134,9 +1135,10 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     const revoked = { path: '/posts/revoked' };
     await call([changed, revoked]);
 
-    expect(updateCalls).toHaveLength(2);
+    expect(updateCalls).toHaveLength(3);
     expect(updateCalls[0].remove).toEqual([changed]);
-    expect(updateCalls[1].remove).toEqual([revoked]);
+    expect(updateCalls[1].remove).toBeUndefined();
+    expect(updateCalls[2].remove).toEqual([revoked]);
   });
 });
 

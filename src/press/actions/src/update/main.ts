@@ -685,21 +685,6 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       }
     }
 
-    // Log the MFS tree structure for debugging
-    try {
-      const lsRes = await fetchWithTimeout(
-        `${gateway}/api/v0/files/ls?arg=${encodeURIComponent(mfsPath)}&long=true`,
-        { method: 'POST' },
-        TIMEOUTS.stat,
-      );
-      const lsData = await lsRes.json();
-      console.log(
-        `[update] MFS tree at ${mfsPath}: ${JSON.stringify(lsData.Entries?.map((e: any) => ({ name: e.Name, type: e.Type, size: e.Size })) || [])}`,
-      );
-    } catch (e: any) {
-      console.log(`[update] MFS ls failed: ${String(e)}`);
-    }
-
     // Wrap in try/finally so temp always cleans up (even on evmWrite failure)
     newRootCid = '';
 

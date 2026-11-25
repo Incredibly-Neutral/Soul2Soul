@@ -70,7 +70,7 @@ Both build and pin a real tree, at `<cid>.preview.transport-union.dev`. The addr
 
 A page that lists other manuscripts, such as a home page, needs the latest version of each, and a Lit session allows fifty requests. So each publication keeps those versions in one archive file, pointed to by a text record. The archive is a shortcut, never a source: each build compares it with the agreements on the ledger, and every item in it carries the author's signature and is checked before use. Maintain-cache brings it up to date after a build, and also when the build fails, and the client mirrors the file it writes to two pinning services: the record only names a copy a reader can reach. Repoint-archive replaces a lost one only when an owner of the publication's Safe signs. A poisoned cache costs a rebuild, never a page the gates wouldn't allow.
 
-A bulk build's pages reach the update action six at a time, because one session writes about five files per page and the fifty-request limit is per session. Each batch writes the site's root, and the next batch starts from the tree it wrote.
+A bulk build's pages reach the update action three at a time, because one session writes about five files per page on top of twenty-two fixed calls and the fifty-request limit is per session. Each batch writes the site's root, and the next batch starts from the tree it wrote.
 
 ## Roadmap
 - **Monetized text, encrypted for readers.** When an agreement includes monetization, the press encrypts the text again under the reader gate, so a page releases it only to a reader who passes.

@@ -467,14 +467,19 @@ export const renderwithLitActions = async (
   if (notice) notice.setMessage('merging EVM update ...');
   else console.log('preparing evm update...');
 
-  // One update session writes every page it is given, and each page costs about
-  // five IPFS requests (read the page already there, cat the new one, list the
-  // destination directory, remove, copy) on top of ~14 fixed reads. Six pages
-  // fit the 50-request session; seven do not, and the failure is the cap, not a
-  // page. A bulk render therefore splits its pages into batches and runs the
-  // update once per batch, sequentially: each call writes a contenthash at its
-  // end and the next one copies that tree forward.
-  const UPDATE_BATCH_SIZE = 6;
+  // One update session writes every page it is given, and each page costs five
+  // IPFS requests (read the page already there, cat the new one, hasAgreement,
+  // remove, copy) plus one directory listing per destination directory, which
+  // averages ~5.3, on top of a fixed ~22: 13-15 in the prologue (manifest, owner
+  // and modules, canPublish, config, previous contenthash, aliases, root copy)
+  // and 9 in the tail (assets stat/rm/cp, two txt listings, root stat, pin/add,
+  // evm write, cleanup). Three pages is therefore ~40 requests, leaving room
+  // in the 50-request session for mirrored root txt files (2 requests each) and
+  // alias clears. Six pages is ~54 and dies on the cap, not on a page. A bulk
+  // render therefore splits its pages into batches and runs the update once per
+  // batch, sequentially: each call writes a contenthash at its end and the next
+  // one copies that tree forward.
+  const UPDATE_BATCH_SIZE = 3;
   const updateJobs = resetOnly ? [] : activeJobs;
   const batches: any[][] = [];
   if (reset || updateJobs.length <= UPDATE_BATCH_SIZE) {
