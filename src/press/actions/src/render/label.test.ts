@@ -20,7 +20,10 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Wallet, TypedDataEncoder, keccak256, recoverAddress, toUtf8Bytes } from 'ethers';
 
-vi.mock('../libs/evm', () => ({ evmRead: vi.fn() }));
+vi.mock('../libs/evm', () => ({
+  enableReadCache: vi.fn(),
+  evmRead: vi.fn(),
+}));
 vi.mock('../libs/ipfs.factory', () => ({ catFile: vi.fn() }));
 
 import {

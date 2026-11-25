@@ -11,7 +11,7 @@ import { decryptRaw } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getManifest } from '../libs/protocol.factory';
-import { evmRead } from '../libs/evm';
+import { evmRead, enableReadCache } from '../libs/evm';
 import { fetchById, verifyDecryptedBody } from '../libs/module.factory';
 
 import { getConfig } from './config.ctrl';
@@ -192,6 +192,10 @@ const toAuthorProof = (proof: unknown, itemObjectId?: unknown): AuthorProof | un
 };
 
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
+  // One invocation, one budget. Identical reads share one request for the rest
+  // of this run: the author Safe's modules and the signer's ownership are the
+  // same answer for every item a collection judges (see libs/evm.ts).
+  enableReadCache();
   let html: string | undefined = undefined;
   let t0 = Date.now();
   console.log(`new render @ ${new Date()}`);

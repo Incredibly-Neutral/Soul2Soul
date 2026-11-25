@@ -975,6 +975,55 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
     const postedCids = vi.mocked(runAction).mock.calls.map((c) => c[2]);
     expect(postedCids).not.toContain(updateCid);
   });
+
+  // A failed render must not leave the archive pointer pointing at a snapshot
+  // nobody has refreshed: the maintain-cache action derives its state from
+  // chain + IPFS, so it runs even when every page failed, and the CID it wrote
+  // rides on the error so the caller can mirror it with the pinning services.
+  it('still fires maintain-cache when every render job failed, and hands the CID to the caller', async () => {
+    vi.mocked(runAction).mockImplementation((_preview, _lit, cid): Promise<unknown> => {
+      if (cid === 'cid-prep') {
+        return Promise.resolve({
+          ok: true,
+          action: 'prep',
+          data: { jobs: [sampleJob], remove: undefined },
+          trace: [],
+        });
+      }
+      if (cid === 'cid-render') {
+        return Promise.reject(new Error('render threw: session budget'));
+      }
+      if (cid === 'cid-maintain') {
+        return Promise.resolve({
+          ok: true,
+          action: 'maintain-cache',
+          data: { cid: 'bafyfresh', wrote: true },
+          trace: [],
+        });
+      }
+      return Promise.reject(new Error('unexpected cid ' + cid));
+    });
+
+    const err = (await renderwithLitActions(
+      'publish',
+      litStub,
+      SIGNATURE,
+      'usage',
+      { ...protocolInfo, litActions: { ...protocolInfo.litActions, maintainCache: 'cid-maintain' } },
+      null,
+      '0x0000...0001',
+      'test.soul2soul.eth',
+      ['0xcontent-id-1'],
+      undefined,
+      sampleEndpoints.rpcs,
+    ).catch((e: unknown) => e)) as Error & { maintainCache?: any };
+
+    expect(err.message).toContain('render jobs failed');
+    expect(err.maintainCache?.data?.cid).toBe('bafyfresh');
+    const postedCids = vi.mocked(runAction).mock.calls.map((c) => c[2]);
+    expect(postedCids).toContain('cid-maintain');
+    expect(postedCids).not.toContain(updateCid);
+  });
 });
 
 // ============================================================================

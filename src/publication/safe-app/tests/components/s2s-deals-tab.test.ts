@@ -153,6 +153,10 @@ vi.mock('@s2s/soul2soul-shared', async () => {
   return {
     LitService: class {},
     renderwithLitActions: vi.fn(),
+    // The tab mirrors the archive cache CID after a render (filebase + pinata);
+    // the assertion surface is the render call, not the pin, so a resolving
+    // stub is enough to keep the module graph whole.
+    pinCidFromRemote: vi.fn(() => Promise.resolve(true)),
     toBytes32Id: m.toBytes32Id,
     authorAddress,
     // Stands in for shared's real previewLink; the tab's assertions match the

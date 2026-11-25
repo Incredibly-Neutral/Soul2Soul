@@ -59,6 +59,46 @@ const RECEIPT_POLL_INITIAL_MS = 250;   // floor — matches ethers' own poll sta
 const RECEIPT_POLL_MAX_MS = 10_000;    // ceiling — in line with ethers' growth
 const RECEIPT_RETRY_BUDGET_MS = 90_000; // ~90s total budget before we give up
 
+// ---------------------------------------------------------------------------
+// Per-invocation read cache.
+//
+// One Lit Action invocation is one session, one block window, one 50-request
+// budget. The gates re-derive the same ground truth for every item they judge:
+// `canRead` per encrypted collection item resolves the author Safe's modules
+// from `getModulesPaginated` plus two `supportsInterface` probes per enabled
+// module, and asks `isOwnerAt` for the same Safe and signer. None of that
+// changes between items of one render.
+//
+// The cache holds the PROMISE, not the settled value, because the collection
+// loop runs its items concurrently: four `canRead` calls start before the first
+// module page resolves, and only a shared in-flight promise collapses them into
+// one request. A failed read is dropped so it is not remembered as an answer.
+// The cache does not outlive the invocation: a fresh action bundle starts with
+// none, so a stale module answer cannot outlive its session.
+// ---------------------------------------------------------------------------
+let readCache: Map<string, Promise<unknown>> | undefined;
+
+/** Share identical reads for the rest of this action invocation. */
+export const enableReadCache = (): void => {
+    readCache = new Map();
+};
+
+/** Stop sharing: every read goes to the node again. */
+export const disableReadCache = (): void => {
+    readCache = undefined;
+};
+
+const cached = <T>(key: string, run: () => Promise<T>): Promise<T> => {
+    if (!readCache) return run();
+    const hit = readCache.get(key);
+    if (hit) return hit as Promise<T>;
+    const p = run();
+    readCache.set(key, p);
+    // A failed read is not an answer: drop it so a later identical read retries.
+    p.catch(() => readCache?.delete(key));
+    return p;
+};
+
 const waitForReceipt = async (provider: any, txHash: string): Promise<any> => {
     const start = Date.now();
     const deadline = start + RECEIPT_RETRY_BUDGET_MS;
@@ -242,6 +282,10 @@ export const evmRead = async (
 ) => {
     const urls = rpcs || [];
     if (urls.length === 0) throw "evmRead: rpcs array is empty or missing";
+    const key = `read|${chain}|${contractAddress}|${method}|${JSON.stringify(args)}|${
+        typeof blockTag === "number" && blockTag > 0 ? blockTag : ""
+    }`;
+    return cached(key, async () => {
     const failures: string[] = [];
     let lastError: any;
     const overrides =
@@ -266,6 +310,7 @@ export const evmRead = async (
     const aggregated = new Error(failures.join(" | "));
     (aggregated as any).failures = failures;
     throw aggregated;
+    });
 };
 
 /**
@@ -284,6 +329,7 @@ export const evmGetCode = async (
 ): Promise<string> => {
     const urls = rpcs || [];
     if (urls.length === 0) throw "evmGetCode: rpcs array is empty or missing";
+    return cached(`code|${chain}|${address}`, async () => {
     const failures: string[] = [];
 
     for (const url of urls) {
@@ -300,6 +346,7 @@ export const evmGetCode = async (
     const aggregated = new Error(failures.join(" | "));
     (aggregated as any).failures = failures;
     throw aggregated;
+    });
 };
 
 export const toHexString = (_cid: string) => {

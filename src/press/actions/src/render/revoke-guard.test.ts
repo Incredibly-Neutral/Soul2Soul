@@ -32,6 +32,7 @@ vi.hoisted(() => {
 });
 
 vi.mock('../libs/evm', () => ({
+  enableReadCache: vi.fn(),
   evmRead: vi.fn(),
   evmWrite: vi.fn(),
   toHexString: vi.fn(),

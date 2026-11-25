@@ -58,6 +58,7 @@ vi.mock('../../../../shared/src/rendering/helpers', async (importOriginal) => {
 // Mock the real render action's chain/template deps so the REAL render main
 // runs its plaintext + hasAgreement path without network access.
 vi.mock('../libs/evm', () => ({
+  enableReadCache: vi.fn(),
   evmRead: vi.fn(),
   evmWrite: vi.fn(),
   toHexString: vi.fn(),

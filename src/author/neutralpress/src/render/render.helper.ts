@@ -53,6 +53,21 @@ export function buildRpcEndpoints(main: IMainController): RenderRpcs {
 // `shared/src/authoring/links.ts`. Re-exported so existing importers of this
 // module keep working.
 export { pagePathFor };
+
+/**
+ * Mirror the archive cache the maintain-cache action just uploaded to filebase
+ * and pinata. No Filecoin leg: the archive is a derived snapshot, not source
+ * material.
+ *
+ * The pointer on chain names that CID, and kubo is the only host holding it —
+ * a reader resolving through public routing cannot fetch it from kubo alone,
+ * which is the 502 a kubo-only snapshot produces. Fire-and-forget:
+ * `backupToProviders` never throws.
+ */
+function mirrorArchiveCache(ipfs: ReturnType<typeof ipfsFromSettings>, cid?: string): void {
+	if (!cid) return;
+	void ipfs.backupToProviders(cid);
+}
 /**
  * Run the full render pipeline (prep → render → EVM update) for a publication.
  *
@@ -115,6 +130,7 @@ export async function renderCalls(
 			// never throws into renderCalls.
 			if (publish) {
 				const ipfs = ipfsFromSettings(main);
+				mirrorArchiveCache(ipfs, res.maintainCache?.data?.cid);
 				void ipfs.backupToProviders(res.cid, {
 					filecoin: () =>
 						runFilecoinLeg(
@@ -206,6 +222,16 @@ export async function renderCalls(
 		}
 	} catch (error: any) {
 		console.error(`Error during render process for ${publication}:`, error);
+		// The render died after the archive was already uploaded and the pointer
+		// moved to it. Mirror that CID anyway: kubo alone is not a provider a
+		// reader can resolve through public routing, and the pointer now names it.
+		if (publish) {
+			try {
+				mirrorArchiveCache(ipfsFromSettings(main), error?.maintainCache?.data?.cid);
+			} catch (mirrorError) {
+				console.error('archive mirror skipped (no ipfs settings):', mirrorError);
+			}
+		}
 		throw new Error(`Render process failed: ${error.message}`);
 	}
 }

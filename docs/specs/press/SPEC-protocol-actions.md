@@ -132,7 +132,10 @@ async function runAction<T>(transport: 'runner' | 'lit', lit, cid, inputs, litUs
 `renderwithLitActions` takes a `RenderMode` (`'dev' | 'preview' | 'publish'`) and routes the three
 stages: prep is runner in every mode; render is runner in `dev`, Lit in `preview` and `publish`;
 update is runner in `dev` and `preview`, Lit in `publish`. `maintain-cache` runs only on publish, on
-Lit. Every mode makes a single attempt, publish included: `RENDER_RETRY_ATTEMPTS` is 1 by operator
+Lit, and runs even when every render job failed: it derives the archive from chain and IPFS, not
+from the render, so a page that dies on the request budget no longer leaves the pointer naming a
+snapshot nobody refreshed. The result rides on the thrown error so the caller can mirror the CID
+with the pinning services. Every mode makes a single attempt, publish included: `RENDER_RETRY_ATTEMPTS` is 1 by operator
 directive (2026-10), because each retry re-fires the Lit action and re-drains a fresh session's
 50-request budget. Fail fast; the orchestrator marks the job failed.
 
@@ -796,6 +799,16 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   helper's `pageSize` (100, lowered from 200) supplies the read's `limit`: it is a helper
   parameter (`module.factory.ts`), not an argument of `getAgreements(offset, limit)`. Lesson:
   inside a Lit action, never issue N identical on-chain reads — fetch once and filter locally.
+- **One invocation, one read budget (2026-11-25):** the render action judges every encrypted
+  collection item through `canRead`, and each judgement resolved the author Safe's modules
+  (`getModulesPaginated` plus two `supportsInterface` probes per enabled module) and asked
+  `isOwnerAt` for the same signer — identical arguments, ~9 requests per item, so four items
+  overflowed the 50-request session and the home page stopped rendering at three. `libs/evm.ts`
+  now keeps a per-invocation cache of the read promise (keyed on chain, contract, method, args and
+  block tag) and `render/main.ts` turns it on at the top of `main()`. Concurrent reads of one key
+  share one request; a failed read is dropped from the cache, not remembered. `authorOf(genesis)`
+  and `blocksOf(genesis)` differ per item and are never collapsed. The cache is per bundle
+  execution — a fresh invocation starts empty, so nothing stale survives into the next session.
 - **Hardcoded secrets (GAP-9) — action-side resolved 2026-08-07:** `libs/constants.ts` (and
   `renderer/constants.ts`) deleted; gateway + RPCs now arrive via the `endpoints` action input,
   not hardcoded. Zero secrets in `actions/src`. Remaining: orchestrator `rpcs` source unwired

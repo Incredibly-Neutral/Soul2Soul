@@ -223,6 +223,53 @@ export const renderwithLitActions = async (
       })(),
   };
 
+  /**
+   * Fire the dedicated maintain-cache action in its own fresh session and
+   * report the outcome in one line. Called when a render flagged drift and when
+   * the render stage failed outright: in both cases the archive the pointer
+   * names is the thing that has to be brought up to date and pinned.
+   *
+   * Runs AFTER the update action (never concurrently): both write through the
+   * same PKP, and two broadcasts drawn from the same pending nonce would drop
+   * one. A failure is logged loudly and never thrown — it must not mask the
+   * publish or the render failure it tails.
+   */
+  const fireMaintainCache = async (): Promise<any | null> => {
+    if (preview || !protocolInfo.litActions.maintainCache) return null;
+    let result: any = null;
+    try {
+      const maintainInputs = validateMaintainCacheInput({
+        signature,
+        authorSafeAddress,
+        publication,
+        preview,
+        endpoints,
+      });
+      result = await runAction(
+        'lit',
+        lit,
+        protocolInfo.litActions.maintainCache,
+        maintainInputs,
+        litUsageKey,
+        'maintain-cache',
+      );
+    } catch (err: any) {
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+      result = { ok: false, error: err?.message || String(err) || 'maintain-cache action failed' };
+    }
+    // One line, never swallowed — the pointer write must be observable, not
+    // silently dropped the way the old fire-and-forget write-back was. A
+    // success without a CID is the steady state (no drift to merge): say
+    // nothing rather than print an empty write.
+    if (result?.ok) {
+      const cacheCid = result?.data?.cid;
+      if (cacheCid) console.log(`✓ cache updated ${cacheCid}`);
+    } else {
+      console.error(`✗ cache update failed: ${result?.error ?? 'unknown error'}`);
+    }
+    return result;
+  };
+
   // ---------------- Preperation Stage ------------------------------------
 
   if (!resetOnly) {
@@ -401,7 +448,17 @@ export const renderwithLitActions = async (
         }
       }
       const summary = failures.length > 0 ? failures.join('; ') : 'no render jobs succeeded';
-      throw new Error(`render jobs failed: ${summary}`);
+      // A failed page render still leaves the item archive stale: the pointer
+      // on chain keeps naming a snapshot that no render has refreshed or
+      // mirrored since. Fire the dedicated action anyway — it derives the
+      // archive from chain + IPFS, not from this render — and hang the result
+      // on the error so the caller can mirror the CID the pointer now names.
+      const cacheResult = jobs.length > 0 ? await fireMaintainCache() : null;
+      const failure = new Error(`render jobs failed: ${summary}`) as Error & {
+        maintainCache?: unknown;
+      };
+      if (cacheResult) failure.maintainCache = cacheResult;
+      throw failure;
     }
   }
 
@@ -434,56 +491,10 @@ export const renderwithLitActions = async (
   if (validated.ok) cid = (validated as any).data.cid;
 
   // ── Parallel per-publication cache maintenance ─────────────────────────┐
-  // A successful render flagged pending archive drift (data.maintainCache) and
-  // the maintain-cache action is deployed (litActions.maintainCache set). Fire
-  // it in its OWN fresh session so the pointer's setText gets a young provider
-  // + a dedicated 50-request budget — the conditions under which the update
-  // action's setText is provably reliable — instead of the render's tail.
-  //
-  // Run AFTER the update action completes (not truly concurrent) to avoid a PKP
-  // nonce collision: both the update and the maintain-cache write via the SAME
-  // PKP, each drawing the same "pending" nonce from getTransactionCount — two
-  // concurrent broadcasts with the same nonce would drop one. Sequencing keeps
-  // the two writes on consecutive nonces. The render itself is already done;
-  // this only tails the (separate) update call.
-  //
-  // Best-effort WRT the publish result: a failure here is logged LOUDLY (never
-  // swallowed like the old fire-and-forget) but must not fail the already-
-  // successful publish. The render's inline write-back remains the first-
-  // attempt path.
-  let maintainCacheResult: any = null;
-  if (!preview && maintainCachePending && protocolInfo.litActions.maintainCache) {
-    try {
-      const maintainInputs = validateMaintainCacheInput({
-        signature,
-        authorSafeAddress,
-        publication,
-        preview,
-        endpoints,
-      });
-      maintainCacheResult = await runAction(
-        'lit',
-        lit,
-        protocolInfo.litActions.maintainCache,
-        maintainInputs,
-        litUsageKey,
-        'maintain-cache',
-      );
-    } catch (err: any) {
-      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-      maintainCacheResult = { ok: false, error: err?.message || String(err) || 'maintain-cache action failed' };
-    }
-    // One line, never swallowed — the pointer write must be observable, not
-    // silently dropped the way the old fire-and-forget write-back was. A
-    // success without a CID is the steady state (no drift to merge): say
-    // nothing rather than print an empty write.
-    if (maintainCacheResult?.ok) {
-      const cacheCid = maintainCacheResult?.data?.cid;
-      if (cacheCid) console.log(`✓ cache updated ${cacheCid}`);
-    } else {
-      console.error(`✗ cache update failed: ${maintainCacheResult?.error ?? 'unknown error'}`);
-    }
-  }
+  // A successful render flagged pending archive drift (data.maintainCache).
+  // Fire the dedicated action (see fireMaintainCache) after the update call
+  // completes, on a fresh session, rather than in the render's tail.
+  const maintainCacheResult: any = maintainCachePending ? await fireMaintainCache() : null;
 
   return {
     success: validated.ok ? true : false,

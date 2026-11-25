@@ -21,7 +21,12 @@ import * as ethers from 'ethers5'; // protocol's v5 alias — render main needs 
 
 (globalThis as unknown as { ethers: unknown }).ethers = ethers;
 
-vi.mock('../libs/evm', () => ({ evmRead: vi.fn(), evmWrite: vi.fn(), toHexString: vi.fn() }));
+vi.mock('../libs/evm', () => ({
+  enableReadCache: vi.fn(),
+  evmRead: vi.fn(),
+  evmWrite: vi.fn(),
+  toHexString: vi.fn(),
+}));
 vi.mock('../libs/ipfs.factory', () => ({
   catFile: vi.fn(),
   uploadFile: vi.fn(),

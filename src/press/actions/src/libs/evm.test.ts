@@ -1,5 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { evmRead, evmGetCode, evmWrite, toHexString } from './evm';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import {
+  evmRead,
+  evmGetCode,
+  evmWrite,
+  toHexString,
+  enableReadCache,
+  disableReadCache,
+} from './evm';
 import { decodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
 // ============================================================================
@@ -354,6 +361,48 @@ describe('evmRead fail-fast (single pass, no in-session retry)', () => {
 // per URL and no retry. Discovery uses it to tell a recorded module from a
 // CREATE2 prediction with nothing deployed at it.
 // ============================================================================
+
+describe('read cache (one invocation, one budget)', () => {
+  beforeEach(() => {
+    delete (globalThis as any).ethers;
+    enableReadCache();
+  });
+
+  afterEach(() => {
+    disableReadCache();
+  });
+
+  it('answers an identical read once, for every item that asks', async () => {
+    // The render's collection loop judges four items; the module resolution and
+    // the ownership answer are the same for all of them.
+    const { contractCalls } = withFakeEthers(() => '0xDrafts');
+    for (let i = 0; i < 4; i++) {
+      await evmRead('L2', '0xSafe', ABI, 'getModulesPaginated', ['0x01', 100], RPC_URLS);
+    }
+    expect(contractCalls()).toBe(1);
+  });
+
+  it('keeps reads with different arguments apart', async () => {
+    const { contractCalls } = withFakeEthers(() => '0xAuthor');
+    await evmRead('L2', '0xDrafts', ABI, 'authorOf', ['0xa1'], RPC_URLS);
+    await evmRead('L2', '0xDrafts', ABI, 'authorOf', ['0xa2'], RPC_URLS);
+    expect(contractCalls()).toBe(2);
+  });
+
+  it('does not remember a failed read as an answer — the next ask retries', async () => {
+    let n = 0;
+    const { contractCalls } = withFakeEthers(() => {
+      n++;
+      if (n === 1) return new Error('missing response');
+      return '0xSafe';
+    });
+    await expect(evmRead('L2', '0xF', ABI, 'safe', [], RPC_URLS)).rejects.toThrow(
+      /missing response/,
+    );
+    await expect(evmRead('L2', '0xF', ABI, 'safe', [], RPC_URLS)).resolves.toBe('0xSafe');
+    expect(contractCalls()).toBe(2);
+  });
+});
 
 describe('evmGetCode fail-fast (single pass, no in-session retry)', () => {
   beforeEach(() => {

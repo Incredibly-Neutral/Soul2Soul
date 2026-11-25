@@ -49,6 +49,7 @@ vi.mock('../libs/protocol.factory', () => ({
   getManifest: vi.fn(),
 }));
 vi.mock('../libs/evm', () => ({
+  enableReadCache: vi.fn(),
   evmRead: vi.fn(),
   evmWrite: vi.fn(),
   toHexString: vi.fn(),

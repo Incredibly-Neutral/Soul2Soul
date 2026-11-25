@@ -18,7 +18,12 @@ import * as ethers from 'ethers5'; // the action runs against ethers v5 semantic
 // global, so the real ethers v5 has to be in place before that import runs.
 (globalThis as { ethers?: unknown }).ethers = ethers;
 
-vi.mock('../libs/evm', () => ({ evmRead: vi.fn(), evmWrite: vi.fn(), toHexString: vi.fn() }));
+vi.mock('../libs/evm', () => ({
+  enableReadCache: vi.fn(),
+  evmRead: vi.fn(),
+  evmWrite: vi.fn(),
+  toHexString: vi.fn(),
+}));
 vi.mock('../libs/ipfs.factory', () => ({
   uploadFile: vi.fn(),
   catFile: vi.fn(),

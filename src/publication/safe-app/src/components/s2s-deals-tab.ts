@@ -3,6 +3,7 @@ import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import {
   LitService,
+  pinCidFromRemote,
   previewLink,
   renderwithLitActions,
   toBytes32Id,
@@ -986,25 +987,49 @@ export class S2SDealsTab extends LitElement {
       L2: [getRpcUrl(8453)],
     };
 
-    return await renderwithLitActions(
-      mode,
-      this.lit,
-      signature,
-      import.meta.env.VITE_LIT_USAGE_KEY,
-      protocolInfo,
-      undefined,
-      store.safeInfo?.safeAddress || '',
-      publication,
-      genesisIds,
-      configCid,
-      rpcs,
-      undefined, // ipfsGateway — fall back to protocolInfo.gateway
-      undefined, // remove
-      undefined, // reset
-      // ipfsGatewayAuth — 15th positional arg: FULL header (`Bearer <token>`),
-      // so the render action's writes (add/dag/put to compute CIDs) pass the gate.
-      import.meta.env.VITE_KUBO_TOKEN ? `Bearer ${import.meta.env.VITE_KUBO_TOKEN}` : undefined,
-    );
+    try {
+      const res = await renderwithLitActions(
+        mode,
+        this.lit,
+        signature,
+        import.meta.env.VITE_LIT_USAGE_KEY,
+        protocolInfo,
+        undefined,
+        store.safeInfo?.safeAddress || '',
+        publication,
+        genesisIds,
+        configCid,
+        rpcs,
+        undefined, // ipfsGateway — fall back to protocolInfo.gateway
+        undefined, // remove
+        undefined, // reset
+        // ipfsGatewayAuth — 15th positional arg: FULL header (`Bearer <token>`),
+        // so the render action's writes (add/dag/put to compute CIDs) pass the gate.
+        import.meta.env.VITE_KUBO_TOKEN ? `Bearer ${import.meta.env.VITE_KUBO_TOKEN}` : undefined,
+      );
+      this.mirrorArchiveCache((res as any)?.maintainCache);
+      return res;
+    } catch (error: any) {
+      // The render can die after the archive was uploaded and the pointer moved
+      // to it. Mirror it anyway — the pointer names that CID, and kubo is not a
+      // provider a public gateway can reach on its own.
+      this.mirrorArchiveCache(error?.maintainCache);
+      throw error;
+    }
+  }
+
+  /**
+   * Mirror the archive the maintain-cache action just uploaded to filebase and
+   * pinata. The pointer on chain names that CID; kubo alone is not enough for a
+   * reader resolving through public routing, which is the 502 a kubo-only
+   * snapshot produces. Fire-and-forget: `pinCidFromRemote` never throws.
+   */
+  private mirrorArchiveCache(result: any): void {
+    const cid: string | undefined = result?.data?.cid;
+    if (!cid) return;
+    const remote = store.protocolInfo?.gateway ?? 'https://ipfs.transport-union.dev';
+    void pinCidFromRemote(cid, remote, import.meta.env.VITE_FILEBASE_TOKEN || '', 'filebase');
+    void pinCidFromRemote(cid, remote, import.meta.env.VITE_PINATA_JWT || '', 'pinata');
   }
 
   /**
