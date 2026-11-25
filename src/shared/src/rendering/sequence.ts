@@ -477,14 +477,13 @@ export const renderwithLitActions = async (
   // (manifest, owner and modules, canPublish, config, previous contenthash,
   // aliases, root copy) and 12-15 in the tail (assets stat/rm/cp, two txt
   // listings, root stat, pin/add, cleanup, and the on-chain write's nonce, gas
-  // estimate, send and receipt polling). Three pages comes to 43-48 and fits
-  // the 50-request session only just: every mirrored root txt file adds two
-  // requests and every stale one adds one, so a site with several can still
-  // overrun. Four pages is 49-54 and six is 61-66, both over the cap, not over
-  // a page. A bulk render therefore splits its pages into batches and runs the
-  // update once per batch, sequentially: each call writes a contenthash at its
-  // end and the next one copies that tree forward.
-  const UPDATE_BATCH_SIZE = 3;
+  // estimate, send and receipt polling). Two pages therefore costs 37-42, which
+  // leaves eight requests of the fifty for the tree dressing: every mirrored
+  // root txt file adds two and every stale one adds one, so robots.txt and
+  // llms.txt fit with room to spare. A bulk render therefore splits its pages
+  // into batches and runs the update once per batch, sequentially: each call
+  // writes a contenthash at its end and the next one copies that tree forward.
+  const UPDATE_BATCH_SIZE = 2;
   const updateJobs = resetOnly ? [] : activeJobs;
   const batches: any[][] = [];
   if (reset || updateJobs.length <= UPDATE_BATCH_SIZE) {

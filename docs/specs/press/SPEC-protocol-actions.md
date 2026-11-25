@@ -816,12 +816,12 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   page costs six IPFS requests (five for the page plus one `files/ls`, which is per page because
   the path it lists ends in that page's `/index.html`) on top of a fixed 25-30 calls: 13-15 in
   the prologue reads and gates, 12-15 in the tail (assets, two txt listings, root stat, pin/add,
-  cleanup, and the on-chain write's nonce, gas estimate, send and receipt polling). Three pages
-  therefore comes to 43-48 and fits the 50-request session only just, since every mirrored root
-  txt file adds two requests and every stale one adds one; four pages is 49-54 and six is 61-66,
-  both over the cap. `sequence.ts` splits the pages of a bulk render into batches of three and
-  runs the update once per batch, sequentially: each call writes a contenthash and the next
-  copies that tree forward. A removal rides with the batch that carries the genesis named in its
+  cleanup, and the on-chain write's nonce, gas estimate, send and receipt polling). Two pages
+  therefore costs 37-42, leaving eight requests of the fifty for the tree dressing, where every
+  mirrored root txt file adds two and every stale one adds one: robots.txt and llms.txt fit with
+  room left. `sequence.ts` splits the pages of a bulk render into batches of two and runs the
+  update once per batch, sequentially: each call writes a contenthash and the next copies that
+  tree forward. A removal rides with the batch that carries the genesis named in its
   `replacedBy` (the update only applies it when that genesis is among its own jobs), and one
   whose replacement appears in no batch rides the last batch so the update traces the skip
   rather than dropping it; a revoke rides with the last batch. A reset is never batched, because
