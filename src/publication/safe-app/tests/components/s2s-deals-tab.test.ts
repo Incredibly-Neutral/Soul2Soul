@@ -195,9 +195,7 @@ type DealsTab = LitElement & {
  * a publication that has a config record, a name and both loaded infos.
  * Typed through a cast because the mock only carries the slice this tab uses.
  *
- * Both capability flags default off: a manifest that predates the `unsigned`
- * input refuses every Preview, and one that predates the press-side offer gate
- * refuses the offer rows. Pass the flags the pinned release advertises.
+ * Pass the flags the pinned release advertises; the tab does not gate on them.
  */
 function seedRenderPrerequisites({ unsignedRender = false, offerPreview = false } = {}) {
   const s = store as unknown as {
@@ -1602,33 +1600,6 @@ describe('s2s-deals-tab', () => {
     expect(tab.close).not.toHaveBeenCalled();
   });
 
-  it('disables Preview when the pinned manifest does not advertise unsigned renders', async () => {
-    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
-      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
-      offers: [],
-    });
-    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
-    seedRenderPrerequisites();
-
-    const open = stubWindowOpen(fakeTab() as unknown as Window);
-
-    const el = await mountTab();
-    const root = el.shadowRoot!;
-    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
-
-    const { host, btn } = previewControl(root, '0xDeal1');
-    expect(btn).not.toBeNull();
-    expect(btn!.disabled).toBe(true);
-    expect(host!.getAttribute('title')).toBe(
-      'The pinned render action predates unsigned renders; pin a newer release to enable preview',
-    );
-
-    (host as HTMLElement).click();
-    await flushUpdates(el);
-    expect(open).not.toHaveBeenCalled();
-    expect(renderwithLitActions).not.toHaveBeenCalled();
-  });
-
   it('previews an offer row when the manifest advertises unsigned renders and offer previews', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [],
@@ -1660,34 +1631,6 @@ describe('s2s-deals-tab', () => {
     expect(args[0]).toBe('preview');
     expect(args[8]).toEqual(['0xOffer1']);
     expect(tab.location.href).toBe('https://bafyOffer.preview.transport-union.dev/posts/offer');
-  });
-
-  it('disables Preview on an offer when the manifest does not advertise offer previews', async () => {
-    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
-      deals: [],
-      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
-    });
-    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Pending offer'));
-    // unsignedRender is advertised, so the only missing gate is the offer one.
-    seedRenderPrerequisites({ unsignedRender: true });
-
-    const open = stubWindowOpen(fakeTab() as unknown as Window);
-
-    const el = await mountTab();
-    const root = el.shadowRoot!;
-    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
-
-    const { host, btn } = previewControl(root, '0xOffer1');
-    expect(btn).not.toBeNull();
-    expect(btn!.disabled).toBe(true);
-    expect(host!.getAttribute('title')).toBe(
-      'The pinned render action predates offer previews; pin a newer release to enable preview',
-    );
-
-    (host as HTMLElement).click();
-    await flushUpdates(el);
-    expect(open).not.toHaveBeenCalled();
-    expect(renderwithLitActions).not.toHaveBeenCalled();
   });
 
   it('treats a preview with no page path as a failed preview', async () => {

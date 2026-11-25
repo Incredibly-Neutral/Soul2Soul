@@ -138,12 +138,9 @@ static stand-in line saying the preview is rendering, and navigates to `previewL
 the page is ready. Preview (`mode: 'preview'`) runs the render stage on Lit so a gated body decrypts through
 `canPreview`, unsigned, with no on-chain write, and returns the real tree and CIDs. It is offered for an encrypted or unencrypted
 row, and for an offer as well as a deal: the manuscript's author, the publication's owner or a
-listed reviewer reads the manuscript before accepting. It is refused unless the pinned manifest document it renders from advertises
-`capabilities.unsignedRender`, and an offer row additionally needs `capabilities.offerPreview`, the
-flag the sibling release writes beside it; a publication that has not moved its
-`manifest_version` record still reads the older document. `unsignedRender` is required in every case
-because the shared layer throws without it, and an absent flag reads as false; each missing flag disables
-the button with a title naming the pin. A successful envelope with an empty path is a failure: the tab
+listed reviewer reads the manuscript before accepting. The row is not gated on a manifest capability;
+a pin the shared layer refuses fails the preview with its message in the tab. A successful envelope
+with an empty path is a failure: the tab
 keeps the failure text (`Preview failed: <message>`) instead of closing, and the app reports it. When the
 browser blocks the popup, the row keeps an “Open
 preview” link under the button. One preview runs per row at a time.
@@ -238,6 +235,5 @@ preview link), INV-10 (mutations are proposals), INV-11 (`assetsCid` producer).
   `publicationConfigSchema` and that `mapping` passes through unchanged.
 - `qa/qa.mjs`: five tabs, no page errors (already the regression net).
 - Row rendering: a gateway that 404s one item leaves a present-but-blank row, not a failed table.
-- Preview control: a manifest with `unsignedRender` only enables a deal row and disables an offer row,
-  the title naming the pin; a manifest with neither disables both. A blocked popup leaves the
-  "Open preview" link, and a preview per row runs one at a time.
+- Preview control: every row's Preview is enabled before the click, whatever the manifest advertises.
+  A blocked popup leaves the "Open preview" link, and a preview per row runs one at a time.

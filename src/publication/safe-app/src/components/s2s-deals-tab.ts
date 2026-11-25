@@ -816,29 +816,6 @@ export class S2SDealsTab extends LitElement {
   }
 
   /**
-   * Why a row cannot be previewed, or null when it can.
-   *
-   * Preview runs on Lit and decrypts, so a sealed body is no obstacle. An
-   * offer is previewable like a deal — the publication's owner or a listed
-   * reviewer reads the manuscript before accepting — once the pinned manifest
-   * advertises `capabilities.offerPreview`, which this tab requires and the
-   * release script writes; a build that advertises it is one whose render
-   * action carries the offer gate beside `unsignedRender`. `unsignedRender`
-   * stays required in every case: the shared layer throws for a decrypting
-   * render on a pin that predates it, and the UI must not offer what throws.
-   */
-  private previewUnavailable(row: Deal | undefined): string | null {
-    const capabilities = store.protocolInfo?.capabilities ?? {};
-    if (capabilities.unsignedRender !== true) {
-      return 'The pinned render action predates unsigned renders; pin a newer release to enable preview';
-    }
-    if (row?.status === 'offer' && capabilities.offerPreview !== true) {
-      return 'The pinned render action predates offer previews; pin a newer release to enable preview';
-    }
-    return null;
-  }
-
-  /**
    * Preview one row and open the result in a new tab. The window is opened here,
    * inside the click gesture, before any await: a popup raised after the render
    * returns is blocked, and the Safe's iframe makes that worse. Everything
@@ -849,7 +826,7 @@ export class S2SDealsTab extends LitElement {
    * click on the <s2s-button> host reaches this handler.
    */
   private async renderOne(genesis: string) {
-    if (this.renderBusy[genesis] || this.previewUnavailable(this.rowFor(genesis)) !== null) return;
+    if (this.renderBusy[genesis]) return;
 
     // A new attempt supersedes the link the last blocked one left behind.
     this.setRenderReady(genesis, null);
@@ -921,18 +898,15 @@ export class S2SDealsTab extends LitElement {
 
   /**
    * The row's Preview control: the button, and the fallback link a blocked
-   * popup leaves. A row that cannot be previewed keeps the button, disabled,
-   * with the reason as its title.
+   * popup leaves.
    */
   private renderPreviewControl(genesis: string): TemplateResult {
     const busy = this.renderBusy[genesis] ?? false;
-    const blocked = this.previewUnavailable(this.rowFor(genesis));
     const ready = this.renderReady[genesis];
     return html`
       <span class="render-action">
         <s2s-button action="preview" genesis="${genesis}" type="secondary"
-          ?disabled=${busy || blocked !== null}
-          title=${blocked ?? nothing}
+          ?disabled=${busy}
           @click=${() => void this.renderOne(genesis)}>
           ${busy
             ? html`<span class="row-spinner" aria-hidden="true"></span> Previewing`
