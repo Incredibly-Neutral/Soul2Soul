@@ -813,10 +813,11 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   `hasAgreement` through `evmRead` rather than building a provider of its own, and the
   per-page `files/stat` is now one `files/ls?long=true` of the page's own directory, since the
   path it lists ends in that page's `/index.html`.
-- **Update batches (2026-11-25):** an update run spends about 17 requests before it touches a
-  page (manifest, owner and modules, the publish gate, config, the previous contenthash, the
-  root copy) and about 13-15 after the last one (assets, root txt, root stat, pin, cleanup, the
-  write: nonce, gas, send, receipt). A page adds four: read the destination, its gates, rm, cp.
+- **Update batches (2026-11-25):** an update run spends about 17 requests in total: roughly
+  nine in the prologue (manifest, owner and modules, the publish gate, config, the previous
+  contenthash, the root copy) and eight in the tail (assets, root txt, root stat, pin, cleanup,
+  the write: nonce, gas, send, receipt). A page adds four: read the destination, its gates, rm,
+  cp.
   Six pages is therefore 17 + 24 = 41, and a removal that no job replaces adds up to seven more
   (its page read, the "still in force" check with two retries, the rm) — 48, under the cap of 50.
   The budget is 45 with five left as slack, so the arithmetic ceiling is seven pages; `sequence.ts`

@@ -467,9 +467,9 @@ export const renderwithLitActions = async (
   if (notice) notice.setMessage('merging EVM update ...');
   else console.log('preparing evm update...');
 
-  // One update run spends about 17 requests before it touches a page (manifest, owner and
-  // modules, the publish gate, config, the previous contenthash, the root copy) and about 13-15
-  // after the last one (assets, root txt, root stat, pin, cleanup, the write: nonce, gas, send,
+  // One update run spends about 17 requests in total: roughly nine in the prologue (manifest,
+  // owner and modules, the publish gate, config, the previous contenthash, the root copy) and
+  // eight in the tail (assets, root txt, root stat, pin, cleanup, the write: nonce, gas, send,
   // receipt). A page adds four: read the destination, its gates, rm, cp. Six pages is therefore
   // 17 + 24 = 41, and a removal that no job replaces adds up to seven more (its page read, the
   // "still in force" check with two retries, the rm) — 48, under the cap of 50.
