@@ -467,52 +467,50 @@ export const renderwithLitActions = async (
   if (notice) notice.setMessage('merging EVM update ...');
   else console.log('preparing evm update...');
 
-  // One update session writes every page it is given, and each page costs six
-  // IPFS requests: read the page already there, cat the new one, hasAgreement,
-  // remove, copy, and one `files/ls`. The listing is per page, not per
-  // collection: the path handed to it is the page file (`/index.html` inside
-  // the page's own directory), so two pages under `/posts` still list twice.
-  //
-  // On top of that the call spends a fixed 25 to 30: 13-15 in the prologue
-  // (manifest, owner and modules, canPublish, config, previous contenthash,
-  // aliases, root copy) and 12-15 in the tail (assets stat/rm/cp, two txt
-  // listings, root stat, pin/add, cleanup, and the on-chain write's nonce, gas
-  // estimate, send and receipt polling). Two pages therefore costs 37-42, and
-  // the rest of the fifty is not spare room: after the first batch the previous
-  // root copy has already put the mirrored root txt files in place, so robots.txt
-  // and llms.txt cost three requests each (stat, the rm that clears the copy,
-  // then the copy that cannot overwrite), which takes the session to 43-48.
-  //
-  // A revoke costs up to seven more — the page read, hasAgreement, and the rm,
-  // with verifyRevocable retried twice more while the genesis is still in force
-  // — so it rides a batch of its own that holds a single page: 42 at worst plus
-  // its seven is 49, under the cap. A bulk render therefore splits its pages
-  // into batches and runs the update once per batch, sequentially: each call
-  // writes a contenthash at its end and the next one copies that tree forward.
-  const UPDATE_BATCH_SIZE = 2;
+  // One update run spends about 17 requests before it touches a page (manifest, owner and
+  // modules, the publish gate, config, the previous contenthash, the root copy) and about 13-15
+  // after the last one (assets, root txt, root stat, pin, cleanup, the write: nonce, gas, send,
+  // receipt). A page adds four: read the destination, its gates, rm, cp. Six pages is therefore
+  // 17 + 24 = 41, and a removal that no job replaces adds up to seven more (its page read, the
+  // "still in force" check with two retries, the rm) — 48, under the cap of 50.
+  const RUN_FIXED_REQUESTS = 17;
+  const RUN_JOB_REQUESTS = 4;
+  const RUN_BUDGET_REQUESTS = 45;   // five left as slack for a run whose tail grows
+  const REVOKE_REQUESTS = 7;
+  // Seven is the arithmetic ceiling (45 - 17 = 28, / 4 = 7). Six is used: a run with a revoke
+  // and a widened tail must not be the run that discovers the estimate was optimistic.
+  const UPDATE_BATCH_SIZE = 6;
+  const UPDATE_BATCH_SIZE_WITH_REVOKE = 5;
+
   const updateJobs = resetOnly ? [] : activeJobs;
+  const pendingRevoke = allRemove.some((entry) => !entry.replacedBy);
+  const batchCap = pendingRevoke ? UPDATE_BATCH_SIZE_WITH_REVOKE : UPDATE_BATCH_SIZE;
   const batches: any[][] = [];
-  if (reset || updateJobs.length <= UPDATE_BATCH_SIZE) {
+  if (reset) {
     // A reset is never batched: it starts from an empty tree, so a second batch
     // would delete the pages the first one wrote.
     batches.push(updateJobs);
   } else {
-    for (let i = 0; i < updateJobs.length; i += UPDATE_BATCH_SIZE) {
-      batches.push(updateJobs.slice(i, i + UPDATE_BATCH_SIZE));
+    // Fill one batch in job order until adding the next page would pass the
+    // budget, capped at the size the presence of a revoke allows. The revoke
+    // rides the last batch, so its seven requests are counted in every batch's
+    // cost: five pages plus a revoke is 17 + 20 + 7 = 44, under the budget.
+    let current: any[] = [];
+    for (const job of updateJobs as any[]) {
+      const nextCount = current.length + 1;
+      const nextCost =
+        RUN_FIXED_REQUESTS +
+        nextCount * RUN_JOB_REQUESTS +
+        (pendingRevoke ? REVOKE_REQUESTS : 0);
+      if (current.length > 0 && (nextCount > batchCap || nextCost > RUN_BUDGET_REQUESTS)) {
+        batches.push(current);
+        current = [];
+      }
+      current.push(job);
     }
-  }
-
-  // The revoke rides the last batch, so that batch must hold one page. This is
-  // checked after the batches exist rather than inside the loop, because the
-  // small case is the one it matters most for: two pages and a revoke would
-  // otherwise be a single call of two pages, and the revoke's seven requests on
-  // top of 37-42 reaches 49. A reset is one call by design and is never split.
-  if (!reset) {
-    const last = batches[batches.length - 1];
-    if (last && last.length > 1 && allRemove.some((entry) => !entry.replacedBy)) {
-      batches.pop();
-      for (const job of last) batches.push([job]);
-    }
+    // An empty job list still needs one call: a revoke or a removal-only render
+    // has no pages to write but must reach the update action.
+    if (current.length > 0 || batches.length === 0) batches.push(current);
   }
 
   // A removal only lands when the genesis that replaced the page is among the

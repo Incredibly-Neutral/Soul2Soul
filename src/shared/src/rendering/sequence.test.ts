@@ -1030,10 +1030,12 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
 // ============================================================================
 // A bulk render's pages go to the update action in batches.
 //
-// One update session spends six requests per page on top of a fixed 25-30
-// calls, so two pages comes to 37-42 and the two mirrored root txt files take
-// it to 43-48. The pages ride in batches of two, sequentially, and each batch
-// writes the contenthash the next one copies forward.
+// One update run spends about 17 requests before the first page and 13-15 after
+// the last, and each page adds four. Six pages is therefore 41, a revocation on
+// top of that is 48, and seven pages with a revocation would be 52. The budget
+// is 45, so pages ride in batches of six, five when a revocation is pending,
+// sequentially, and each batch writes the contenthash the next one copies
+// forward.
 // ============================================================================
 
 describe('renderwithLitActions — the update stage runs in batches', () => {
@@ -1106,7 +1108,7 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     vi.mocked(runAction).mockReset();
   });
 
-  const call = (remove?: { path: string; replacedBy?: string }[]) =>
+  const call = (remove?: { path: string; replacedBy?: string }[], reset?: boolean) =>
     renderwithLitActions(
       'dev',
       {} as LitService,
@@ -1121,21 +1123,31 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
       sampleEndpoints.rpcs,
       undefined,
       remove,
+      reset,
     );
 
-  it('splits seven pages into 2 + 2 + 2 + 1 and writes the last batch\'s root', async () => {
+  it('sends six pages in a single batch', async () => {
+    mockStages(jobs.slice(0, 6));
+
     const res: any = await call();
 
-    expect(updateCalls).toHaveLength(4);
-    expect(updateCalls[0].jobs).toHaveLength(2);
-    expect(updateCalls[1].jobs).toHaveLength(2);
-    expect(updateCalls[2].jobs).toHaveLength(2);
-    expect(updateCalls[3].jobs).toHaveLength(1);
-    expect(updateCalls[3].jobs[0].id).toBe(jobs[6].id);
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].jobs).toHaveLength(6);
+    expect(res.success).toBe(true);
+    expect(res.cid).toBe('bafyroot1');
+  });
+
+  it('splits seven pages into 6 + 1 and writes the last batch\'s root', async () => {
+    const res: any = await call();
+
+    expect(updateCalls).toHaveLength(2);
+    expect(updateCalls[0].jobs).toHaveLength(6);
+    expect(updateCalls[1].jobs).toHaveLength(1);
+    expect(updateCalls[1].jobs[0].id).toBe(jobs[6].id);
     expect(res.success).toBe(true);
     // The root the site resolves is the one the last batch wrote.
-    expect(res.cid).toBe('bafyroot4');
-    expect(res.trace).toEqual(['batch 1', 'batch 2', 'batch 3', 'batch 4']);
+    expect(res.cid).toBe('bafyroot2');
+    expect(res.trace).toEqual(['batch 1', 'batch 2']);
   });
 
   it('sends a removal with the batch that carries its replacement, and a revoke last', async () => {
@@ -1143,43 +1155,47 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     const revoked = { path: '/posts/revoked' };
     await call([changed, revoked]);
 
-    expect(updateCalls).toHaveLength(4);
+    // A revoke is pending, so the batches hold five pages or fewer.
+    expect(updateCalls.map((c) => c.jobs.length)).toEqual([5, 2]);
     expect(updateCalls[0].remove).toEqual([changed]);
-    expect(updateCalls[1].remove).toBeUndefined();
-    expect(updateCalls[2].remove).toBeUndefined();
-    expect(updateCalls[3].remove).toEqual([revoked]);
+    expect(updateCalls[1].remove).toEqual([revoked]);
   });
 
-  it('gives a revoke a one-page final batch, so six pages ride as 2 + 2 + 1 + 1', async () => {
+  it('caps a revoke batch at five pages, so six pages ride as 5 + 1', async () => {
     const six = jobs.slice(0, 6);
     const revoked = { path: '/posts/revoked' };
     mockStages(six);
 
     const res: any = await call([revoked]);
 
-    // The revoke's seven requests ride a batch that holds one page, not two.
-    expect(updateCalls.map((c) => c.jobs.length)).toEqual([2, 2, 1, 1]);
-    for (const c of updateCalls) expect(c.jobs.length).toBeLessThanOrEqual(2);
+    expect(updateCalls.map((c) => c.jobs.length)).toEqual([5, 1]);
     expect(updateCalls[0].remove).toBeUndefined();
-    expect(updateCalls[1].remove).toBeUndefined();
-    expect(updateCalls[2].remove).toBeUndefined();
-    expect(updateCalls[3].remove).toEqual([revoked]);
+    expect(updateCalls[1].remove).toEqual([revoked]);
     expect(res.success).toBe(true);
   });
 
-  it('splits two pages when a revoke rides them, so each batch holds one page', async () => {
+  it('keeps a two-page render with a revoke in one call', async () => {
     const two = jobs.slice(0, 2);
     const revoked = { path: '/posts/revoked' };
     mockStages(two);
 
-    // Two pages with the two mirrored root txt files is 43-48, and the revoke's
-    // seven on top of that is 50-55, over the cap. One page per call puts the
-    // revoke on a batch that is 37-42 and leaves it at most 49.
+    // 17 + 8 + 7 = 32, well inside the budget, so no split is needed.
     const res: any = await call([revoked]);
 
-    expect(updateCalls.map((c) => c.jobs.length)).toEqual([1, 1]);
-    expect(updateCalls[0].remove).toBeUndefined();
-    expect(updateCalls[1].remove).toEqual([revoked]);
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].jobs).toHaveLength(2);
+    expect(updateCalls[0].remove).toEqual([revoked]);
+    expect(res.success).toBe(true);
+  });
+
+  it('never splits a reset, even with more pages than a batch holds', async () => {
+    const res: any = await call(undefined, true);
+
+    // A reset starts from an empty tree: a second batch would delete the pages
+    // the first one wrote.
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].jobs).toHaveLength(7);
+    expect(updateCalls[0].reset).toBe(true);
     expect(res.success).toBe(true);
   });
 
@@ -1189,11 +1205,9 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
 
     // Dropped from every batch, the removal would vanish with no trace; sent
     // last, the update's own `replacedBy ... not in job set` line records it.
-    expect(updateCalls).toHaveLength(4);
+    expect(updateCalls).toHaveLength(2);
     expect(updateCalls[0].remove).toBeUndefined();
-    expect(updateCalls[1].remove).toBeUndefined();
-    expect(updateCalls[2].remove).toBeUndefined();
-    expect(updateCalls[3].remove).toEqual([orphan]);
+    expect(updateCalls[1].remove).toEqual([orphan]);
   });
 
   it('drops the root when a later batch fails, so no caller pins a partial tree', async () => {

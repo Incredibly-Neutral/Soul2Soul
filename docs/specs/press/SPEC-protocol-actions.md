@@ -813,24 +813,22 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   `hasAgreement` through `evmRead` rather than building a provider of its own, and the
   per-page `files/stat` is now one `files/ls?long=true` of the page's own directory, since the
   path it lists ends in that page's `/index.html`.
-- **Update batches (2026-11-25):** an update session writes every page it is given, and each
-  page costs six IPFS requests (five for the page plus one `files/ls`, which is per page because
-  the path it lists ends in that page's `/index.html`) on top of a fixed 25-30 calls: 13-15 in
-  the prologue reads and gates, 12-15 in the tail (assets, two txt listings, root stat, pin/add,
-  cleanup, and the on-chain write's nonce, gas estimate, send and receipt polling). Two pages
-  therefore costs 37-42, and the rest of the fifty is not spare room: after the first batch the
-  previous root copy has already put the mirrored root txt files in place, so each one costs
-  three requests (stat, rm, copy), and robots.txt plus llms.txt takes the session to 43-48. A
-  revoke costs up to seven more — the page read, hasAgreement, and the rm, with verifyRevocable
-  retried twice more while the genesis is still in force — so it rides a batch of its own holding
-  one page, which keeps it at most 42 plus its seven, or 49. `sequence.ts` splits the
-  pages of a bulk render into batches of two and runs the
-  update once per batch, sequentially: each call writes a contenthash and the next copies that
-  tree forward. A removal rides with the batch that carries the genesis named in its
-  `replacedBy` (the update only applies it when that genesis is among its own jobs), and one
-  whose replacement appears in no batch rides the last batch so the update traces the skip
-  rather than dropping it; a revoke rides with the last batch. A reset is never batched, because
-  it starts from an empty tree.
+- **Update batches (2026-11-25):** an update run spends about 17 requests before it touches a
+  page (manifest, owner and modules, the publish gate, config, the previous contenthash, the
+  root copy) and about 13-15 after the last one (assets, root txt, root stat, pin, cleanup, the
+  write: nonce, gas, send, receipt). A page adds four: read the destination, its gates, rm, cp.
+  Six pages is therefore 17 + 24 = 41, and a removal that no job replaces adds up to seven more
+  (its page read, the "still in force" check with two retries, the rm) — 48, under the cap of 50.
+  The budget is 45 with five left as slack, so the arithmetic ceiling is seven pages; `sequence.ts`
+  uses six, because a run with a revoke and a widened tail must not be the run that discovers the
+  estimate was optimistic. It fills one batch in job order until adding the next page would pass
+  the budget, capped at six pages, or five while any pending removal has no `replacedBy`. Seven
+  pages therefore ride as 6 + 1, and a render with a revoke as 5 + 1. Each batch runs
+  sequentially: each call writes a contenthash and the next copies that tree forward. A removal
+  rides with the batch that carries the genesis named in its `replacedBy` (the update only applies
+  it when that genesis is among its own jobs), and one whose replacement appears in no batch rides
+  the last batch so the update traces the skip rather than dropping it; a revoke rides with the
+  last batch. A reset is never batched, because it starts from an empty tree.
 - **Hardcoded secrets (GAP-9) — action-side resolved 2026-08-07:** `libs/constants.ts` (and
   `renderer/constants.ts`) deleted; gateway + RPCs now arrive via the `endpoints` action input,
   not hardcoded. Zero secrets in `actions/src`. Remaining: orchestrator `rpcs` source unwired
