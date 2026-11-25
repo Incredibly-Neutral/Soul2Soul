@@ -467,28 +467,73 @@ export const renderwithLitActions = async (
   if (notice) notice.setMessage('merging EVM update ...');
   else console.log('preparing evm update...');
 
-  const evmInputs = validateEvmUpdateInput({
-    signature,
-    authorSafeAddress,
-    publication,
-    jobs: resetOnly ? [] : activeJobs,
-    preview,
-    endpoints,
-    remove: allRemove.length > 0 ? allRemove : undefined,
-    reset: reset ? true : undefined,
-  });
+  // One update session writes every page it is given, and each page costs about
+  // five IPFS requests (read the page already there, cat the new one, list the
+  // destination directory, remove, copy) on top of ~14 fixed reads. Six pages
+  // fit the 50-request session; seven do not, and the failure is the cap, not a
+  // page. A bulk render therefore splits its pages into batches and runs the
+  // update once per batch, sequentially: each call writes a contenthash at its
+  // end and the next one copies that tree forward.
+  const UPDATE_BATCH_SIZE = 6;
+  const updateJobs = resetOnly ? [] : activeJobs;
+  const batches: any[][] = [];
+  if (reset || updateJobs.length <= UPDATE_BATCH_SIZE) {
+    // A reset is never batched: it starts from an empty tree, so a second batch
+    // would delete the pages the first one wrote.
+    batches.push(updateJobs);
+  } else {
+    for (let i = 0; i < updateJobs.length; i += UPDATE_BATCH_SIZE) {
+      batches.push(updateJobs.slice(i, i + UPDATE_BATCH_SIZE));
+    }
+  }
 
-  const evmAction: any = await runAction(
-    mode === 'publish' ? 'lit' : 'runner',
-    lit,
-    protocolInfo.litActions.update,
-    evmInputs,
-    litUsageKey,
-    'update',
-  );
-  const validated = validateEvmUpdateOutput(evmAction);
-  if (!validated.ok) console.log(JSON.stringify(validated, null, 2));
-  if (validated.ok) cid = (validated as any).data.cid;
+  // A removal only lands when the genesis that replaced the page is among the
+  // jobs of the same call — otherwise the update skips it and the old page stays
+  // live. Send each removal with the batch carrying its replacement; a revoke
+  // (no replacement) goes with the last batch.
+  const removeForBatch = (batchJobs: any[], isLast: boolean) =>
+    allRemove.filter((entry) => {
+      if (!entry.replacedBy) return isLast;
+      return batchJobs.some((j) => j.id === entry.replacedBy || j.sourceId === entry.replacedBy);
+    });
+
+  let validated: any = { ok: false, error: 'update action was not run' };
+  let lastEvmAction: any = null;
+  const updateTrace: unknown[] = [];
+  for (let i = 0; i < batches.length; i++) {
+    const batchJobs = batches[i];
+    const batchRemove = removeForBatch(batchJobs, i === batches.length - 1);
+    const evmInputs = validateEvmUpdateInput({
+      signature,
+      authorSafeAddress,
+      publication,
+      jobs: resetOnly ? [] : batchJobs,
+      preview,
+      endpoints,
+      remove: batchRemove.length > 0 ? batchRemove : undefined,
+      reset: reset ? true : undefined,
+    });
+    if (notice && batches.length > 1) {
+      notice.setMessage(`merging EVM update ${i + 1}/${batches.length} ...`);
+    } else if (batches.length > 1) {
+      console.log(`update batch ${i + 1}/${batches.length}: ${batchJobs.length} page(s)`);
+    }
+    lastEvmAction = await runAction(
+      mode === 'publish' ? 'lit' : 'runner',
+      lit,
+      protocolInfo.litActions.update,
+      evmInputs,
+      litUsageKey,
+      'update',
+    );
+    validated = validateEvmUpdateOutput(lastEvmAction);
+    updateTrace.push(...((lastEvmAction as any)?.trace ?? []));
+    if (!validated.ok) {
+      console.log(JSON.stringify(validated, null, 2));
+      break;
+    }
+    cid = (validated as any).data.cid;
+  }
 
   // ── Parallel per-publication cache maintenance ─────────────────────────┐
   // A successful render flagged pending archive drift (data.maintainCache).
@@ -506,7 +551,7 @@ export const renderwithLitActions = async (
     // write: the trace says whether each one landed, and a caller that asked
     // for a removal needs to name what it asked for.
     remove: allRemove,
-    trace: evmAction.trace,
+    trace: updateTrace,
     // Surface the REAL failure cause so callers (e.g. the website-tree reset
     // tab) can display it instead of a generic "did not report success".
     // `validated` is the schema-checked envelope (error present when ok:false);
@@ -514,7 +559,9 @@ export const renderwithLitActions = async (
     error: validated.ok
       ? undefined
       // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-      : ((validated as any)?.error || (evmAction as any)?.error || 'update action failed'),
+      : ((validated as any)?.error ||
+        (lastEvmAction as any)?.error ||
+        'update action failed'),
     // Result of the dedicated maintain-cache action (null when not fired). Kept
     // on the envelope so callers/observers can see the cache write outcome.
     maintainCache: maintainCacheResult,

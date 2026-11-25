@@ -809,6 +809,17 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   share one request; a failed read is dropped from the cache, not remembered. `authorOf(genesis)`
   and `blocksOf(genesis)` differ per item and are never collapsed. The cache is per bundle
   execution — a fresh invocation starts empty, so nothing stale survives into the next session.
+  The update action turns the same cache on at the top of `main()`; its path gate asks
+  `hasAgreement` through `evmRead` rather than building a provider of its own, and the
+  per-page `files/stat` is now one `files/ls?long=true` per parent directory.
+- **Update batches (2026-11-25):** an update session writes every page it is given, and each
+  page costs about five IPFS requests on top of ~14 fixed reads, so seven pages in one call
+  overflow the 50-request session even after the read cache. `sequence.ts` splits the pages of
+  a bulk render into batches of six and runs the update once per batch, sequentially: each call
+  writes a contenthash and the next copies that tree forward. A removal rides with the batch
+  that carries the genesis named in its `replacedBy` (the update only applies it when that
+  genesis is among its own jobs); a revoke rides with the last batch. A reset is never batched,
+  because it starts from an empty tree.
 - **Hardcoded secrets (GAP-9) — action-side resolved 2026-08-07:** `libs/constants.ts` (and
   `renderer/constants.ts`) deleted; gateway + RPCs now arrive via the `endpoints` action input,
   not hardcoded. Zero secrets in `actions/src`. Remaining: orchestrator `rpcs` source unwired

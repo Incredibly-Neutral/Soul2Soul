@@ -1,7 +1,7 @@
 /// <reference path="../action_globals.ts" />
 
 import { ActionResult, EvmUpdateData, EvmUpdateInput } from '@s2s/soul2soul-shared/lit-actions';
-import { evmRead, evmWrite, toHexString } from '../libs/evm';
+import { evmRead, evmWrite, toHexString, enableReadCache } from '../libs/evm';
 import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { contenthashToIPFS } from '../libs/ipfs.factory';
@@ -98,6 +98,8 @@ const TIMEOUTS = {
 interface TxtEntry {
   Name?: string;
   Type?: number;
+  /** Pegged content hash when `long=true`; what `files/stat` used to answer. */
+  Hash?: string;
 }
 
 /** Kubo's error body for a MFS path that is not there. */
@@ -166,6 +168,11 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
+    // One invocation, one 50-request session. Identical reads (the manifest, the
+    // config, the gates, the previous pointer) share a request for the rest of
+    // this run; see libs/evm.ts. Turned on before the first read so the prologue
+    // is covered too.
+    enableReadCache();
     // Auth for Kubo RPC on the data gateway (token-gated writes; sent on reads too).
     setRpcAuth(endpoints.ipfsGatewayAuth);
 
@@ -317,6 +324,40 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       `[update] jobs: ${JSON.stringify(jobs.map((j: any) => ({ id: j.id?.slice(0, 12), path: j.path, html: j.html?.slice(0, 12) })))}`,
     );
 
+    // What is already at each page's destination. One `files/ls` of a parent
+    // directory answers that for every page under it and returns each entry's
+    // hash, so six pages under `/posts` cost one request instead of six
+    // `files/stat` calls — the difference between fitting the 50-request session
+    // and dying on it when a bulk render writes a whole collection.
+    const dirListings = new Map<string, Promise<Map<string, string>>>();
+    const hashAt = async (path: string): Promise<string> => {
+      const slash = path.lastIndexOf('/');
+      const dir = slash <= 0 ? '/' : path.slice(0, slash);
+      const name = path.slice(slash + 1);
+      let listing = dirListings.get(dir);
+      if (!listing) {
+        listing = fetchWithTimeout(
+          `${gateway}/api/v0/files/ls?arg=${encodeURIComponent(dir)}&long=true`,
+          { method: 'POST' },
+          TIMEOUTS.stat,
+        )
+          .then(async (res) => {
+            const entries = new Map<string, string>();
+            if (!res.ok) return entries;
+            const body = (await res.json().catch(() => ({}))) as { Entries?: TxtEntry[] };
+            for (const entry of body.Entries ?? []) {
+              if (typeof entry.Name === 'string' && typeof entry.Hash === 'string') {
+                entries.set(entry.Name, entry.Hash);
+              }
+            }
+            return entries;
+          })
+          .catch(() => new Map<string, string>());
+        dirListings.set(dir, listing);
+      }
+      return (await listing).get(name) ?? '';
+    };
+
     // Copy delta jobs in parallel — blocks already on the kubo node
     trace.push(`cp ${jobs.length} files`);
     await Promise.all(
@@ -384,17 +425,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
         // Check if dest entry already exists (from previous run's root copy)
         // Kubo files/cp does NOT overwrite — must rm first
-        let prevHash: string = '';
-        try {
-          const statRes = await fetchWithTimeout(
-            `${gateway}/api/v0/files/stat?arg=${encodeURIComponent(destPath)}`,
-            { method: 'POST' },
-            TIMEOUTS.stat,
-          );
-          try {
-            prevHash = (await statRes.json()).Hash || '';
-          } catch {}
-        } catch {}
+        const prevHash: string = await hashAt(destPath);
 
         // Fast path: skip if dest already matches source
         if (prevHash && prevHash === sourceCid) {

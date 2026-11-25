@@ -11,6 +11,7 @@ import {
   PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { ADDRESS_RE } from '../libs/address';
+import { evmRead } from '../libs/evm';
 import { isOutOfForce } from '../libs/gates';
 import { accountAddress } from '../../../../shared/dist/manuscript/identity/author-address';
 
@@ -417,23 +418,22 @@ export async function verifyPathAvailable(
   if (existingPage.identifier === incomingGenesis) return;
   const existingGenesis = existingPage.identifier;
 
-  // Different genesis — check if existing content is under an active agreement
+  // Different genesis — check if existing content is under an active agreement.
   const bytes32Genesis = HEX32_RE.test(existingGenesis)
     ? existingGenesis.toLowerCase()
     : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(existingGenesis));
 
-  // NOTE: destructuring `{ provider }` off a StaticJsonRpcProvider INSTANCE yields
-  // undefined (the instance has no `provider` property), so the Contract would be
-  // constructed with an undefined provider and ethers v5 sets contract.provider =
-  // null — `contract.hasAgreement(...)` then reads this.provider.call(...) and throws
-  // "TypeError: Cannot read properties of null (reading 'call')". Construct the
-  // provider directly (mirrors libs/evm.ts evmSetup).
-  const provider = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
-    chainId: 8453,
-    name: 'base',
-  });
-  const contract = new ethers.Contract(publicationModule, HAS_AGREEMENT_ABI, provider);
-  const hasAgreement: boolean = await contract.hasAgreement(bytes32Genesis);
+  // Through evmRead, not a locally built provider: this runs once per page, and
+  // a provider built here bypassed the per-invocation read cache and the
+  // failover/timeout handling every other read in the action gets.
+  const hasAgreement = (await evmRead(
+    'L2',
+    publicationModule,
+    HAS_AGREEMENT_ABI,
+    'hasAgreement',
+    [bytes32Genesis],
+    rpcs,
+  )) as boolean;
 
   if (hasAgreement) {
     throw (

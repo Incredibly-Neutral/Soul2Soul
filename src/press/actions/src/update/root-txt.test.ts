@@ -88,6 +88,7 @@ vi.mock('../render/config.ctrl', () => ({
 }));
 
 vi.mock('../libs/evm', () => ({
+  enableReadCache: vi.fn(),
   evmRead: vi.fn(async (chain: string, addr: string, abi: unknown, method: string, args: any[]) => {
     if (method === 'getText' && args?.[1] === 'aliases') {
       return mocks.prevAliasesJson;
