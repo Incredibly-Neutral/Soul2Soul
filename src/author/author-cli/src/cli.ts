@@ -18,9 +18,12 @@ import { CliError, UsageError, ActionError, describeError } from './lib/errors';
 import { loadEnvFiles } from './lib/env';
 import { nodeVersionError } from './lib/node-version';
 import { createOut, SCHEMA_VERSION } from './lib/out';
+import type { CliOut } from './lib/out';
+import type { CommandSpec } from './lib/command';
 import { loadConfig } from './core/config';
 import { buildContext } from './core/context';
 import {
+  TOP_LEVEL_CONTENT_VERBS,
   authorHelpEntries,
   findAuthorCommand,
   findAuthorStoreCommand,
@@ -40,6 +43,7 @@ const TOP_HELP = `s2s — Soul2Soul headless authoring CLI (v${VERSION})
 
 Usage:
   s2s <group> <action> [flags]
+  s2s <verb> <note> [flags]
   s2s setup [flags]
 
 Groups:
@@ -50,6 +54,11 @@ Groups:
   config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
 
 Commands:
+  upload        Upload a note to IPFS and append it to the drafts log (no offer)
+  offer         Upload a note and offer it on-chain (or anchor an existing CID with --cid)
+  preview       Render the publication's current version with this note
+  publish       Upload, offer, render and back up in one pass
+  revoke        Retract a note on-chain and remove it from the site
   setup         Configure this machine: accept the provided defaults or paste your own keys
 
 Global flags:
@@ -98,6 +107,44 @@ const publicationHelp = (): string =>
   groupHelp(publicationCommands, 'publication', 'publication lifecycle');
 const draftsHelp = (): string =>
   groupHelp(draftsHelpEntries, 'drafts', 'the drafts log on the author Safe');
+
+/**
+ * Resolve, describe and run one command that needs a `CliContext`. The two
+ * callers differ in only two numbers: a group action is `s2s <group> <action>
+ * …` (two tokens before the command's own) and a top-level verb is `s2s <verb>
+ * …` (one), and `group` is empty for the bare form so its usage line omits the
+ * group token.
+ */
+async function runContextCommand(
+  out: CliOut,
+  command: CommandSpec,
+  argv: string[],
+  options: { group: string; offset: number; wantHelp: boolean },
+): Promise<number> {
+  if (options.wantHelp) {
+    const text = commandHelp(
+      options.group,
+      command.name,
+      command.summary,
+      command.flags,
+      command.params,
+      command.detail,
+    );
+    out.result({ help: text }, text);
+    return 0;
+  }
+
+  const parsed = parseCommandArgs(argv, command.flags);
+  const context = await buildContext(out, loadConfig());
+  const code = await command.run(context, {
+    flags: parsed.flags,
+    positionals: parsed.positionals.slice(options.offset),
+  });
+  // A command that can finish with a partial result says so in its return: a
+  // `drafts pull` that failed some rows still prints the rows, and the exit code
+  // is how a script sees the difference.
+  return typeof code === 'number' ? code : 0;
+}
 
 async function main(argv: string[]): Promise<number> {
   // Discovery pass — lenient, because the command that owns the flag spec has
@@ -189,6 +236,18 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // The five content verbs answer without the `author` prefix. Exact names
+  // only, so a typo falls through to the unknown-group error rather than being
+  // prefix-matched. Both forms resolve to the same command and the same run
+  // tail; the empty group only changes the usage line.
+  if (group && TOP_LEVEL_CONTENT_VERBS.includes(group)) {
+    const command = findAuthorCommand(group);
+    if (!command) {
+      throw new UsageError(`unknown command '${group}'`);
+    }
+    return runContextCommand(out, command, argv, { group: '', offset: 1, wantHelp });
+  }
+
   if (group !== 'author' && group !== 'publication' && group !== 'drafts') {
     throw new UsageError(
       `unknown command group '${group}' — expected 'author', 'drafts', 'signer', 'publication', 'config', or 'setup'`,
@@ -241,29 +300,7 @@ async function main(argv: string[]): Promise<number> {
     throw new UsageError(`unknown ${group} action '${action}'`);
   }
 
-  if (wantHelp) {
-    const text = commandHelp(
-      group,
-      command.name,
-      command.summary,
-      command.flags,
-      command.params,
-      command.detail,
-    );
-    out.result({ help: text }, text);
-    return 0;
-  }
-
-  const parsed = parseCommandArgs(argv, command.flags);
-  const context = await buildContext(out, loadConfig());
-  const code = await command.run(context, {
-    flags: parsed.flags,
-    positionals: parsed.positionals.slice(2),
-  });
-  // A command that can finish with a partial result says so in its return: a
-  // `drafts pull` that failed some rows still prints the rows, and the exit code
-  // is how a script sees the difference.
-  return typeof code === 'number' ? code : 0;
+  return runContextCommand(out, command, argv, { group, offset: 2, wantHelp });
 }
 
 /** One shape for every `--json` failure, so consumers read `code`, not prose. */

@@ -137,6 +137,11 @@ describe('help rendered from the spec', () => {
     expect(help).toContain('-h, --help');
   });
 
+  it('omits the group token when the group is empty', () => {
+    const help = commandHelp('', 'publish', 'Upload, offer, render.', PUBLISH_FLAGS, '<note>');
+    expect(help.startsWith('s2s publish <note> [flags]')).toBe(true);
+  });
+
   it('renders the help alias once, as -h, --help', () => {
     const rows = flagRows({}, GLOBAL_FLAGS);
     expect(rows.match(/show help for this command/g)).toHaveLength(1);

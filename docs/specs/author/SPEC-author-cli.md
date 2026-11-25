@@ -73,6 +73,11 @@ s2s author offer     <note> [--cid <cid>] [--publication <ens>] [--allow-plainte
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + render of the publication's current version (Lit when admitted, else dev; no offer, no append)
 s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + append + offer + render + pins; refuses an author whose append would be an offer
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
+s2s upload           <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins + drafts append (no offer)
+s2s offer            <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]      # drafts append + on-chain offer only
+s2s preview          <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + render of the publication's current version (Lit when admitted, else dev; no offer, no append)
+s2s publish          <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + append + offer + render + pins; refuses an author whose append would be an offer
+s2s revoke           <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
 s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--emit <path>] [--emit-batch <path>] [--json]   # file a key and propose it as one owner of a deployed Safe
 s2s signer propose   --file <call.json> [--json]                                                  # post a call written by `signer add --emit`, signing as an owner
 s2s signer rotate    [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]             # swap this machine's key on its Safe, threshold untouched
@@ -90,6 +95,10 @@ s2s drafts append    <genesis> <cid> [--json]                                   
 s2s drafts fetch     <order|genesis> [--out <path>] [--stdout] [--force] [--json]                 # one draft, decrypted, as a note
 s2s drafts pull      <folder> [--force] [--json]                                                  # every draft in the log as a note in <folder>
 ```
+
+The five bare forms are the same commands as their `s2s author <verb>` counterparts: same
+positional, same flags, same run. The `s2s author <verb>` form stays canonical — the author
+group help lists it and the editor plugins call it.
 
 The **upload ↔ offer split**: `upload` signs, uploads to Kubo, fires the pinning
 legs, writes `genesis`/`author` back, and appends the CID to the author Safe's
