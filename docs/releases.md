@@ -37,7 +37,7 @@ reads it, and the next release is judged against the last release rather than ag
   `unsignedRender` for every preview and `offerPreview` for an offer row; 0.1.4 is unfiled, so both
   arrive together and one pin enables the whole preview.
 - safe-app: a row carries one render, Preview. The per-row Dev button is gone, and the toolbar
-  toggle still chooses dev or publish for Sync site.
+  toggle still chooses dev or publish for Render site.
 - Filing the document moves no publication: each one reads the manifest at its own
   `manifest_version` record, so pinning this build to a publication stays a separate human step.
 

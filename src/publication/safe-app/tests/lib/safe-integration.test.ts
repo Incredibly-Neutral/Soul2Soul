@@ -695,6 +695,26 @@ describe('publication mutations — makeOffer / admit / reject / whitelists', ()
     }
   });
 
+  it('addReviewer / removeReviewer encode setReviewer with the enabled flag', async () => {
+    const si = await initInstance();
+    await si.addReviewer('0xReviewer');
+    await si.removeReviewer('0xReviewer');
+
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('setReviewer', [
+      '0xReviewer',
+      true,
+    ]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('setReviewer', [
+      '0xReviewer',
+      false,
+    ]);
+    expect(sdk.txsSend).toHaveBeenCalledTimes(2);
+    // Both target the publication module, like the author/dev verbs.
+    for (const call of sdk.txsSend.mock.calls) {
+      expect(call[0].txs[0].to).toBe(P_ADDR);
+    }
+  });
+
   it('throws when publication methods are called without initialization', async () => {
     const si = new SafeIntegration();
     await expect(si.makeOffer('0x', 'cid')).rejects.toThrow(/Safe SDK not initialized/);

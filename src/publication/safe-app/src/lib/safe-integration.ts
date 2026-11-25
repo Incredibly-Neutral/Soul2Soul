@@ -656,6 +656,44 @@ export class SafeIntegration {
     });
   }
 
+  async addReviewer(reviewer: string): Promise<void> {
+    if (!this.safeSdk) {
+      throw new Error('Safe SDK not initialized');
+    }
+    const publicationModule = this.requirePublicationModule();
+
+    const txData = publicationModule.interface.encodeFunctionData('setReviewer', [reviewer, true]);
+
+    await this.safeSdk.txs.send({
+      txs: [
+        {
+          to: contractAddress(publicationModule),
+          value: '0',
+          data: txData,
+        },
+      ],
+    });
+  }
+
+  async removeReviewer(reviewer: string): Promise<void> {
+    if (!this.safeSdk) {
+      throw new Error('Safe SDK not initialized');
+    }
+    const publicationModule = this.requirePublicationModule();
+
+    const txData = publicationModule.interface.encodeFunctionData('setReviewer', [reviewer, false]);
+
+    await this.safeSdk.txs.send({
+      txs: [
+        {
+          to: contractAddress(publicationModule),
+          value: '0',
+          data: txData,
+        },
+      ],
+    });
+  }
+
   async getWhitelistedAuthors(): Promise<string[]> {
     if (!this.publicationModule) {
       throw new Error('Publication module not initialized');
@@ -668,6 +706,13 @@ export class SafeIntegration {
       throw new Error('Publication module not initialized');
     }
     return await this.publicationModule.getWhitelistedDevs();
+  }
+
+  async getReviewers(): Promise<string[]> {
+    if (!this.publicationModule) {
+      throw new Error('Publication module not initialized');
+    }
+    return await this.publicationModule.getReviewers();
   }
 
   async canPublish(address: string): Promise<boolean> {

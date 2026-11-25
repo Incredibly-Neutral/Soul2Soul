@@ -62,8 +62,8 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 | path                                                                                                                           | role                                                                                                             |
 | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `components/s2s-app.ts`                                                                                                        | root element; five tabs; reads the site root via `getText(node, "contenthash_wrapped")`; boots `FilecoinStorage` |
-| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions (Preview, Publish/Remove page), Sync site with a dev/publish toggle |
-| `components/s2s-whitelist-tab.ts`                                                                                              | author/dev lists                                                                                                 |
+| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions (Preview, Publish/Remove page), Render site with a dev/publish toggle |
+| `components/s2s-whitelist-tab.ts`                                                                                              | author/dev/reviewer lists                                                                                                 |
 | `components/s2s-records-tab.ts`                                                                                                | view/edit records; config + asset build entry; alias editing                                                     |
 | `components/s2s-storage-tab.ts`                                                                                                | CID inventory + Filecoin storage/Data-Sets tables, piece delete, dataset terminate                               |
 | `components/s2s-cid-view-section.ts`                                                                                           | read-only CID inventory + retrievability monitor + per-row heal                                                  |
@@ -131,6 +131,11 @@ version table. A factory that answers nothing is refused, not worked around: the
 expected and stops. Nothing in the app reads a version and nothing falls back to an older module's
 verb set.
 
+**Whitelists:** the tab lists authors and developers, and a third list of reviewers. A reviewer is
+added or removed by proposing `setReviewer(addr, true/false)`, a list separate from publish rights:
+the module's `canRead` and `canReview` read it, `canPublish` never does. There is no client-side cap;
+the chain caps reviewers at 20.
+
 **Preview:** each deal row and each offer row carries one render action, Preview, beside its decision
 controls, and it
 opens a new tab inside the click, before any await, so the popup is not blocked. The tab opens on a
@@ -145,7 +150,7 @@ keeps the failure text (`Preview failed: <message>`) instead of closing, and the
 browser blocks the popup, the row keeps an “Open
 preview” link under the button. One preview runs per row at a time.
 
-**Sync site:** one button, two behaviours, the same `renderwithLitActions` call with the toolbar toggle choosing
+**Render site:** one button, two behaviours, the same `renderwithLitActions` call with the toolbar toggle choosing
 `dev` or `publish`. A dev sweep drops encrypted items; a publish sweep keeps them. The item list is
 `store.deals` and `store.offers` (the app's cache, not the module), and the result is `console.log`ged — no root
 is set, no header refresh. Details in
