@@ -9,3 +9,8 @@ packages:
 # `settings.autoInstallPeers: false`); pnpm 10 otherwise flips it to true
 # and re-resolves the whole graph.
 autoInstallPeers: false
+
+# pnpm 10 reads settings from this file; the same key in package.json is
+# ignored. The lockfile's `overrides` block records this resolution.
+overrides:
+  '@ensdomains/buffer': 'npm:buffer@^6.0.3'
