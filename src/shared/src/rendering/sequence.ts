@@ -470,19 +470,20 @@ export const renderwithLitActions = async (
   // One update run spends about 17 requests in total: roughly nine in the prologue (manifest,
   // owner and modules, the publish gate, config, the previous contenthash, the root copy) and
   // eight in the tail (assets, root txt, root stat, pin, cleanup, the write: nonce, gas, send,
-  // receipt). A page adds four: read the destination, cat the source once, rm the entry it
-  // replaces, cp the new one; the per-page gate is a chain read, not a gateway call. Six pages
-  // is therefore 17 + 24 = 41, and a removal that no job replaces adds up to five more (its page
-  // read, the "still in force" check with two retries, the rm) — 46, under the cap of 50.
+  // receipt). A page adds five: read the destination, cat the source once, its hasAgreement path
+  // gate, rm the entry it replaces, cp the new one. Five pages is therefore 17 + 25 = 42, and a
+  // tail whose assets and root txt both change adds about five more, so 47. A revoke costs five
+  // more (its page read, the "still in force" check with three attempts, the rm), so four pages
+  // plus a revoke is 17 + 20 + 5 = 42, and 47 with that widened tail. Six pages would be 47
+  // nominal and 52 with the widened tail, over the cap of 50, which is why five is the cap.
   const RUN_FIXED_REQUESTS = 17;
-  const RUN_JOB_REQUESTS = 4;
+  const RUN_JOB_REQUESTS = 5;
   const RUN_BUDGET_REQUESTS = 45;   // five left as slack for a run whose tail grows
   const REVOKE_REQUESTS = 5;
-  // Seven is the arithmetic ceiling with no revoke (45 - 17 = 28, / 4 = 7). Six is used: a run
-  // with a widened tail must not be the run that discovers the estimate was optimistic. A revoke
-  // adds five, so five pages is its ceiling, and five is what the constant below uses.
-  const UPDATE_BATCH_SIZE = 6;
-  const UPDATE_BATCH_SIZE_WITH_REVOKE = 5;
+  // Five is the arithmetic ceiling with no revoke (45 - 17 = 28, / 5 = 5); a revoke adds five,
+  // so four pages is its ceiling. Both are what the constants below use.
+  const UPDATE_BATCH_SIZE = 5;
+  const UPDATE_BATCH_SIZE_WITH_REVOKE = 4;
 
   const updateJobs = resetOnly ? [] : activeJobs;
   const pendingRevoke = allRemove.some((entry) => !entry.replacedBy);
@@ -496,7 +497,7 @@ export const renderwithLitActions = async (
     // Fill one batch in job order until adding the next page would pass the
     // budget, capped at the size the presence of a revoke allows. The revoke
     // rides the last batch, so its five requests are counted in every batch's
-    // cost: five pages plus a revoke is 17 + 20 + 5 = 42, under the budget.
+    // cost: four pages plus a revoke is 17 + 20 + 5 = 42, under the budget.
     let current: any[] = [];
     for (const job of updateJobs as any[]) {
       const nextCount = current.length + 1;

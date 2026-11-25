@@ -816,16 +816,16 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
 - **Update batches (2026-11-25):** an update run spends about 17 requests in total: roughly
   nine in the prologue (manifest, owner and modules, the publish gate, config, the previous
   contenthash, the root copy) and eight in the tail (assets, root txt, root stat, pin, cleanup,
-  the write: nonce, gas, send, receipt). A page adds four: read the destination, cat the source
-  once, rm the entry it replaces, cp the new one; the per-page gate is a chain read. Six pages is
-  therefore 17 + 24 = 41, and a removal that no job replaces adds up to five more (its page read,
-  the "still in force" check with two retries, the rm) — 46, under the cap of 50.
-  The budget is 45 with five left as slack, so the arithmetic ceiling is seven pages with no
-  revoke; `sequence.ts` uses six, because a run with a widened tail must not be the run that
-  discovers the estimate was optimistic. A revoke adds five, so five pages is its ceiling, and
-  that is the cap while any pending removal has no `replacedBy`. It fills one batch in job order
-  until adding the next page would pass the budget, capped at the size the revoke allows. Seven
-  pages therefore ride as 6 + 1, and a render with a revoke as 5 + 1. Each batch runs
+  the write: nonce, gas, send, receipt). A page adds five: read the destination, cat the source
+  once, its hasAgreement path gate, rm the entry it replaces, cp the new one. Five pages is
+  therefore 17 + 25 = 42, and a tail whose assets and root txt both change adds about five more,
+  so 47. A revoke costs five more (its page read, the "still in force" check with three attempts,
+  the rm), so four pages plus a revoke is 17 + 20 + 5 = 42, and 47 with that widened tail. Six
+  pages would be 47 nominal and 52 with the widened tail, over the cap of 50, which is why five
+  is the cap. The budget is 45 with five left as slack, so the arithmetic ceiling is five pages
+  with no revoke and four with one; `sequence.ts` uses those two constants. It fills one batch in
+  job order until adding the next page would pass the budget, capped at the size the revoke
+  allows. Six pages therefore ride as 5 + 1, and a render with a revoke as 4 + 2. Each batch runs
   sequentially: each call writes a contenthash and the next copies that tree forward. A removal
   rides with the batch that carries the genesis named in its `replacedBy` (the update only applies
   it when that genesis is among its own jobs), and one whose replacement appears in no batch rides
