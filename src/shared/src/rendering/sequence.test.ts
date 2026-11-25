@@ -1172,8 +1172,9 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     const revoked = { path: '/posts/revoked' };
     mockStages(two);
 
-    // A single call of two pages plus a revoke would reach 49 with the two
-    // mirrored root txt files; one page per call keeps it further under the cap.
+    // Two pages with the two mirrored root txt files is 43-48, and the revoke's
+    // seven on top of that is 50-55, over the cap. One page per call puts the
+    // revoke on a batch that is 37-42 and leaves it at most 49.
     const res: any = await call([revoked]);
 
     expect(updateCalls.map((c) => c.jobs.length)).toEqual([1, 1]);
