@@ -210,16 +210,18 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     ];
     const { receiptCalls, HASH } = withFakeEthersWrite((i) => seq[i - 1]);
 
-    const result = await onFakeClock(() => evmWrite(
-      'L2',
-      '0x' + '11'.repeat(20),
-      '0x' + '22'.repeat(20),
-      ABI,
-      'setText',
-      ['contenthash_wrapped', '0xabc'],
-      true, // confirm:true — the WRITE-CONFIRMATION path this fix targets
-      'https://lb.drpc.live/base/<key>',
-    ));
+    const result = await onFakeClock(() =>
+      evmWrite(
+        'L2',
+        '0x' + '11'.repeat(20),
+        '0x' + '22'.repeat(20),
+        ABI,
+        'setText',
+        ['contenthash_wrapped', '0xabc'],
+        true, // confirm:true — the WRITE-CONFIRMATION path this fix targets
+        'https://lb.drpc.live/base/<key>',
+      ),
+    );
 
     expect(result.success).toBe(true);
     expect(result.hash).toBe(HASH);
@@ -236,16 +238,18 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     const seq = [null, minedReceipt(456, 1)];
     const { receiptCalls, HASH } = withFakeEthersWrite((i) => seq[i - 1]);
 
-    const result = await onFakeClock(() => evmWrite(
-      'L2',
-      '0x' + '11'.repeat(20),
-      '0x' + '22'.repeat(20),
-      ABI,
-      'setText',
-      ['contenthash_wrapped', '0xabc'],
-      true,
-      'https://rpc.example',
-    ));
+    const result = await onFakeClock(() =>
+      evmWrite(
+        'L2',
+        '0x' + '11'.repeat(20),
+        '0x' + '22'.repeat(20),
+        ABI,
+        'setText',
+        ['contenthash_wrapped', '0xabc'],
+        true,
+        'https://rpc.example',
+      ),
+    );
 
     expect(result.success).toBe(true);
     expect(result.hash).toBe(HASH);
@@ -259,16 +263,18 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     const seq = [minedReceipt(789, 0)];
     const { receiptCalls } = withFakeEthersWrite((i) => seq[i - 1]);
 
-    const result = await onFakeClock(() => evmWrite(
-      'L2',
-      '0x' + '11'.repeat(20),
-      '0x' + '22'.repeat(20),
-      ABI,
-      'setText',
-      ['contenthash_wrapped', '0xabc'],
-      true,
-      'https://rpc.example',
-    ));
+    const result = await onFakeClock(() =>
+      evmWrite(
+        'L2',
+        '0x' + '11'.repeat(20),
+        '0x' + '22'.repeat(20),
+        ABI,
+        'setText',
+        ['contenthash_wrapped', '0xabc'],
+        true,
+        'https://rpc.example',
+      ),
+    );
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('transaction reverted (status 0)');
@@ -283,16 +289,18 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
       return minedReceipt(1, 1);
     });
 
-    const result = await onFakeClock(() => evmWrite(
-      'L2',
-      '0x' + '11'.repeat(20),
-      '0x' + '22'.repeat(20),
-      ABI,
-      'setText',
-      ['contenthash_wrapped', '0xabc'],
-      false, // confirm:false — no receipt wait
-      'https://rpc.example',
-    ));
+    const result = await onFakeClock(() =>
+      evmWrite(
+        'L2',
+        '0x' + '11'.repeat(20),
+        '0x' + '22'.repeat(20),
+        ABI,
+        'setText',
+        ['contenthash_wrapped', '0xabc'],
+        false, // confirm:false — no receipt wait
+        'https://rpc.example',
+      ),
+    );
 
     expect(result.success).toBe(true);
     expect(called).toBe(false);
