@@ -53,6 +53,20 @@ export const authorCommands: CommandSpec[] = [
   authorMigrate,
 ];
 
+/**
+ * The content verbs that also answer without the `author` prefix:
+ * `s2s upload <note>` is the same command as `s2s author upload <note>`.
+ * The list sits beside the registry it selects from, so the alias, the top
+ * level help and the dispatch cannot drift apart.
+ */
+export const TOP_LEVEL_CONTENT_VERBS: readonly string[] = [
+  'upload',
+  'offer',
+  'preview',
+  'publish',
+  'revoke',
+];
+
 /** `s2s publication` — publication lifecycle actions. */
 export const publicationCommands: CommandSpec[] = [newPublication];
 

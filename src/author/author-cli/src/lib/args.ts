@@ -247,7 +247,9 @@ export function flagRows(specs: FlagSpecs, globals: FlagSpecs = {}): string {
  * Full help for one action, derived from its spec. `params` is the positional
  * signature (`<note>`), so the usage line cannot disagree with the parser, and
  * `detail` is the optional second paragraph: the reason the command is shaped
- * this way, which would make a one-line group listing unreadable.
+ * this way, which would make a one-line group listing unreadable. An empty
+ * `group` drops the group token, which is what a top-level verb's usage line
+ * needs (`s2s publish <note> [flags]`).
  */
 export function commandHelp(
   group: string,
@@ -257,7 +259,8 @@ export function commandHelp(
   params?: string,
   detail?: string,
 ): string {
-  const usage = `s2s ${group} ${name}${params ? ` ${params}` : ''} [flags]`;
+  const prefix = group ? `s2s ${group} ` : 's2s ';
+  const usage = `${prefix}${name}${params ? ` ${params}` : ''} [flags]`;
   const own = flagRows(flags);
   const globals = flagRows({}, GLOBAL_FLAGS);
   return [
