@@ -974,7 +974,7 @@ describe('s2s-deals-tab', () => {
       expect(root.textContent).not.toContain('Waiting for signers');
       expect(rowRenderButton(root, '0xOffer1')).toBeNull();
       expect(notificationTexts().join(' | ')).toContain(
-        'Offer Title: the proposal has not executed. Sync site will reconcile it.',
+        'Offer Title: the proposal has not executed. Render site will reconcile it.',
       );
 
       // The poll stopped with the row: no more reads on the next beats.
@@ -1461,7 +1461,7 @@ describe('s2s-deals-tab', () => {
       expect(root.textContent).not.toContain('Waiting for signers');
       expect(rowRenderButton(root, '0xOffer1')).toBeNull();
       expect(notificationTexts().join(' | ')).toContain(
-        'Offer Title: the proposal could not be confirmed. Sync site will reconcile it.',
+        'Offer Title: the proposal could not be confirmed. Render site will reconcile it.',
       );
 
       const reads = m.safeIntegration.hasAgreement.mock.calls.length;
@@ -1470,7 +1470,7 @@ describe('s2s-deals-tab', () => {
     });
   });
 
-  it('sweeps deals and offers together, deduped, from the Sync site button', async () => {
+  it('sweeps deals and offers together, deduped, from the Render site button', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       // The same genesis in both sets: a deal whose offer is still listed.
       deals: [rawDeal('0xDeal1', '0xAuthorDeal'), rawDeal('0xShared', '0xAuthorDeal')],
@@ -1484,7 +1484,7 @@ describe('s2s-deals-tab', () => {
     const root = el.shadowRoot!;
     await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (2)'));
 
-    expect(root.textContent).toContain('Sync site');
+    expect(root.textContent).toContain('Render site');
     expect(root.textContent).not.toContain('Bulk Render');
     // The toggle that selects the cheap bulk render is labelled dev.
     expect(root.querySelector('toggle-button')?.getAttribute('label')).toBe('dev');

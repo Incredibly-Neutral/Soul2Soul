@@ -721,7 +721,7 @@ export class S2SDealsTab extends LitElement {
           this.setRowPhase(genesis, 'idle');
           this.releaseRetained(genesis);
           this.showNotification(
-            `${label}: the proposal has not executed. Sync site will reconcile it.`,
+            `${label}: the proposal has not executed. Render site will reconcile it.`,
             'error',
           );
         }
@@ -736,7 +736,7 @@ export class S2SDealsTab extends LitElement {
           this.setRowPhase(genesis, 'idle');
           this.releaseRetained(genesis);
           this.showNotification(
-            `${label}: the proposal could not be confirmed. Sync site will reconcile it.`,
+            `${label}: the proposal could not be confirmed. Render site will reconcile it.`,
             'error',
           );
         }
@@ -1136,7 +1136,7 @@ export class S2SDealsTab extends LitElement {
           @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
         ></s2s-check>
         <s2s-button action="bulkrender" type="secondary"
-          @click=${() => this.bulkRender(this.devMode ? 'dev' : 'publish')}>Sync site</s2s-button>
+          @click=${() => this.bulkRender(this.devMode ? 'dev' : 'publish')}>Render site</s2s-button>
         <toggle-button .bool=${this.devMode} label="dev"
           @toggle=${(e: CustomEvent) => { this.devMode = e.detail.checked; }}></toggle-button>
       </div>
