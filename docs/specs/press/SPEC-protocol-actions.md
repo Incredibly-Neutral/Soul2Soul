@@ -821,8 +821,9 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   therefore costs 37-42, and the rest of the fifty is not spare room: after the first batch the
   previous root copy has already put the mirrored root txt files in place, so each one costs
   three requests (stat, rm, copy), and robots.txt plus llms.txt takes the session to 43-48. A
-  revoke costs up to four more — hasAgreement, its retries, then the rm — so it rides a batch of
-  its own holding one page, which keeps it at most 42 plus its four. `sequence.ts` splits the
+  revoke costs up to seven more — the page read, hasAgreement, and the rm, with verifyRevocable
+  retried twice more while the genesis is still in force — so it rides a batch of its own holding
+  one page, which keeps it at most 42 plus its seven, or 49. `sequence.ts` splits the
   pages of a bulk render into batches of two and runs the
   update once per batch, sequentially: each call writes a contenthash and the next copies that
   tree forward. A removal rides with the batch that carries the genesis named in its

@@ -1031,10 +1031,9 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
 // A bulk render's pages go to the update action in batches.
 //
 // One update session spends six requests per page on top of a fixed 25-30
-// calls, so two pages comes to 37-42 and leaves room under the 50-request cap
-// for the mirrored root txt files. The pages ride in batches of two,
-// sequentially, and each batch writes the contenthash the next one copies
-// forward.
+// calls, so two pages comes to 37-42 and the two mirrored root txt files take
+// it to 43-48. The pages ride in batches of two, sequentially, and each batch
+// writes the contenthash the next one copies forward.
 // ============================================================================
 
 describe('renderwithLitActions — the update stage runs in batches', () => {
@@ -1158,7 +1157,7 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
 
     const res: any = await call([revoked]);
 
-    // The revoke's four requests ride a batch that holds one page, not two.
+    // The revoke's seven requests ride a batch that holds one page, not two.
     expect(updateCalls.map((c) => c.jobs.length)).toEqual([2, 2, 1, 1]);
     for (const c of updateCalls) expect(c.jobs.length).toBeLessThanOrEqual(2);
     expect(updateCalls[0].remove).toBeUndefined();
@@ -1173,8 +1172,8 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     const revoked = { path: '/posts/revoked' };
     mockStages(two);
 
-    // A single call of two pages plus a revoke reaches 52 with the two mirrored
-    // root txt files; one page per call keeps it under the cap.
+    // A single call of two pages plus a revoke would reach 49 with the two
+    // mirrored root txt files; one page per call keeps it further under the cap.
     const res: any = await call([revoked]);
 
     expect(updateCalls.map((c) => c.jobs.length)).toEqual([1, 1]);

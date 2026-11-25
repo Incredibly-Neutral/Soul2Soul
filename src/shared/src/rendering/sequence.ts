@@ -483,9 +483,10 @@ export const renderwithLitActions = async (
   // and llms.txt cost three requests each (stat, the rm that clears the copy,
   // then the copy that cannot overwrite), which takes the session to 43-48.
   //
-  // A revoke costs up to four more — hasAgreement, its retries, then the rm —
-  // so it rides a batch of its own that holds a single page: 42 at worst plus
-  // its four is 46, under the cap. A bulk render therefore splits its pages
+  // A revoke costs up to seven more — the page read, hasAgreement, and the rm,
+  // with verifyRevocable retried twice more while the genesis is still in force
+  // — so it rides a batch of its own that holds a single page: 42 at worst plus
+  // its seven is 49, under the cap. A bulk render therefore splits its pages
   // into batches and runs the update once per batch, sequentially: each call
   // writes a contenthash at its end and the next one copies that tree forward.
   const UPDATE_BATCH_SIZE = 2;
@@ -504,8 +505,8 @@ export const renderwithLitActions = async (
   // The revoke rides the last batch, so that batch must hold one page. This is
   // checked after the batches exist rather than inside the loop, because the
   // small case is the one it matters most for: two pages and a revoke would
-  // otherwise be a single call of two pages, and the revoke's four requests on
-  // top of 43-48 reaches 52. A reset is one call by design and is never split.
+  // otherwise be a single call of two pages, and the revoke's seven requests on
+  // top of 37-42 reaches 49. A reset is one call by design and is never split.
   if (!reset) {
     const last = batches[batches.length - 1];
     if (last && last.length > 1 && allRemove.some((entry) => !entry.replacedBy)) {
