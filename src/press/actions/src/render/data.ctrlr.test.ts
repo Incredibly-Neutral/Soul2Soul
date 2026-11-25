@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vites
 import { Wallet, TypedDataEncoder, keccak256, recoverAddress, toUtf8Bytes } from 'ethers';
 import {
   createPath,
+  filterCollection,
+  mergeDecrypted,
   sortCollection,
   bodiesFromReconcile,
   fetchCollections,
@@ -20,7 +22,7 @@ import {
   getLatestEntry,
   toBody,
 } from '../libs/module.factory';
-import { jcs, type S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { expandCollection, jcs, type S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
 import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/manuscript/types';
 
@@ -229,6 +231,113 @@ const items = [
 ];
 
 const ids = (result: any[]) => result.map((i) => i.id);
+
+// ============================================================================
+// Collection bundles — one decrypt, then expand into member pages.
+//
+// The bundle body carries its `collection` document; mergeDecrypted must carry
+// it onto the flat body, and the render chain must judge the MEMBERS (not the
+// container) with the collection's own filter and order.
+// ============================================================================
+
+describe('mergeDecrypted: collection document', () => {
+  const encBody = () =>
+    ({
+      id: 'bundle-g',
+      author: '0xAuthor',
+      locale: 'en',
+      parent: '',
+      position: '',
+      postType: 'folder',
+      creationDate: '2026-08-13',
+      modifiedDate: '2026-08-13',
+      tags: ['box'],
+      publication: 'pub',
+      encryption: true,
+      content: 'ciphertext',
+    }) as any;
+
+  it('carries the collection document from the plaintext onto the flat body', () => {
+    const collection = {
+      slug: 'chapters',
+      items: [{ key: 'one', title: 'One', slug: 'one', content: 'c1' }],
+    };
+    const body = mergeDecrypted(encBody(), {
+      title: 'Folder',
+      slug: 'folder',
+      content: '',
+      custom: {},
+      collection,
+    });
+    expect(body.collection).toEqual(collection);
+  });
+
+  it('emits no collection key when the plaintext has none', () => {
+    const body = mergeDecrypted(encBody(), {
+      title: 'Page',
+      slug: 'page',
+      content: 'body',
+      custom: {},
+    });
+    expect('collection' in body).toBe(false);
+  });
+});
+
+describe('post-expansion chain: the members are filtered, not the container', () => {
+  const bundle = {
+    id: 'bundle-g',
+    title: 'Folder',
+    slug: 'folder',
+    content: '',
+    postType: 'folder',
+    tags: ['box'],
+    mediaType: 'application/vnd.s2s.collection+json',
+    collection: {
+      slug: 'chapters',
+      items: [
+        { key: 'b', title: 'Beta', slug: 'beta', content: '', postType: 'chapter', tags: ['keep'] },
+        {
+          key: 'a',
+          title: 'Alpha',
+          slug: 'alpha',
+          content: '',
+          postType: 'chapter',
+          tags: ['keep'],
+        },
+        {
+          key: 'c',
+          title: 'Gamma',
+          slug: 'gamma',
+          content: '',
+          postType: 'skipme',
+          tags: ['keep'],
+        },
+        {
+          key: 'd',
+          title: 'Delta',
+          slug: 'delta',
+          content: '',
+          postType: 'chapter',
+          tags: ['drop'],
+        },
+      ],
+    },
+  };
+
+  it('keeps only members matching the tag and postType filters, in sort order', () => {
+    const collection = {
+      slug: 'chapters',
+      filters: [{ postType: 'chapter' }, { tags: 'keep' }],
+      sortBy: 'title',
+    };
+    const expanded = expandCollection(bundle as any);
+    const result = sortCollection(filterCollection(expanded, collection), collection);
+
+    // Gamma fails postType, Delta fails the tag; the container is not a member.
+    expect(result.map((item) => (item as any).collectionKey)).toEqual(['a', 'b']);
+    expect(result.map((item) => item.title)).toEqual(['Alpha', 'Beta']);
+  });
+});
 
 describe('sortCollection: position', () => {
   it('sorts ascending by numeric position', () => {

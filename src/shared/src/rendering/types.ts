@@ -51,4 +51,8 @@ export interface S2SJob {
   templateData?: S2STemplateData;
   html: string;
   revoked?: boolean;
+  /** the on-chain item a job renders (a collection member's bundle genesis); absent = id */
+  sourceId?: string;
+  /** which member of sourceId's collection this job renders */
+  collectionKey?: string;
 }

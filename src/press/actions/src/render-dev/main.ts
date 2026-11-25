@@ -13,7 +13,13 @@
  * input-provisioning modes, so preview ≈ production by construction.
  */
 import { validateDevRenderInput } from './schema';
-import { buildTemplateData, filterCollection, sortCollection } from '../render/data.ctrlr';
+import {
+  buildTemplateData,
+  filterCollection,
+  pathsForCollections,
+  sortCollection,
+} from '../render/data.ctrlr';
+import { expandCollection, isCollectionContainer } from '@s2s/soul2soul-shared/lit-actions';
 import { renderHTMLFromSource } from '../renderer/html.ctrlr';
 
 export async function main(input: unknown) {
@@ -50,12 +56,26 @@ export async function main(input: unknown) {
     //    pure collection filter + sorter over injected allDeals[].
     let resolvedCollections: Record<string, any[]> = collections || {};
     if (allDeals && Array.isArray(allDeals) && (templateConfig.collections || []).length > 0) {
+      // A bundle is a box, members are the list: expand the one signed
+      // container into its member pages BEFORE filtering, so a container whose
+      // own fields do not match still yields the members that do. The
+      // injected `collections` path above is untouched.
+      const expanded = allDeals.flatMap((item) =>
+        isCollectionContainer(item) ? expandCollection(item) : [item],
+      );
       resolvedCollections = {};
       for (const collection of templateConfig.collections || []) {
         resolvedCollections[collection.slug] = sortCollection(
-          filterCollection(allDeals, collection),
+          filterCollection(expanded, collection),
           collection,
         );
+        for (const item of resolvedCollections[collection.slug]) {
+          // A dev config may carry no mapping: then there is no template to
+          // resolve a path from, and the item keeps none.
+          if (config?.mapping?.templateConfig) {
+            item.path = item.path ?? pathsForCollections(item, config);
+          }
+        }
       }
     }
     templateData.collections = resolvedCollections;

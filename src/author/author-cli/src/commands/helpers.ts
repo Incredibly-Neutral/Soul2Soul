@@ -2,26 +2,39 @@
 // Shared command helpers — argument validation + publication resolution.
 // ============================================================================
 
-import { existsSync, readFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { basename, join } from 'node:path';
 
-import { parseMarkdownNote } from '@s2s/soul2soul-shared';
+import { COLLECTION_MANIFEST_FILENAME, parseMarkdownNote } from '@s2s/soul2soul-shared';
 
 import { flagString, type ParsedArgs } from '../lib/args';
 import { UsageError } from '../lib/errors';
 import type { RenderOutcome } from '../core/author';
 import type { CliContext } from '../core/context';
 
-/** Require a single `<note>` positional that points at an existing file. */
+/**
+ * Require a single `<note>` positional that points at an existing file.
+ *
+ * A directory is one collection manuscript: resolve it to its manifest. The
+ * folder is the argument a person has open, and every command that takes a note
+ * takes a folder too without knowing it.
+ */
 export function requireNotePath(args: ParsedArgs): string {
   const notePath = args.positionals[0];
   if (!notePath) {
     throw new UsageError('missing required argument: <note> (path to a markdown note)');
   }
-  if (!existsSync(notePath)) {
+  let target = notePath;
+  if (existsSync(notePath) && statSync(notePath).isDirectory()) {
+    target = join(notePath, COLLECTION_MANIFEST_FILENAME);
+    if (!existsSync(target)) {
+      throw new UsageError(`no ${COLLECTION_MANIFEST_FILENAME} in ${notePath}`);
+    }
+  }
+  if (!existsSync(target)) {
     throw new UsageError(`note file not found: ${notePath}`);
   }
-  return notePath;
+  return target;
 }
 
 /**

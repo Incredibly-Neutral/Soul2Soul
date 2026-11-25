@@ -272,6 +272,62 @@ describe('evm-update — REFRESH (the page at the destination is this job’s)',
     // instead of cat'ing the same page again.
     expect(readsOf('/hello-world/index.html')).toBe(1);
   });
+
+  it('a member job is a refresh of its bundle genesis, not of the synthetic member id', async () => {
+    mocks.pages = { '/chapters/one/index.html': pageHtml(GENESIS) };
+    mocks.canPublish = false;
+
+    const result: any = await main({
+      ...baseInput,
+      jobs: [
+        {
+          ...makeJob('/chapters/one', `${GENESIS}:one`),
+          sourceId: GENESIS,
+          collectionKey: 'one',
+        },
+      ],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeUndefined();
+    const { canPublish } = await import('../libs/gates');
+    expect(canPublish).not.toHaveBeenCalled();
+    expect(hasTrace(result, 'refresh: /chapters/one/index.html')).toBe(true);
+    // The provenance gate is asked about the signed bundle, not the synthetic
+    // member id: reverting this to job.id would throw "Genesis mismatch".
+    const { verifyProvenance } = await import('./verify');
+    expect(verifyProvenance).toHaveBeenCalledWith(
+      'QmRenderedHtml',
+      GENESIS,
+      '0x' + '55'.repeat(20),
+      gateway,
+      expect.any(Array),
+    );
+  });
+
+  it('a plain job is verified against its own id', async () => {
+    const PLAIN_ID = '0x' + '77'.repeat(32);
+    mocks.pages = { '/hello-world/index.html': pageHtml(PLAIN_ID) };
+    mocks.incoming = incomingIdentity(PLAIN_ID);
+    mocks.canPublish = false;
+
+    const result: any = await main({
+      ...baseInput,
+      jobs: [makeJob('/hello-world', PLAIN_ID)],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    const { verifyProvenance } = await import('./verify');
+    expect(verifyProvenance).toHaveBeenCalledWith(
+      'QmRenderedHtml',
+      PLAIN_ID,
+      '0x' + '55'.repeat(20),
+      gateway,
+      expect.any(Array),
+    );
+  });
 });
 
 describe('evm-update — ADD (a free path, or a different page there)', () => {
@@ -451,5 +507,27 @@ describe('evm-update — reset and preview', () => {
     expect(result.error).toBe('cannot publish');
     // No destination read was needed: preview does not classify by page.
     expect(readsOf('/hello-world/index.html')).toBe(0);
+  });
+});
+
+describe('evm-update — a collection member job attests the bundle genesis', () => {
+  it('removes a former member page when the only job naming the bundle is a member job', async () => {
+    // A collection bundle whose own postType maps to no page emits no bundle
+    // job; its members carry the bundle genesis as sourceId. The removal of a
+    // dropped member names that genesis, and the incoming job set must know it.
+    const memberId = `${GENESIS}:one`;
+    mocks.incoming = incomingIdentity(memberId);
+
+    const result: Awaited<ReturnType<typeof main>> = await main({
+      ...baseInput,
+      jobs: [{ ...makeJob('/chapters/one/', memberId), sourceId: GENESIS }],
+      remove: [{ path: '/chapters/old', replacedBy: GENESIS }],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(hasTrace(result, 'removed: /chapters/old')).toBe(true);
+    expect(hasTrace(result, 'not in job set')).toBe(false);
+    expect(removalsOf('/chapters/old').length).toBeGreaterThan(0);
   });
 });
