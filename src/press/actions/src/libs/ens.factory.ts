@@ -54,10 +54,16 @@ const ENS_REGISTRY_ADDRESS = '0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5';
 //                              batch for the getCode reads of the non-zero
 //                              answers (at most 1)
 //
-// So discovery costs at most 4 requests with one URL per chain, and at most 6
-// with two (the two ENS reads once, each batch failing over to both URLs). A
-// batch that is refused falls through to the per-kind per-URL loop, which
-// costs what it did before.
+// So a discovery whose batches are all answered costs 4 requests with one URL
+// per chain: the 2 ENS reads, then 1 for both moduleAddress reads and 1 for
+// the getCode reads (a batch goes to the first URL of the list).
+//
+// A refused batch costs one extra request — its own attempt — and then falls
+// through to the per-kind per-URL loop underneath, which is unchanged: one
+// request per kind per URL, no retry, and the two kinds are asked separately.
+// With one URL per chain that makes the worst case 8, not 4: 2 ENS reads, then
+// for each kind the batch attempt plus the loop read. Each additional URL in a
+// list can add one more request per kind in that fallback.
 // ============================================================================
 
 // `keccak256("s2s.module.publication")` and `keccak256("s2s.module.records")`,

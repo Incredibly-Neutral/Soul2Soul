@@ -90,6 +90,13 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
   // `Lit` global evmWrite touches, driving provider.getTransactionReceipt from
   // `receiptBehavior(callIndex)` so each test controls the receipt sequence
   // (throw SERVER_ERROR once / return null / return a mined receipt).
+  //
+  // `fetch` is stubbed too: evmWrite asks for the nonce and the gas estimate as
+  // one JSON-RPC batch, and no test here may reach the network. The stub fails
+  // the batch, which is the fall-through path to the fake provider, and counts
+  // the attempt so a test can assert it happened.
+  let fetchCalls = 0;
+
   const withFakeEthersWrite = (receiptBehavior: (callIndex: number) => any) => {
     let receiptCalls = 0;
     const HASH = '0x' + 'ab'.repeat(32);
@@ -151,6 +158,10 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     (globalThis as any).Lit = {
       Actions: { getPrivateKey: async () => '0x' + '11'.repeat(32) },
     };
+    (globalThis as any).fetch = async () => {
+      fetchCalls++;
+      throw new Error('offline');
+    };
 
     return { receiptCalls: () => receiptCalls, HASH };
   };
@@ -162,9 +173,30 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     transactionHash: '0x' + 'ab'.repeat(32),
   });
 
+  // No test in this block waits on a wall clock: everything runs on the fake
+  // timers, advanced until the write settles.
+  const onFakeClock = async <T>(run: () => Promise<T>): Promise<T> => {
+    let settled = false;
+    const promise = run().finally(() => {
+      settled = true;
+    });
+    for (let i = 0; i < 200 && !settled; i++) {
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    if (!settled) throw new Error('write did not settle on the fake clock');
+    return promise;
+  };
+
   beforeEach(() => {
+    vi.useFakeTimers();
+    fetchCalls = 0;
     delete (globalThis as any).ethers;
     delete (globalThis as any).Lit;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    (globalThis as any).fetch = realFetch;
   });
 
   it('retries a transient SERVER_ERROR and succeeds on the next poll', async () => {
@@ -178,7 +210,7 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     ];
     const { receiptCalls, HASH } = withFakeEthersWrite((i) => seq[i - 1]);
 
-    const result = await evmWrite(
+    const result = await onFakeClock(() => evmWrite(
       'L2',
       '0x' + '11'.repeat(20),
       '0x' + '22'.repeat(20),
@@ -187,13 +219,15 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
       ['contenthash_wrapped', '0xabc'],
       true, // confirm:true — the WRITE-CONFIRMATION path this fix targets
       'https://lb.drpc.live/base/<key>',
-    );
+    ));
 
     expect(result.success).toBe(true);
     expect(result.hash).toBe(HASH);
     expect(result.receipt.blockNumber).toBe(123);
     // One failed poll (SERVER_ERROR, retried) + one success = two calls.
     expect(receiptCalls()).toBe(2);
+    // The nonce/gas batch was attempted once, and answered by the stub.
+    expect(fetchCalls).toBe(1);
   });
 
   it('treats a null receipt (still indexing) as not-ready and retries until mined', async () => {
@@ -202,7 +236,7 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     const seq = [null, minedReceipt(456, 1)];
     const { receiptCalls, HASH } = withFakeEthersWrite((i) => seq[i - 1]);
 
-    const result = await evmWrite(
+    const result = await onFakeClock(() => evmWrite(
       'L2',
       '0x' + '11'.repeat(20),
       '0x' + '22'.repeat(20),
@@ -211,7 +245,7 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
       ['contenthash_wrapped', '0xabc'],
       true,
       'https://rpc.example',
-    );
+    ));
 
     expect(result.success).toBe(true);
     expect(result.hash).toBe(HASH);
@@ -225,7 +259,7 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     const seq = [minedReceipt(789, 0)];
     const { receiptCalls } = withFakeEthersWrite((i) => seq[i - 1]);
 
-    const result = await evmWrite(
+    const result = await onFakeClock(() => evmWrite(
       'L2',
       '0x' + '11'.repeat(20),
       '0x' + '22'.repeat(20),
@@ -234,21 +268,22 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
       ['contenthash_wrapped', '0xabc'],
       true,
       'https://rpc.example',
-    );
+    ));
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('transaction reverted (status 0)');
     expect(receiptCalls()).toBe(1);
   });
 
-  it('does NOT wait when confirm is false (fire-and-forget unchanged)', async () => {    // confirm:false must not touch getTransactionReceipt at all.
+  it('does NOT wait when confirm is false (fire-and-forget unchanged)', async () => {
+    // confirm:false must not touch getTransactionReceipt at all.
     let called = false;
     const { receiptCalls } = withFakeEthersWrite(() => {
       called = true;
       return minedReceipt(1, 1);
     });
 
-    const result = await evmWrite(
+    const result = await onFakeClock(() => evmWrite(
       'L2',
       '0x' + '11'.repeat(20),
       '0x' + '22'.repeat(20),
@@ -257,7 +292,7 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
       ['contenthash_wrapped', '0xabc'],
       false, // confirm:false — no receipt wait
       'https://rpc.example',
-    );
+    ));
 
     expect(result.success).toBe(true);
     expect(called).toBe(false);
@@ -268,35 +303,25 @@ describe('evmWrite receipt-wait retry (confirm:true)', () => {
     // A tx cannot be in a block before ~2s on Base; ethers' own 0ms first poll
     // could never see a receipt and only spent session requests. The first ask
     // now waits one block.
-    vi.useFakeTimers();
-    const savedFetch = (globalThis as any).fetch;
-    (globalThis as any).fetch = async () => {
-      throw new Error('offline');
-    };
-    try {
-      const { receiptCalls } = withFakeEthersWrite(() => minedReceipt(1, 1));
-      const done = evmWrite(
-        'L2',
-        '0x' + '11'.repeat(20),
-        '0x' + '22'.repeat(20),
-        ABI,
-        'setText',
-        ['contenthash_wrapped', '0xabc'],
-        true,
-        'https://rpc.example',
-      );
+    const { receiptCalls } = withFakeEthersWrite(() => minedReceipt(1, 1));
+    const done = evmWrite(
+      'L2',
+      '0x' + '11'.repeat(20),
+      '0x' + '22'.repeat(20),
+      ABI,
+      'setText',
+      ['contenthash_wrapped', '0xabc'],
+      true,
+      'https://rpc.example',
+    );
 
-      await vi.advanceTimersByTimeAsync(1999);
-      expect(receiptCalls()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(receiptCalls()).toBe(0);
 
-      await vi.advanceTimersByTimeAsync(1);
-      expect(receiptCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(receiptCalls()).toBe(1);
 
-      await done;
-    } finally {
-      vi.useRealTimers();
-      (globalThis as any).fetch = savedFetch;
-    }
+    await done;
   });
 });
 
