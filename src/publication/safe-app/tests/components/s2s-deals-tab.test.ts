@@ -377,14 +377,18 @@ function controlsWith(root: ShadowRoot, action: string): HTMLButtonElement[] {
 /**
  * A stand-in for the tab window.open returns. `location.href` is writable and
  * readable, so navigation is observable without a real second tab. The
- * document records what the placeholder writes and carries a body whose
- * textContent the failure path replaces.
+ * document records the placeholder write and puts its visible line into the
+ * body, which the failure path then replaces through textContent.
  */
 function fakeTab() {
+  const body = { textContent: '' };
   const doc = {
-    body: { textContent: '' } as { textContent: string },
+    body,
     open: vi.fn(),
-    write: vi.fn(),
+    write: vi.fn((html: string) => {
+      const line = /<p>([\s\S]*?)<\/p>/.exec(html);
+      body.textContent = line ? line[1] : html;
+    }),
     close: vi.fn(),
   };
   return {
@@ -1765,9 +1769,18 @@ describe('s2s-deals-tab', () => {
     previewControl(root, '0xDeal1').btn!.click();
     await flushUpdates(el);
 
-    // Still pending: the tab already says what it is doing.
+    // Still pending: the tab already says what it is doing, and the write is
+    // one open, one write, one close.
+    expect(tab.document.open).toHaveBeenCalledTimes(1);
     expect(tab.document.write).toHaveBeenCalledTimes(1);
-    expect(tab.document.write.mock.calls[0][0]).toContain(
+    expect(tab.document.close).toHaveBeenCalledTimes(1);
+    expect(tab.document.open.mock.invocationCallOrder[0]).toBeLessThan(
+      tab.document.write.mock.invocationCallOrder[0],
+    );
+    expect(tab.document.write.mock.invocationCallOrder[0]).toBeLessThan(
+      tab.document.close.mock.invocationCallOrder[0],
+    );
+    expect(tab.document.body.textContent).toBe(
       'Preview is rendering. This tab will open it when it is ready.',
     );
     expect(tab.location.href).toBe('');

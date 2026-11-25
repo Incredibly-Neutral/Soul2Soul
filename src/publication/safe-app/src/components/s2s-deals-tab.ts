@@ -874,21 +874,29 @@ export class S2SDealsTab extends LitElement {
         this.setRenderReady(genesis, url);
       }
     } catch (error: any) {
+      // Report before touching the tab: reading a document the reader has
+      // navigated to another origin throws SecurityError, and that must not
+      // swallow the reason the preview failed.
+      this.showNotification(`Preview failed: ${error.message}`, 'error');
       // Leave the tab open with the reason: the notification is ephemeral, and
       // a closed tab tells the reader nothing. textContent, not markup, so an
       // action's error text cannot inject anything.
       if (tab) {
+        // Sever the opener so the preview cannot reach back into the Safe app.
         tab.opener = null;
-        const body = tab.document?.body;
-        if (body) body.textContent = `Preview failed: ${error.message}`;
+        try {
+          const body = tab.document?.body;
+          if (body) body.textContent = `Preview failed: ${error.message}`;
+        } catch {
+          // A cross-origin tab refuses the read; the report above stands.
+        }
       }
-      this.showNotification(`Preview failed: ${error.message}`, 'error');
     } finally {
       this.setRenderBusy(genesis, false);
     }
   }
 
-  /** Write the stand-in page into the tab the click just opened, before any await. */
+  /** Write the stand-in page synchronously, before the render is called. */
   private writePreviewPlaceholder(tab: Window | null) {
     const doc = tab?.document;
     if (!doc) return;
