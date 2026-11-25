@@ -63,7 +63,7 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `components/s2s-app.ts`                                                                                                        | root element; five tabs; reads the site root via `getText(node, "contenthash_wrapped")`; boots `FilecoinStorage` |
 | `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions (Preview, Publish/Remove page), Render site with a dev/publish toggle |
-| `components/s2s-whitelist-tab.ts`                                                                                              | author/dev lists                                                                                                 |
+| `components/s2s-whitelist-tab.ts`                                                                                              | author/dev/reviewer lists                                                                                                 |
 | `components/s2s-records-tab.ts`                                                                                                | view/edit records; config + asset build entry; alias editing                                                     |
 | `components/s2s-storage-tab.ts`                                                                                                | CID inventory + Filecoin storage/Data-Sets tables, piece delete, dataset terminate                               |
 | `components/s2s-cid-view-section.ts`                                                                                           | read-only CID inventory + retrievability monitor + per-row heal                                                  |
@@ -130,6 +130,10 @@ asked before the create as well as after, so `src/lib/safe-integration.ts` needs
 version table. A factory that answers nothing is refused, not worked around: the tab names the address it
 expected and stops. Nothing in the app reads a version and nothing falls back to an older module's
 verb set.
+
+**Whitelists:** the tab lists authors and developers, and a third list of reviewers. A reviewer is
+added or removed by proposing `setReviewer(addr, true/false)`, a list separate from publish rights:
+the module's `canRead` and `canReview` read it, `canPublish` never does. No list has a client-side cap.
 
 **Preview:** each deal row and each offer row carries one render action, Preview, beside its decision
 controls, and it

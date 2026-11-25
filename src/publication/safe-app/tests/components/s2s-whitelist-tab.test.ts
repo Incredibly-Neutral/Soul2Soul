@@ -7,6 +7,7 @@ import '../../src/components/s2s-whitelist-tab';
 const AUTHOR_A = '0x1111111111111111111111111111111111111111';
 const AUTHOR_B = '0x2222222222222222222222222222222222222222';
 const DEV_A = '0x3333333333333333333333333333333333333333';
+const REVIEWER_A = '0x4444444444444444444444444444444444444444';
 
 // copy-hash truncates long values to first4...last4 only on wide viewports.
 // Pin innerWidth above breakpoints.md so truncation is deterministic, and mock
@@ -21,10 +22,13 @@ function makeSafeIntegration() {
   return {
     getWhitelistedAuthors: vi.fn(async (): Promise<string[]> => []),
     getWhitelistedDevs: vi.fn(async (): Promise<string[]> => []),
+    getReviewers: vi.fn(async (): Promise<string[]> => []),
     whitelistAuthor: vi.fn(async (_a: string): Promise<void> => {}),
     removeWhitelistedAuthor: vi.fn(async (_a: string): Promise<void> => {}),
     whitelistDev: vi.fn(async (_d: string): Promise<void> => {}),
     removeWhitelistedDev: vi.fn(async (_d: string): Promise<void> => {}),
+    addReviewer: vi.fn(async (_r: string): Promise<void> => {}),
+    removeReviewer: vi.fn(async (_r: string): Promise<void> => {}),
     canPublish: vi.fn(async (_a: string): Promise<boolean> => true),
   };
 }
@@ -40,10 +44,11 @@ function notificationTexts(): string {
 // ---------------------------------------------------------------------------
 
 /**
- * The Authors and Developers sections, in render order. The can-publish
- * <s2s-check> lives in its own leading .section (it has no .section-title), so
- * it is filtered out here to keep the positional contract
- * (0 = Authors, 1 = Developers) stable regardless of where that section sits.
+ * The Authors, Developers and Reviewers sections, in render order. The
+ * can-publish <s2s-check> lives in its own leading .section (it has no
+ * .section-title), so it is filtered out here to keep the positional contract
+ * (0 = Authors, 1 = Developers, 2 = Reviewers) stable regardless of where that
+ * section sits.
  */
 function sections(el: S2SWhitelistTab): HTMLElement[] {
   return [...el.shadowRoot!.querySelectorAll<HTMLElement>('.section')].filter(
@@ -238,6 +243,47 @@ describe('s2s-whitelist-tab', () => {
     await vi.waitFor(() => expect(notificationTexts()).toContain('Author removed!'));
     await vi.waitFor(() => expect(pillValues(sections(el)[0])).not.toContain(AUTHOR_A));
     expect(pillValues(sections(el)[0])).toContain(AUTHOR_B);
+  });
+
+  it('adds a reviewer via the sliding-add control, optimistically', async () => {
+    const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
+    await vi.waitFor(() => el.shadowRoot?.querySelector('.section'));
+    const reviewers = sections(el)[2];
+
+    await setAddInput(reviewers, REVIEWER_A);
+    await submitAddInput(reviewers);
+
+    await vi.waitFor(() => expect(safeIntegration.addReviewer).toHaveBeenCalledWith(REVIEWER_A));
+    await vi.waitFor(() => expect(notificationTexts()).toContain('Reviewer added!'));
+    await vi.waitFor(() => expect(pillValues(reviewers)).toContain(REVIEWER_A));
+  });
+
+  it('rejects a duplicate reviewer', async () => {
+    safeIntegration.getReviewers.mockResolvedValue([REVIEWER_A]);
+    const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
+    await vi.waitFor(() => el.shadowRoot?.querySelector('.section'));
+    const reviewers = sections(el)[2];
+
+    await setAddInput(reviewers, REVIEWER_A);
+    await submitAddInput(reviewers);
+
+    await vi.waitFor(() => expect(notificationTexts()).toContain('Reviewer already listed'));
+    expect(safeIntegration.addReviewer).not.toHaveBeenCalled();
+  });
+
+  it('removes a reviewer after confirming, and drops the pill optimistically', async () => {
+    safeIntegration.getReviewers.mockResolvedValue([REVIEWER_A]);
+    const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
+    await vi.waitFor(() => sections(el)[2].querySelector('.alias-pill__remove'));
+
+    (sections(el)[2].querySelector('.alias-pill__remove') as HTMLButtonElement).click();
+    await el.updateComplete;
+    expect(confirmModal(el).open).toBe(true);
+    await clickModalButton(el, 'confirm-ok');
+
+    await vi.waitFor(() => expect(safeIntegration.removeReviewer).toHaveBeenCalledWith(REVIEWER_A));
+    await vi.waitFor(() => expect(notificationTexts()).toContain('Reviewer removed!'));
+    await vi.waitFor(() => expect(pillValues(sections(el)[2])).not.toContain(REVIEWER_A));
   });
 
   it('reports CAN publish when the address has permission', async () => {

@@ -5,7 +5,7 @@ test.setTimeout(180_000);
 
 /**
  * whitelist.spec.ts — verifies BEHAVIOR of the Whitelists tab: it boots into
- * its two sections (a smoke check that the tab actually mounts and renders,
+ * its three sections (a smoke check that the tab actually mounts and renders,
  * catching silent reactivity/`tabs don't switch` regressions) and that the
  * can-publish check control accepts typed input. Data comes from real RPC on
  * the publication module, so no exact values are asserted. Structural
@@ -19,10 +19,11 @@ test.describe('whitelist tab', () => {
     await openTab(page, 'whitelist-tab');
   });
 
-  test('renders the Authors and Developers sections', async ({ page }) => {
+  test('renders the Authors, Developers and Reviewers sections', async ({ page }) => {
     const tab = page.locator('s2s-app').locator('s2s-whitelist-tab');
     await expect(tab.locator('.section-title').filter({ hasText: 'Authors' })).toBeVisible();
     await expect(tab.locator('.section-title').filter({ hasText: 'Developers' })).toBeVisible();
+    await expect(tab.locator('.section-title').filter({ hasText: 'Reviewers' })).toBeVisible();
   });
 
   test('s2s-check input accepts typed text (read-only UI)', async ({ page }) => {

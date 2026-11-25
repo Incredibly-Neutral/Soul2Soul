@@ -20,12 +20,14 @@ export class S2SWhitelistTab extends LitElement {
   @state() private loading = true;
   @state() private authors: string[] = [];
   @state() private devs: string[] = [];
+  @state() private reviewers: string[] = [];
   @state() private pubCheck: {
     result: 'idle' | 'pending' | 'pass' | 'fail' | 'error';
     message: string;
   } = { result: 'idle', message: '' };
   /** The removal waiting on the confirm modal, or null when none is open. */
-  @state() private pendingRemoval: { kind: 'author' | 'dev'; address: string } | null = null;
+  @state() private pendingRemoval: { kind: 'author' | 'dev' | 'reviewer'; address: string } | null =
+    null;
 
   static styles = [
     typograhyStyles,
@@ -111,13 +113,15 @@ export class S2SWhitelistTab extends LitElement {
     this.loading = true;
 
     try {
-      [this.authors, this.devs] = await Promise.all([
+      [this.authors, this.devs, this.reviewers] = await Promise.all([
         this.safeIntegration.getWhitelistedAuthors(),
         this.safeIntegration.getWhitelistedDevs(),
+        this.safeIntegration.getReviewers(),
       ]);
 
       console.log('Authors:', this.authors);
       console.log('Devs:', this.devs);
+      console.log('Reviewers:', this.reviewers);
     } catch (error) {
       console.error('Error loading whitelists:', error);
     }
@@ -194,14 +198,52 @@ export class S2SWhitelistTab extends LitElement {
     this.pendingRemoval = { kind: 'dev', address };
   }
 
+  private async addReviewer(address: string) {
+    if (!address.trim()) {
+      this.showNotification('Address cannot be empty', 'error');
+      return;
+    }
+
+    if (!this.isValidAddress(address)) {
+      this.showNotification('Invalid Ethereum address', 'error');
+      return;
+    }
+
+    if (this.reviewers.includes(address)) {
+      this.showNotification('Reviewer already listed', 'error');
+      return;
+    }
+
+    try {
+      await this.safeIntegration.addReviewer(address);
+      this.showNotification('Reviewer added! Transaction pending approval.', 'success');
+
+      // Optimistically update
+      this.reviewers = [...this.reviewers, address];
+    } catch (error) {
+      console.error('Error adding reviewer:', error);
+      this.showNotification('Failed to add reviewer. Please try again.', 'error');
+    }
+  }
+
+  private removeReviewer(address: string) {
+    this.pendingRemoval = { kind: 'reviewer', address };
+  }
+
   private get confirmHeadline(): string {
-    return this.pendingRemoval?.kind === 'dev' ? 'Remove developer?' : 'Remove author?';
+    if (this.pendingRemoval?.kind === 'dev') return 'Remove developer?';
+    if (this.pendingRemoval?.kind === 'reviewer') return 'Remove reviewer?';
+    return 'Remove author?';
   }
 
   private get confirmMessage(): string {
     const pending = this.pendingRemoval;
     if (!pending) return '';
-    return `${pending.address} loses permission to publish to this publication. It creates a Safe proposal you must execute.`;
+    const loss =
+      pending.kind === 'reviewer'
+        ? 'loses reviewer access to this publication'
+        : 'loses permission to publish to this publication';
+    return `${pending.address} ${loss}. It creates a Safe proposal you must execute.`;
   }
 
   /** The modal's confirm action: propose the removal for the pending address. */
@@ -209,22 +251,22 @@ export class S2SWhitelistTab extends LitElement {
     const pending = this.pendingRemoval;
     if (!pending) return;
     this.pendingRemoval = null;
-    const isAuthor = pending.kind === 'author';
+    const kind = pending.kind;
 
     try {
-      if (isAuthor) await this.safeIntegration.removeWhitelistedAuthor(pending.address);
-      else await this.safeIntegration.removeWhitelistedDev(pending.address);
-      this.showNotification(
-        `${isAuthor ? 'Author' : 'Dev'} removed! Transaction pending approval.`,
-        'success',
-      );
+      if (kind === 'author') await this.safeIntegration.removeWhitelistedAuthor(pending.address);
+      else if (kind === 'dev') await this.safeIntegration.removeWhitelistedDev(pending.address);
+      else await this.safeIntegration.removeReviewer(pending.address);
+      const noun = kind === 'author' ? 'Author' : kind === 'dev' ? 'Dev' : 'Reviewer';
+      this.showNotification(`${noun} removed! Transaction pending approval.`, 'success');
 
       // Optimistically update
-      if (isAuthor) this.authors = this.authors.filter((a) => a !== pending.address);
-      else this.devs = this.devs.filter((d) => d !== pending.address);
+      if (kind === 'author') this.authors = this.authors.filter((a) => a !== pending.address);
+      else if (kind === 'dev') this.devs = this.devs.filter((d) => d !== pending.address);
+      else this.reviewers = this.reviewers.filter((r) => r !== pending.address);
     } catch (error) {
-      console.error(`Error removing ${pending.kind}:`, error);
-      this.showNotification(`Failed to remove ${pending.kind}. Please try again.`, 'error');
+      console.error(`Error removing ${kind}:`, error);
+      this.showNotification(`Failed to remove ${kind}. Please try again.`, 'error');
     }
   }
 
@@ -376,6 +418,37 @@ export class S2SWhitelistTab extends LitElement {
             placeholder="Developer address (0x...)"
             buttonLabel="Add developer"
             @s2s-sliding-add=${(e: CustomEvent) => void this.addDev(e.detail.value)}
+          ></s2s-sliding-add-button>
+        </div>
+      </div>
+
+      <!-- Reviewers -->
+      <div class="section">
+        <div class="list_header">
+          <h2 class="section-title">Reviewers (${this.reviewers.length})</h2>
+        </div>
+
+        <div class="alias-pills">
+          ${this.reviewers.map(
+            (reviewer) => html`
+              <span class="alias-pill">
+                <pet-name value=${reviewer}></pet-name>
+                <button
+                  class="alias-pill__remove"
+                  data-address="${reviewer}"
+                  aria-label="Remove ${reviewer}"
+                  title="Remove ${reviewer}"
+                  @click=${() => void this.removeReviewer(reviewer)}
+                >
+                  <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>
+                </button>
+              </span>
+            `,
+          )}
+          <s2s-sliding-add-button
+            placeholder="Reviewer address (0x...)"
+            buttonLabel="Add reviewer"
+            @s2s-sliding-add=${(e: CustomEvent) => void this.addReviewer(e.detail.value)}
           ></s2s-sliding-add-button>
         </div>
       </div>
