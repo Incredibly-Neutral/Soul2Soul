@@ -133,7 +133,8 @@ verb set.
 
 **Whitelists:** the tab lists authors and developers, and a third list of reviewers. A reviewer is
 added or removed by proposing `setReviewer(addr, true/false)`, a list separate from publish rights:
-the module's `canRead` and `canReview` read it, `canPublish` never does. No list has a client-side cap.
+the module's `canRead` and `canReview` read it, `canPublish` never does. There is no client-side cap;
+the chain caps reviewers at 20.
 
 **Preview:** each deal row and each offer row carries one render action, Preview, beside its decision
 controls, and it
