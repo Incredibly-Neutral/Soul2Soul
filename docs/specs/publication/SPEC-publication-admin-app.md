@@ -133,8 +133,9 @@ verb set.
 
 **Preview:** each deal row and each offer row carries one render action, Preview, beside its decision
 controls, and it
-opens `previewLink(cid, path)` in a new tab opened inside the click, before any await, so the popup is not
-blocked. Preview (`mode: 'preview'`) runs the render stage on Lit so a gated body decrypts through
+opens a new tab inside the click, before any await, so the popup is not blocked. The tab opens on a
+static stand-in line saying the preview is rendering, and navigates to `previewLink(cid, path)` when
+the page is ready. Preview (`mode: 'preview'`) runs the render stage on Lit so a gated body decrypts through
 `canPreview`, unsigned, with no on-chain write, and returns the real tree and CIDs. It is offered for an encrypted or unencrypted
 row, and for an offer as well as a deal: the manuscript's author, the publication's owner or a
 listed reviewer reads the manuscript before accepting. It is refused unless the pinned manifest document it renders from advertises
@@ -143,7 +144,8 @@ flag the sibling release writes beside it; a publication that has not moved its
 `manifest_version` record still reads the older document. `unsignedRender` is required in every case
 because the shared layer throws without it, and an absent flag reads as false; each missing flag disables
 the button with a title naming the pin. A successful envelope with an empty path is a failure: the tab
-closes the tab it opened and reports. When the browser blocks the popup, the row keeps an “Open
+keeps the failure text (`Preview failed: <message>`) instead of closing, and the app reports it. When the
+browser blocks the popup, the row keeps an “Open
 preview” link under the button. One preview runs per row at a time.
 
 **Sync site:** one button, two behaviours, the same `renderwithLitActions` call with the toolbar toggle choosing

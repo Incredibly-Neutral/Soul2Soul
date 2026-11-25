@@ -376,10 +376,27 @@ function controlsWith(root: ShadowRoot, action: string): HTMLButtonElement[] {
 
 /**
  * A stand-in for the tab window.open returns. `location.href` is writable and
- * readable, so navigation is observable without a real second tab.
+ * readable, so navigation is observable without a real second tab. The
+ * document records the placeholder write and puts its visible line into the
+ * body, which the failure path then replaces through textContent.
  */
 function fakeTab() {
-  return { opener: window as unknown, close: vi.fn(), location: { href: '' } };
+  const body = { textContent: '' };
+  const doc = {
+    body,
+    open: vi.fn(),
+    write: vi.fn((html: string) => {
+      const line = /<p>([\s\S]*?)<\/p>/.exec(html);
+      body.textContent = line ? line[1] : html;
+    }),
+    close: vi.fn(),
+  };
+  return {
+    opener: window as unknown,
+    close: vi.fn(),
+    location: { href: '' },
+    document: doc,
+  };
 }
 
 /** window.open spies, restored before every test so none leaks into the next. */
@@ -1692,13 +1709,17 @@ describe('s2s-deals-tab', () => {
     previewControl(root, '0xDeal1').btn!.click();
     await flushUpdates(el);
 
-    expect(tab.close).toHaveBeenCalled();
+    expect(tab.close).not.toHaveBeenCalled();
+    expect(tab.opener).toBeNull();
+    expect(tab.document.body.textContent).toBe(
+      'Preview failed: the render returned no page to open',
+    );
     expect(tab.location.href).toBe('');
     expect(notificationTexts()).toContain('Preview failed: the render returned no page to open');
     expect(root.querySelector('.preview-ready')).toBeNull();
   });
 
-  it('closes the tab and reports the real error when the render fails', async () => {
+  it('reports the real error in the tab when the render fails', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
       offers: [],
@@ -1717,11 +1738,57 @@ describe('s2s-deals-tab', () => {
     previewControl(root, '0xDeal1').btn!.click();
     await flushUpdates(el);
 
-    expect(tab.close).toHaveBeenCalled();
+    expect(tab.close).not.toHaveBeenCalled();
     // Not navigated, and the failure the action gave is the one shown.
+    expect(tab.opener).toBeNull();
+    expect(tab.document.body.textContent).toBe('Preview failed: render action exploded');
     expect(tab.location.href).toBe('');
     expect(notificationTexts()).toContain('Preview failed: render action exploded');
     expect(root.querySelector('.preview-ready')).toBeNull();
+  });
+
+  it('writes the placeholder before the render resolves, then navigates', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    let resolveRender!: (v: unknown) => void;
+    vi.mocked(renderwithLitActions).mockReturnValue(
+      new Promise((resolve) => (resolveRender = resolve)) as never,
+    );
+    seedRenderPrerequisites({ unsignedRender: true });
+
+    const tab = fakeTab();
+    stubWindowOpen(tab as unknown as Window);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    previewControl(root, '0xDeal1').btn!.click();
+    await flushUpdates(el);
+
+    // Still pending: the tab already says what it is doing, and the write is
+    // one open, one write, one close.
+    expect(tab.document.open).toHaveBeenCalledTimes(1);
+    expect(tab.document.write).toHaveBeenCalledTimes(1);
+    expect(tab.document.close).toHaveBeenCalledTimes(1);
+    expect(tab.document.open.mock.invocationCallOrder[0]).toBeLessThan(
+      tab.document.write.mock.invocationCallOrder[0],
+    );
+    expect(tab.document.write.mock.invocationCallOrder[0]).toBeLessThan(
+      tab.document.close.mock.invocationCallOrder[0],
+    );
+    expect(tab.document.body.textContent).toBe(
+      'Preview is rendering. This tab will open it when it is ready.',
+    );
+    expect(tab.location.href).toBe('');
+
+    resolveRender({ ...renderResult('bafyNew'), path: '/posts/hello' });
+    await flushUpdates(el);
+
+    expect(tab.location.href).toBe('https://bafyNew.preview.transport-union.dev/posts/hello');
   });
 
   it('leaves an Open preview link when the popup is blocked', async () => {
