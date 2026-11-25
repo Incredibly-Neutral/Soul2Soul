@@ -467,18 +467,23 @@ export const renderwithLitActions = async (
   if (notice) notice.setMessage('merging EVM update ...');
   else console.log('preparing evm update...');
 
-  // One update session writes every page it is given, and each page costs five
-  // IPFS requests (read the page already there, cat the new one, hasAgreement,
-  // remove, copy) plus one directory listing per destination directory, which
-  // averages ~5.3, on top of a fixed ~22: 13-15 in the prologue (manifest, owner
-  // and modules, canPublish, config, previous contenthash, aliases, root copy)
-  // and 9 in the tail (assets stat/rm/cp, two txt listings, root stat, pin/add,
-  // evm write, cleanup). Three pages is therefore ~40 requests, leaving room
-  // in the 50-request session for mirrored root txt files (2 requests each) and
-  // alias clears. Six pages is ~54 and dies on the cap, not on a page. A bulk
-  // render therefore splits its pages into batches and runs the update once per
-  // batch, sequentially: each call writes a contenthash at its end and the next
-  // one copies that tree forward.
+  // One update session writes every page it is given, and each page costs six
+  // IPFS requests: read the page already there, cat the new one, hasAgreement,
+  // remove, copy, and one `files/ls`. The listing is per page, not per
+  // collection: the path handed to it is the page file (`/index.html` inside
+  // the page's own directory), so two pages under `/posts` still list twice.
+  //
+  // On top of that the call spends a fixed 25 to 30: 13-15 in the prologue
+  // (manifest, owner and modules, canPublish, config, previous contenthash,
+  // aliases, root copy) and 12-15 in the tail (assets stat/rm/cp, two txt
+  // listings, root stat, pin/add, cleanup, and the on-chain write's nonce, gas
+  // estimate, send and receipt polling). Three pages comes to 43-48 and fits
+  // the 50-request session only just: every mirrored root txt file adds two
+  // requests and every stale one adds one, so a site with several can still
+  // overrun. Four pages is 49-54 and six is 61-66, both over the cap, not over
+  // a page. A bulk render therefore splits its pages into batches and runs the
+  // update once per batch, sequentially: each call writes a contenthash at its
+  // end and the next one copies that tree forward.
   const UPDATE_BATCH_SIZE = 3;
   const updateJobs = resetOnly ? [] : activeJobs;
   const batches: any[][] = [];
@@ -496,9 +501,21 @@ export const renderwithLitActions = async (
   // jobs of the same call — otherwise the update skips it and the old page stays
   // live. Send each removal with the batch carrying its replacement; a revoke
   // (no replacement) goes with the last batch.
+  //
+  // A removal whose replacement is in NO batch (prep named a genesis this render
+  // did not produce) must still be sent, or it vanishes with no trace at all.
+  // It rides the last batch, where the update's own `replacedBy ... not in job
+  // set` line records the skip — the costs are zero requests and an honest
+  // trace instead of a silent drop.
+  const replacementIds = new Set<string>();
+  for (const j of updateJobs as any[]) {
+    if (j?.id) replacementIds.add(j.id);
+    if (j?.sourceId) replacementIds.add(j.sourceId);
+  }
   const removeForBatch = (batchJobs: any[], isLast: boolean) =>
     allRemove.filter((entry) => {
       if (!entry.replacedBy) return isLast;
+      if (!replacementIds.has(entry.replacedBy)) return isLast;
       return batchJobs.some((j) => j.id === entry.replacedBy || j.sourceId === entry.replacedBy);
     });
 
@@ -535,6 +552,10 @@ export const renderwithLitActions = async (
     updateTrace.push(...((lastEvmAction as any)?.trace ?? []));
     if (!validated.ok) {
       console.log(JSON.stringify(validated, null, 2));
+      // Earlier batches wrote their roots, but the tree the caller would pin is
+      // only whole once the last batch landed. Drop the partial root so a reader
+      // that takes `cid` off a failed envelope cannot pin a half-written site.
+      cid = null;
       break;
     }
     cid = (validated as any).data.cid;

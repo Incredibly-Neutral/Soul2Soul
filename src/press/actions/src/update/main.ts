@@ -324,11 +324,11 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       `[update] jobs: ${JSON.stringify(jobs.map((j: any) => ({ id: j.id?.slice(0, 12), path: j.path, html: j.html?.slice(0, 12) })))}`,
     );
 
-    // What is already at each page's destination. One `files/ls` of a parent
-    // directory answers that for every page under it and returns each entry's
-    // hash, so six pages under `/posts` cost one request instead of six
-    // `files/stat` calls — the difference between fitting the 50-request session
-    // and dying on it when a bulk render writes a whole collection.
+    // What is already at each page's destination. The destination is the page
+    // FILE (`/index.html` inside the page's own directory), so the directory
+    // listed here is the page's own: one `files/ls` per page, the same single
+    // request the `files/stat` it replaced spent. It answers with every entry's
+    // hash, which is the one thing the copy below needs before it can overwrite.
     const dirListings = new Map<string, Promise<Map<string, string>>>();
     const hashAt = async (path: string): Promise<string> => {
       const slash = path.lastIndexOf('/');

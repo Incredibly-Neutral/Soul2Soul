@@ -1030,10 +1030,10 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
 // ============================================================================
 // A bulk render's pages go to the update action in batches.
 //
-// One update session spends about five IPFS requests per page on top of ~22
-// fixed calls, so six pages in one call die on the 50-request cap. The pages
-// ride in batches of three, sequentially, and each batch writes the contenthash
-// the next one copies forward.
+// One update session spends six requests per page on top of a fixed 25-30
+// calls, so three pages comes to 43-48 and six pages in one call die on the
+// 50-request cap. The pages ride in batches of three, sequentially, and each
+// batch writes the contenthash the next one copies forward.
 // ============================================================================
 
 describe('renderwithLitActions — the update stage runs in batches', () => {
@@ -1139,6 +1139,54 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     expect(updateCalls[0].remove).toEqual([changed]);
     expect(updateCalls[1].remove).toBeUndefined();
     expect(updateCalls[2].remove).toEqual([revoked]);
+  });
+
+  it('rides a removal whose replacement is in no batch on the last batch', async () => {
+    const orphan = { path: '/posts/orphan', replacedBy: '0x' + 'de'.repeat(32) };
+    await call([orphan]);
+
+    // Dropped from every batch, the removal would vanish with no trace; sent
+    // last, the update's own `replacedBy ... not in job set` line records it.
+    expect(updateCalls).toHaveLength(3);
+    expect(updateCalls[0].remove).toBeUndefined();
+    expect(updateCalls[1].remove).toBeUndefined();
+    expect(updateCalls[2].remove).toEqual([orphan]);
+  });
+
+  it('drops the root when a later batch fails, so no caller pins a partial tree', async () => {
+    vi.mocked(runAction).mockImplementation(((_mode: string, _lit: unknown, cid: string, inputs: any) => {
+      if (cid === 'cid-prep') {
+        return Promise.resolve({ ok: true, action: 'prep', data: { jobs }, trace: [] });
+      }
+      if (cid === 'cid-render') {
+        return Promise.resolve({ ok: true, action: 'render', data: { job: inputs.job }, trace: [] });
+      }
+      if (cid === 'cid-update') {
+        updateCalls.push(inputs);
+        if (updateCalls.length === 2) {
+          return Promise.resolve({
+            ok: false,
+            action: 'evm-update',
+            error: 'batch 2 failed',
+            trace: ['batch 2 failed'],
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          action: 'evm-update',
+          data: { cid: `bafyroot${String(updateCalls.length)}` },
+          trace: [`batch ${String(updateCalls.length)}`],
+        });
+      }
+      return Promise.reject(new Error('unexpected cid ' + cid));
+    }) as any);
+
+    const res: any = await call();
+
+    expect(updateCalls).toHaveLength(2);
+    expect(res.success).toBe(false);
+    // Batch one wrote a root, but it names a tree missing every later batch.
+    expect(res.cid).toBeNull();
   });
 });
 

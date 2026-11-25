@@ -813,14 +813,19 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   `hasAgreement` through `evmRead` rather than building a provider of its own, and the
   per-page `files/stat` is now one `files/ls?long=true` per parent directory.
 - **Update batches (2026-11-25):** an update session writes every page it is given, and each
-  page costs about five IPFS requests on top of ~22 fixed calls (13-15 in the prologue reads
-  and gates, nine in the tail), so three pages come to ~40 in the 50-request session with room
-  left for mirrored root txt files and alias clears; six pages come to ~54 and die on the cap.
-  `sequence.ts` splits the pages of a bulk render into batches of three and runs the update
-  once per batch, sequentially: each call writes a contenthash and the next copies that tree
-  forward. A removal rides with the batch that carries the genesis named in its `replacedBy`
-  (the update only applies it when that genesis is among its own jobs); a revoke rides with the
-  last batch. A reset is never batched, because it starts from an empty tree.
+  page costs six IPFS requests (five for the page plus one `files/ls`, which is per page because
+  the path it lists ends in that page's `/index.html`) on top of a fixed 25-30 calls: 13-15 in
+  the prologue reads and gates, 12-15 in the tail (assets, two txt listings, root stat, pin/add,
+  cleanup, and the on-chain write's nonce, gas estimate, send and receipt polling). Three pages
+  therefore comes to 43-48 and fits the 50-request session only just, since every mirrored root
+  txt file adds two requests and every stale one adds one; four pages is 49-54 and six is 61-66,
+  both over the cap. `sequence.ts` splits the pages of a bulk render into batches of three and
+  runs the update once per batch, sequentially: each call writes a contenthash and the next
+  copies that tree forward. A removal rides with the batch that carries the genesis named in its
+  `replacedBy` (the update only applies it when that genesis is among its own jobs), and one
+  whose replacement appears in no batch rides the last batch so the update traces the skip
+  rather than dropping it; a revoke rides with the last batch. A reset is never batched, because
+  it starts from an empty tree.
 - **Hardcoded secrets (GAP-9) — action-side resolved 2026-08-07:** `libs/constants.ts` (and
   `renderer/constants.ts`) deleted; gateway + RPCs now arrive via the `endpoints` action input,
   not hardcoded. Zero secrets in `actions/src`. Remaining: orchestrator `rpcs` source unwired
