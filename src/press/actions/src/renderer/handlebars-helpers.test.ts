@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { prevNextRing, prevNextData } from './handlebars-helpers.js';
+import {
+  prevNextRing,
+  prevNextData,
+  creationTimestamp,
+  uniqueYears,
+  filterByYear,
+} from './handlebars-helpers.js';
 import { renderHTMLFromSource } from './html.ctrlr.js';
 
 // ============================================================================
@@ -242,5 +248,63 @@ describe('prevNext built-in helper (rendered through the renderer)', () => {
       { position: '1', collections: { why: [] } },
     );
     expect(html).toBe('<!DOCTYPE html><html><body></body></html>');
+  });
+});
+
+// ============================================================================
+// Date-keyed helpers: unique_years and filter_by_year.
+//
+// A published body carries creationDate as a DIGIT STRING of unix seconds
+// (toBody writes String(p.creationDate)), so `new Date(raw)` is invalid and the
+// old helpers, which read `creation_date`, saw no dates at all. These pin the
+// canonical field and the three accepted forms.
+// ============================================================================
+describe('date-keyed helpers read creationDate', () => {
+  // 2025-11-20T12:00:00Z and 2026-03-05T12:00:00Z, noon so no zone can shift the year.
+  const may2025 = '1763640000';
+  const march2026 = '1772712000';
+
+  const posts = [
+    { id: 'a', creationDate: may2025 },
+    { id: 'b', creationDate: march2026 },
+    { id: 'c' }, // no date: no year, never filtered in
+  ];
+
+  it('reads a digit string of unix seconds as a timestamp', () => {
+    expect(creationTimestamp({ creationDate: may2025 })).toBe(1763640000);
+  });
+
+  it('accepts milliseconds as a digit string and as a number', () => {
+    expect(creationTimestamp({ creationDate: '1763640000000' })).toBe(1763640000);
+    expect(creationTimestamp({ creationDate: 1763640000000 })).toBe(1763640000);
+  });
+
+  it('accepts an ISO string', () => {
+    expect(creationTimestamp({ creationDate: '2025-11-20T12:00:00.000Z' })).toBe(1763640000);
+  });
+
+  it('returns null for a missing or unparseable date', () => {
+    expect(creationTimestamp({})).toBeNull();
+    expect(creationTimestamp({ creationDate: '' })).toBeNull();
+    expect(creationTimestamp({ creationDate: 'not a date' })).toBeNull();
+  });
+
+  it('unique_years returns each year once, newest first', () => {
+    expect(uniqueYears(posts)).toEqual(['2026', '2025']);
+  });
+
+  it('filter_by_year selects the year and orders newest first', () => {
+    const sameYear = [
+      { id: 'old', creationDate: '2025-01-02T12:00:00.000Z' },
+      { id: 'new', creationDate: '2025-06-02T12:00:00.000Z' },
+      { id: 'other', creationDate: march2026 },
+    ];
+    expect(filterByYear('2025', sameYear).map((p) => p.id)).toEqual(['new', 'old']);
+    expect(filterByYear(2025, sameYear).map((p) => p.id)).toEqual(['new', 'old']);
+    expect(filterByYear('2024', sameYear)).toEqual([]);
+  });
+
+  it('still reads the retired creation_date name as a fallback', () => {
+    expect(uniqueYears([{ id: 'legacy', creation_date: may2025 }])).toEqual(['2025']);
   });
 });
