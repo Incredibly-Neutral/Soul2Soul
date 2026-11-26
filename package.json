@@ -1,7 +1,7 @@
 {
   "name": "@s2s/monorepo",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "packageManager": "pnpm@10.11.1",
   "scripts": {
     "deploy:safe-app": "pnpm -C src/publication/safe-app run deploy",
