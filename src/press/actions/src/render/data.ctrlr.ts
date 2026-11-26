@@ -454,8 +454,9 @@ const passesPublicFilters = (item: any, collection: any): boolean => {
  *
  *   'position'      -> by Number(position), ascending unless sortDirection is 'desc'
  *   'creationDate'  -> by creationDate as a unix timestamp (numeric seconds or
- *                     milliseconds, per the published body) or a date string
- *                     parsed with Date.parse, same direction rule
+ *                     milliseconds, or that same value as a digit string, which
+ *                     is what a published body carries) or a date string parsed
+ *                     with Date.parse, same direction rule
  *   'modifiedDate'  -> by modifiedDate the same way, same direction rule
  *   'title'         -> alphabetically by String(title), same direction rule
  *   absent/other    -> DEFAULT: alphabetical by String(title), same direction rule
@@ -490,18 +491,22 @@ export const sortCollection = (items: any[], collection: any): any[] => {
     if (sortBy === 'creationDate' || sortBy === 'modifiedDate') {
       const raw = item?.[sortBy];
       if (missing(raw)) return undefined;
-      // Published bodies carry a unix timestamp in seconds (see
-      // S2SPublicContent.creationDate: number). Treat numbers as timestamps:
-      // anything below 1e12 is seconds, larger values are already milliseconds.
-      // Strings keep the Date.parse path.
+      // A published body carries the signed instant as a STRING of unix
+      // seconds: toBody() writes String(p.creationDate), so the flat body has
+      // "1764000000", not 1764000000 and not an ISO date. Date.parse returns
+      // NaN for that, which puts every item in the missing group and leaves the
+      // injected order in place — newest last, whatever the direction says.
+      // Digits are a timestamp, not a date string. Below 1e12 is seconds, larger
+      // values are already milliseconds; anything else keeps the Date.parse path.
+      const asTimestamp = (n: number) =>
+        Number.isFinite(n) ? (n < 1e12 ? n * 1000 : n) : NaN;
+      const text = String(raw).trim();
       const t =
         typeof raw === 'number'
-          ? Number.isFinite(raw)
-            ? raw < 1e12
-              ? raw * 1000
-              : raw
-            : NaN
-          : Date.parse(String(raw));
+          ? asTimestamp(raw)
+          : /^\d+$/.test(text)
+            ? asTimestamp(Number(text))
+            : Date.parse(text);
       return Number.isNaN(t) ? undefined : t;
     }
     // 'title' or absent -> default alphabetical by title
