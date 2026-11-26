@@ -27,6 +27,7 @@ const m = vi.hoisted(() => {
     let records: Record<string, { key: string; value: string; type: string }> | null = null;
     let protocolInfo: unknown = undefined;
     let safeInfo: unknown = undefined;
+    let root: string | null = null;
     const dealSubs = new Set<() => void>();
     const notifyDeals = () => dealSubs.forEach((fn) => fn());
     return {
@@ -36,6 +37,7 @@ const m = vi.hoisted(() => {
         records = null;
         protocolInfo = undefined;
         safeInfo = undefined;
+        root = null;
         dealSubs.clear();
       },
       subscribeToDeals(fn: () => void) {
@@ -55,6 +57,10 @@ const m = vi.hoisted(() => {
       setOffers(o: Array<Record<string, unknown>>) {
         offers = o;
         notifyDeals();
+      },
+      getRoot: () => root,
+      setRoot(r: string) {
+        root = r;
       },
       getRecord: (key: string) => records?.[key]?.value ?? null,
       setRecord(r: { key: string; value: string; type: string }) {
@@ -183,6 +189,7 @@ vi.mock('@/state/index.js', () => ({
 import '../../src/components/s2s-deals-tab';
 import '../../src/components/s2s-button';
 import { store } from '../../src/state/index';
+import { loadPendingRenders, savePendingRenders } from '../../src/state/storage';
 import { renderwithLitActions } from '@s2s/soul2soul-shared';
 
 type DealsTab = LitElement & {
@@ -413,6 +420,7 @@ describe('s2s-deals-tab', () => {
   beforeEach(() => {
     for (const spy of openSpies.splice(0)) spy.mockRestore();
     (store as unknown as { reset: () => void }).reset();
+    savePendingRenders(null);
     vi.clearAllMocks();
     document.body.replaceChildren();
   });
@@ -1486,8 +1494,8 @@ describe('s2s-deals-tab', () => {
 
     expect(root.textContent).toContain('Render site');
     expect(root.textContent).not.toContain('Bulk Render');
-    // The toggle that selects the cheap bulk render is labelled dev.
-    expect(root.querySelector('toggle-button')?.getAttribute('label')).toBe('dev');
+    // The dev control is off, so the toolbar carries no toggle at all.
+    expect(root.querySelector('toggle-button')).toBeNull();
 
     const sweep = findRowButton(root, 'button[data-action="bulkrender"]');
     expect(sweep).not.toBeNull();
@@ -1500,7 +1508,7 @@ describe('s2s-deals-tab', () => {
     expect(args[8]).toEqual(['0xDeal1', '0xShared', '0xOffer1']);
   });
 
-  it('drops encrypted ids in a dev sweep and hides the row render action', async () => {
+  it('hides the row render action in dev mode, while Render site stays a publish sweep', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [rawDeal('0xPlain', '0xAuthorDeal'), rawDeal('0xSealed', '0xAuthorDeal')],
       offers: [rawDeal('0xOfferPlain', '0xAuthorOffer')],
@@ -1534,10 +1542,149 @@ describe('s2s-deals-tab', () => {
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
 
+      // The hidden toggle no longer selects a dev sweep: the button always
+      // publishes, and a publish sweep keeps the encrypted rows.
       const args = lastRenderCall();
-      expect(args[0]).toBe('dev');
-      expect(args[8]).toEqual(['0xPlain', '0xOfferPlain']);
+      expect(args[0]).toBe('publish');
+      expect(args[8]).toEqual(['0xPlain', '0xSealed', '0xOfferPlain']);
     });
+  });
+
+  it('sets the stored root on a publish render and leaves it alone for a preview', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(true);
+    vi.mocked(renderwithLitActions)
+      .mockResolvedValueOnce(renderResult('bafyPublished'))
+      .mockResolvedValueOnce(renderResult('bafyPreview'));
+    seedRenderPrerequisites();
+    stubWindowOpen(fakeTab() as unknown as Window);
+
+    const s = store as unknown as { getRoot(): string | null };
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="accept"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+
+      rowRenderButton(root, '0xOffer1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      expect(renderwithLitActions).toHaveBeenCalledTimes(1);
+      expect(s.getRoot()).toBe('bafyPublished');
+
+      // The same row's Preview writes nothing to the live root.
+      previewControl(root, '0xOffer1').btn!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      expect(renderwithLitActions).toHaveBeenCalledTimes(2);
+      expect(lastRenderCall()[0]).toBe('preview');
+      expect(s.getRoot()).toBe('bafyPublished');
+    });
+  });
+
+  it('removes the persisted entry when a row render finishes', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(true);
+    vi.mocked(renderwithLitActions).mockResolvedValue(renderResult('bafyNew'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="accept"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      expect(loadPendingRenders()).toEqual({ '0xOffer1': true });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+      rowRenderButton(root, '0xOffer1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      expect(rowRenderButton(root, '0xOffer1')).toBeNull();
+      expect(loadPendingRenders()?.['0xOffer1']).toBeUndefined();
+    });
+  });
+
+  it('offers Publish after a teardown and rebuild from the persisted map', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      // Admitted, not yet executed: the row is waiting when it is torn down.
+      findRowButton(root, 'button[data-action="accept"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      expect(root.textContent).toContain('Waiting for signers');
+      expect(loadPendingRenders()).toEqual({ '0xOffer1': true });
+    });
+
+    // A fresh element must recover the step from localStorage, not memory.
+    const rebuilt = await mountTab();
+    const rebuiltRoot = rebuilt.shadowRoot!;
+    await vi.waitFor(() => expect(rebuiltRoot.textContent).toContain('Pending Offers (1)'));
+    await flushUpdates(rebuilt);
+
+    expect(rowRenderButton(rebuiltRoot, '0xOffer1')).not.toBeNull();
+    expect(rebuiltRoot.textContent).toContain('Publish');
+    // An admitted offer cannot be admitted a second time.
+    expect(findRowButton(rebuiltRoot, 'button[data-action="accept"]')).toBeNull();
+    expect(
+      findRowButton(rebuiltRoot, 'button[data-action="reject"][data-status="offer"]'),
+    ).not.toBeNull();
+  });
+
+  it('keeps Remove page on a refused row rebuilt before the proposal executes', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="reject"][data-status="offer"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      expect(loadPendingRenders()).toEqual({ '0xOffer1': false });
+    });
+
+    const rebuilt = await mountTab();
+    const rebuiltRoot = rebuilt.shadowRoot!;
+    await vi.waitFor(() => expect(rebuiltRoot.textContent).toContain('Pending Offers (1)'));
+    await flushUpdates(rebuilt);
+
+    expect(rowRenderButton(rebuiltRoot, '0xOffer1')).not.toBeNull();
+    expect(rebuiltRoot.textContent).toContain('Remove page');
+    expect(findRowButton(rebuiltRoot, 'button[data-action="accept"]')).toBeNull();
   });
 
   it('offers one per-row control, Preview, on deals and offers', async () => {

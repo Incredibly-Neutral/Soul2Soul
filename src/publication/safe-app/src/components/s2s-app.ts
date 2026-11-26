@@ -14,6 +14,7 @@ import './s2s-storage-tab.js';
 import './s2s-website-tree-tab.js';
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { store } from '@/state/store.js';
+import { savePendingRenders } from '@/state/storage.js';
 import { LitService } from '@s2s/soul2soul-shared';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { mainStyles } from '@/styles/main-styles.js';
@@ -1038,7 +1039,11 @@ export class S2SApp extends LitElement {
     if (branch) store.setRecord({ key: 'branch', value: branch, type: 'metadata' });
     // A brand-new publication has no content published yet — drop any root that
     // still points at a previous publication's content.
-    if (name) store.setRoot('');
+    if (name) {
+      store.setRoot('');
+      // A new publication must not inherit the old one's pending rows.
+      savePendingRenders(null);
+    }
 
     // The session was already persisted above (synchronously, with the same
     // identity), so nothing is written again here: runConfigStep re-persists

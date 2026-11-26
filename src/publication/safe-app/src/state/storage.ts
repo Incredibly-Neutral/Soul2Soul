@@ -7,6 +7,7 @@ const ROOT_STORAGE_KEY = 'root';
 const OFFERS_STORAGE_KEY = 'offers';
 const PIECES_STORAGE_KEY = 'pieces';
 const PET_NAMES_STORAGE_KEY = 'pet-names';
+const PENDING_RENDERS_STORAGE_KEY = 'pending-renders';
 
 export function loadRootFromStorage(): string | null {
   try {
@@ -121,6 +122,38 @@ export function loadPetNamesFromStorage(): PetNameMap | null {
     console.warn('Failed to load pet names from localStorage:', e);
   }
   return null;
+}
+
+/**
+ * Rows that still owe a render, as genesis -> expects (true = write the page,
+ * false = remove it). Kept across remounts so a row that was admitted or
+ * refused does not lose its Publish / Remove page control.
+ */
+export function loadPendingRenders(): Record<string, boolean> | null {
+  try {
+    const stored = localStorage.getItem(PENDING_RENDERS_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, boolean>;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load pending renders from localStorage:', e);
+  }
+  return null;
+}
+
+export function savePendingRenders(map: Record<string, boolean> | null): void {
+  try {
+    if (map === null) {
+      localStorage.removeItem(PENDING_RENDERS_STORAGE_KEY);
+    } else {
+      localStorage.setItem(PENDING_RENDERS_STORAGE_KEY, JSON.stringify(map));
+    }
+  } catch (e) {
+    console.warn('Failed to save pending renders to localStorage:', e);
+  }
 }
 
 export function savePetNamesToStorage(names: PetNameMap | null): void {

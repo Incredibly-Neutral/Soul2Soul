@@ -13,6 +13,7 @@ import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { store } from '../state/index.js';
+import { loadPendingRenders, savePendingRenders } from '../state/storage.js';
 import { Deal } from '../types/index.js';
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
@@ -273,6 +274,8 @@ export class S2SDealsTab extends LitElement {
   // written), false from a Refuse (the page is removed). It also decides the
   // only thing the tab says differently about the two: the button label.
   private rowExpects: Record<string, boolean> = {};
+  /** The persisted copy of every row that still owes a render. */
+  private pendingRenders: Record<string, boolean> = {};
   private waitingSince: Record<string, number> = {};
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -351,6 +354,7 @@ export class S2SDealsTab extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.hydratePendingRenders();
     this.unsubscriber = store.subscribeToDeals(() => this.requestUpdate());
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     // A row can be mid-wait when the element is reattached: its phase survived
@@ -443,6 +447,7 @@ export class S2SDealsTab extends LitElement {
           this.releaseRetained(row.genesis);
           this.setRowPhase(row.genesis, 'idle');
           this.forgetExpectation(row.genesis);
+          this.clearPending(row.genesis);
         }
       }
     } catch (error) {
@@ -594,9 +599,55 @@ export class S2SDealsTab extends LitElement {
   /** Record what the proposal asks for and start watching the chain for it. */
   private beginWait(genesis: string, expectsAgreement: boolean) {
     this.rowExpects = { ...this.rowExpects, [genesis]: expectsAgreement };
+    this.persistPending(genesis, expectsAgreement);
     this.waitingSince = { ...this.waitingSince, [genesis]: Date.now() };
     this.setRowPhase(genesis, 'waiting');
     this.startPoll();
+  }
+
+  /**
+   * Read the rows that still owe a render back into the phase machine before
+   * the table paints. A remounted tab must offer the same Publish / Remove
+   * page control the row had before it was torn down.
+   */
+  private hydratePendingRenders() {
+    const stored = loadPendingRenders();
+    if (stored === null) return;
+    const phases = { ...this.rowPhase };
+    const expects = { ...this.rowExpects };
+    const pending = { ...this.pendingRenders };
+    for (const [genesis, expectsAgreement] of Object.entries(stored)) {
+      pending[genesis] = expectsAgreement;
+      expects[genesis] = expectsAgreement;
+      // A reattached element keeps a live phase (waiting, rendering); only a
+      // fresh mount, or a row with nothing in flight, starts at render.
+      if (
+        phases[genesis] === undefined ||
+        phases[genesis] === 'idle' ||
+        phases[genesis] === 'done'
+      ) {
+        phases[genesis] = 'render';
+      }
+    }
+    this.pendingRenders = pending;
+    this.rowExpects = expects;
+    this.rowPhase = phases;
+    this.rowRevision += 1;
+  }
+
+  /** Record that a row owes a render, so a remount can offer it again. */
+  private persistPending(genesis: string, expectsAgreement: boolean) {
+    this.pendingRenders = { ...this.pendingRenders, [genesis]: expectsAgreement };
+    savePendingRenders(this.pendingRenders);
+  }
+
+  /** The row has no render left to owe. */
+  private clearPending(genesis: string) {
+    if (!(genesis in this.pendingRenders)) return;
+    const next = { ...this.pendingRenders };
+    delete next[genesis];
+    this.pendingRenders = next;
+    savePendingRenders(next);
   }
 
   private clearWait(genesis: string) {
@@ -709,6 +760,7 @@ export class S2SDealsTab extends LitElement {
         if (hasAgreement === expects) {
           this.clearWait(genesis);
           this.setRowPhase(genesis, 'render');
+          this.persistPending(genesis, expects);
           continue;
         }
         if (expired) {
@@ -760,7 +812,7 @@ export class S2SDealsTab extends LitElement {
       // the contenthash write that moves the root. Marking it rendered would
       // claim a page that the site does not have.
       if (!res.success) {
-        this.setRowPhase(genesis, 'render');
+        this.returnToRender(genesis);
         this.showNotification(
           `Render failed: ${res.error ?? 'the update action did not report success'}`,
           'error',
@@ -772,12 +824,12 @@ export class S2SDealsTab extends LitElement {
       if (this.rowExpects[genesis] === false) {
         const outcome = this.removalOutcome(res.trace);
         if (outcome.kind === 'failed') {
-          this.setRowPhase(genesis, 'render');
+          this.returnToRender(genesis);
           this.showNotification(`Removal failed: ${outcome.line}`, 'error');
           return;
         }
         if (outcome.kind === 'silent') {
-          this.setRowPhase(genesis, 'render');
+          this.returnToRender(genesis);
           this.showNotification(
             'Removal not confirmed: the action reported nothing about it.',
             'error',
@@ -790,7 +842,7 @@ export class S2SDealsTab extends LitElement {
           // necessarily gone, and the row keeps the removal on offer with the
           // reason beside it. It also stays retained: the chain does not list
           // it, so releasing it would drop the row that owes the removal.
-          this.setRowPhase(genesis, 'render');
+          this.returnToRender(genesis);
           this.showNotification(
             `Removal skipped: ${outcome.line.replace(/^skip remove\s+/, '')}`,
             'success',
@@ -799,12 +851,19 @@ export class S2SDealsTab extends LitElement {
         }
       }
       this.setRowPhase(genesis, 'done');
+      this.clearPending(genesis);
       this.releaseRetained(genesis);
       await this.loadDeals();
     } catch (error: any) {
-      this.setRowPhase(genesis, 'render');
+      this.returnToRender(genesis);
       this.showNotification(`Render failed: ${error.message}`, 'error');
     }
+  }
+
+  /** Put a row back on its render step, keeping the map entry it owes. */
+  private returnToRender(genesis: string) {
+    this.setRowPhase(genesis, 'render');
+    this.persistPending(genesis, this.rowExpects[genesis] ?? true);
   }
 
   // ---- per-row preview ----------------------------------------------------
@@ -1008,6 +1067,12 @@ export class S2SDealsTab extends LitElement {
         import.meta.env.VITE_KUBO_TOKEN ? `Bearer ${import.meta.env.VITE_KUBO_TOKEN}` : undefined,
       );
       this.mirrorArchiveCache((res as any)?.maintainCache);
+      // A publish render moves the site root; the header and its preview link
+      // read it from the store. A preview or dev render decides nothing about
+      // the live site, and a failed envelope wrote nothing, so neither moves it.
+      if (mode === 'publish' && res.success && res.cid) {
+        store.setRoot(res.cid);
+      }
       return res;
     } catch (error: any) {
       // The render can die after the archive was uploaded and the pointer moved
@@ -1085,8 +1150,10 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell row-actions">
           ${this.isRetained(offer.genesis)
             ? nothing
-            : html`<s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
-                @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
+            : html`${offer.genesis in this.pendingRenders
+                ? nothing
+                : html`<s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
+                    @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>`}
               <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
                 @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>`}
           ${this.renderPreviewControl(offer.genesis)}
@@ -1127,6 +1194,7 @@ export class S2SDealsTab extends LitElement {
 
     const offers = this.offerRows();
 
+    // The dev toggle is off until the dev sweep has a reason to be exposed.
     return html`
       <div class="toolbar">
         <s2s-check
@@ -1136,9 +1204,7 @@ export class S2SDealsTab extends LitElement {
           @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
         ></s2s-check>
         <s2s-button action="bulkrender" type="secondary"
-          @click=${() => this.bulkRender(this.devMode ? 'dev' : 'publish')}>Render site</s2s-button>
-        <toggle-button .bool=${this.devMode} label="dev"
-          @toggle=${(e: CustomEvent) => { this.devMode = e.detail.checked; }}></toggle-button>
+          @click=${() => this.bulkRender('publish')}>Render site</s2s-button>
       </div>
 
       ${offers.length > 0
