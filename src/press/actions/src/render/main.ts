@@ -628,12 +628,11 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             : undefined,
         };
 
-        // Provenance is the PKP signature. An unsigned run (dev or preview)
-        // has no signing key, so it skips only the key read: the colophon is
-        // still built and inserted, without a proofValue. Absent or false
-        // keeps the signing attempt; the Bun shim throws inside
-        // addAndSignMetadata and its own catch returns the unsigned page,
-        // which is the longstanding preview behavior.
+        // Provenance is the PKP signature. Only an unsigned run (dev or
+        // preview) emits the signatureless colophon: it skips the key read and
+        // inserts the colophon without a proofValue. A signed run does not
+        // degrade to that page — a failed signature on a publish throws, so the
+        // render fails rather than publishing a page with no provenance.
         html = await addAndSignMetadata(signerId, html, protocolInfo, metadata, { unsigned });
 
         if (unsigned) {
