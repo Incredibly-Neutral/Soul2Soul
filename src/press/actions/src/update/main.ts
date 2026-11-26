@@ -258,9 +258,9 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // so a rejection that surfaces first somewhere else cannot become an
     // unhandled rejection — the await still throws it.
     //
-    // mayPublish is deliberately NOT warmed: a refresh-only request never asks
-    // it, and warming it would spend canPublish's reads on a run that the
-    // per-page gate means to leave unasked.
+    // mayPublish is not warmed here: a refresh-only request never asks it, and a
+    // tree that already holds pages may be all-refresh. It starts the moment the
+    // tree is known to be fresh, where every job is an ADD (see below).
     const resetGate: Promise<boolean> | null = reset
       ? canReset(multisig, signerAddress, rpcs?.L2)
       : null;
@@ -1011,7 +1011,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         { method: 'POST' },
         TIMEOUTS.stat,
       );
-      newRootCid = (await statRes.json()).Hash;
+      newRootCid = ((await statRes.json()) as { Hash?: string }).Hash ?? '';
       trace.push(`root: ${newRootCid}`);
 
       await fetchWithTimeout(

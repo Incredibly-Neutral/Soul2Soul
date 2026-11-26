@@ -6,7 +6,9 @@
 > (see handoff `handoff-actions-extract-constants.md`) — `libs/constants.ts` + `renderer/constants.ts`
 > deleted; gateway + RPCs now arrive via the `endpoints` action input (GAP-9 action-side resolved;
 > orchestrator `rpcs` source still unwired, see handoff §6). **Tree-mutation integrity gate implemented
-> 2026-08-07** (see §A3 Decision Tree below). Sub-component paths and the Lens→module migration
+> 2026-08-07** (see §A3 Decision Tree below). **Request-budget re-audit 2026-11-26** for the
+> per-invocation read cache, the update action's single destination read and fail-closed answer, and
+> update batching. Sub-component paths and the Lens→module migration
 > are reconciled to current code where today's work touched them; the ripples/collections narrative
 > still needs a full re-confirm against `prep` (flagged inline).
 >
@@ -505,8 +507,10 @@ trusts it. If copy loop throws, remove loop never runs.
   the copy loop reads the existing HTML's JSON-LD, extracts its genesis, and calls `hasAgreement`
   on-chain. If a deal exists **and** the incoming genesis differs, the update throws. This
   prevents an author from overwriting deal-protected content with their own content. Same-genesis
-  re-renders are exempt (the page just updated, deal unaffected). A non-publishing run
-  (`!preview`: `dev`, `preview`) skips this check.
+  re-renders are exempt (the page just updated, deal unaffected). A preview (`preview: true`) skips
+  this check, because it writes nothing. The check is asked again, twice more, against the chain and
+  not the session cache: a replica that has not yet seen the revoke still answers in force, and a
+  transport error never makes a live page look removable.
 
 ### What this does NOT need
 
@@ -774,7 +778,8 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   so there is no separate factory read and nothing to reconcile. An action that gates after
   discovery pays the document read before the gate: two requests, where `main` paid the full walk.
   A read costs one request per RPC URL tried, so a second URL adds a request only where the earlier
-  one fails, and nothing is retried in-session. Most of these reads are L2 and the walk is L1. The
+  one fails. Nothing is otherwise retried in-session; the single exception is the remove check's
+  repeat of `hasAgreement` (above), which bypasses the cache by design. Most of these reads are L2 and the walk is L1. The
   isolated bounds below assume one URL per chain. `getDomainOwnerAndModules` at most 6 (2 walk, one
   `moduleAddress` per kind, one `evmGetCode` per non-zero answer); `getManifest` 2. Per action that
   is a fixed prologue, one URL per chain: prep, render, update, maintain-cache and repoint-archive
@@ -820,7 +825,9 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   23 + 18 + 5 = 46; two pages plus two withdrawals is 23 + 12 + 10 = 45. Five pages would be
   23 + 30 = 53, over the 50-request cap. The 23 assumes the root listing answers; a listing that
   fails or is discarded spends one more per root txt name, so four pages leaves three requests
-  and a site with more than three root txt names would overrun that fallback. The cap is 50 with
+  and a site with more than three root txt names would overrun that fallback. A destination whose read answers `unknown` is asked twice and
+  then stat'd (see the fail-closed bullet), which spends two of those three requests — and a run
+  stops at the first page it cannot read, so at most one page pays it. The cap is 50 with
   no slack below it, so `sequence.ts` uses three constants: four pages with no withdrawal, three
   with one, two with two. It fills one batch in job order until adding the next page would pass
   50, capped at the size the pending withdrawals allow. Six pages therefore ride as 4 + 2, and a
@@ -901,6 +908,8 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
 | stage-failure envelope (ok:false, string error, no throw)                      | `sequence.test.ts` Test 4                | ✅ (gated)            | runs only when `chainReady`; covers a no-modules publication                                                                                                                                                                                                                                                                                                                                                      |
 | stage transport per render mode + preview capability gate                     | `sequence.test.ts` (mode blocks)         | ✅                    | mocked `runAction`: runner/Lit per stage for `dev`, `preview`, `publish`; `preview`/`unsigned` input values; `preview` without `capabilities.unsignedRender` throws before any dispatch |
 | preview decrypt gate + preview revoke guard                                       | `press/actions/src/libs/decrypt.test.ts`, `render/revoke-guard.test.ts` | ✅                    | `decryptRaw` asks `canPreview` in a preview and `canRead` otherwise, and refuses on either answer; the guard asks `hasAgreement` alone on a publish, and in a preview asks `safe()` then the module's one `canRead(genesis, safe)`, keeping an offer-only genesis live when it admits or when either read fails, and revoking on a definitive false even when a separate `hasOffer` would say true. `canPreview`'s three paths and its fail-closed reads are covered in `shared/src/gates/index.test.ts` |
+| `update` gate classification (REFRESH vs ADD, remove as repair, reset via `canReset`, preview) | `press/actions/src/update/page-gate.test.ts` | ✅ | one destination read per job, reused by the gate and the refresh check; `canPublish` asked once per request, never for a removal; a removal whose `replacedBy` is in no job of the call is skipped and traced (batching rides on this rule) |
+| `update` budget + fail-closed reads | `update/requests.test.ts`, `reset.test.ts`, `root-txt.test.ts`, `revoke-retry.test.ts`, `verify.sanitize.test.ts`, `verify.chain.test.ts` | ✅ | requests counted per path (four pages fit, five do not); a preview writes no contenthash; an unreadable destination is re-asked once, then refused — never treated as free; `sanitizeRemovePath` refuses traversal and the reserved roots; a failed copy of the previous root says the tree must be rebuilt; the pointer is read once per call |
 | INV-append / `makeOffer` / `hasAgreement` on-chain gating (the trust boundary)      | —                                        | ⛔ **missing**        | no `.t.sol`, no Hardhat tests under `protocol/`. The genesis-author append gate (INV-append) is entirely untested on-chain.                                                                                                                                                                                                                                                                                       |
 | INV-8 desync (records-updated-but-group-not, and inverse)                      | —                                        | ⛔ missing            | flagged as a contract test in §Test seams; not authored                                                                                                                                                                                                                                                                                                                                                           |
 | GAP-2 canonicalization (nested-key sort → verify fail)                         | —                                        | ⛔ missing            | flagged; not authored                                                                                                                                                                                                                                                                                                                                                                                             |
