@@ -453,8 +453,10 @@ const passesPublicFilters = (item: any, collection: any): boolean => {
  * render action (which injects `allDeals[]`).
  *
  *   'position'      -> by Number(position), ascending unless sortDirection is 'desc'
- *   'creationDate'  -> by Date.parse(creationDate), same direction rule
- *   'modifiedDate'  -> by Date.parse(modifiedDate), same direction rule
+ *   'creationDate'  -> by creationDate as a unix timestamp (numeric seconds or
+ *                     milliseconds, per the published body) or a date string
+ *                     parsed with Date.parse, same direction rule
+ *   'modifiedDate'  -> by modifiedDate the same way, same direction rule
  *   'title'         -> alphabetically by String(title), same direction rule
  *   absent/other    -> DEFAULT: alphabetical by String(title), same direction rule
  *
@@ -488,7 +490,18 @@ export const sortCollection = (items: any[], collection: any): any[] => {
     if (sortBy === 'creationDate' || sortBy === 'modifiedDate') {
       const raw = item?.[sortBy];
       if (missing(raw)) return undefined;
-      const t = Date.parse(raw);
+      // Published bodies carry a unix timestamp in seconds (see
+      // S2SPublicContent.creationDate: number). Treat numbers as timestamps:
+      // anything below 1e12 is seconds, larger values are already milliseconds.
+      // Strings keep the Date.parse path.
+      const t =
+        typeof raw === 'number'
+          ? Number.isFinite(raw)
+            ? raw < 1e12
+              ? raw * 1000
+              : raw
+            : NaN
+          : Date.parse(String(raw));
       return Number.isNaN(t) ? undefined : t;
     }
     // 'title' or absent -> default alphabetical by title
