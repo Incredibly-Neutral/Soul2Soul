@@ -51,6 +51,8 @@ const mocks = vi.hoisted(() => ({
   destinations: {} as Record<string, { text?: string; status?: number; body?: string }>,
   /** Page directory (tree-relative) → `Name → Hash` for the `files/ls` of it. */
   pageHashes: {} as Record<string, Record<string, string>>,
+  /** Tree-relative file path → what `files/stat` answers: a hash, MISSING, or FAIL. */
+  statHashes: {} as Record<string, string>,
   /** The tree root, as one `files/ls` reports it. */
   rootEntries: {} as Record<string, { Type?: number; Hash?: string }>,
   /** assets/txt in the PREVIOUS tree. */
@@ -206,8 +208,22 @@ const gatewayResponse = (url: string): Response => {
   }
 
   if (url.includes('files/stat')) {
-    // The tree root (and, in these tests, everything else) is the same file.
-    return new Response(JSON.stringify({ Hash: 'QmNewRoot', Type: 'file' }), { status: 200 });
+    const rel = relOf(arg);
+    // The tree root itself → the new CID.
+    if (/^\/temp-\d+$/.test(arg)) {
+      return new Response(JSON.stringify({ Hash: 'QmNewRoot', Type: 'file' }), { status: 200 });
+    }
+    const pinned = mocks.statHashes[rel];
+    if (pinned === 'MISSING') {
+      return new Response(errorBody('file does not exist'), { status: 500 });
+    }
+    if (pinned === 'FAIL') {
+      return new Response(errorBody('stat unavailable'), { status: 500 });
+    }
+    if (pinned) {
+      return new Response(JSON.stringify({ Hash: pinned, Type: 'file' }), { status: 200 });
+    }
+    return new Response(errorBody('file does not exist'), { status: 500 });
   }
 
   if (url.includes('files/cp')) {
@@ -288,6 +304,13 @@ const rmOf = (rel: string): number[] =>
     .filter(({ u }) => u.includes('files/rm') && relOf(argsOf(u)[0] ?? '') === rel)
     .map(({ i }) => i);
 
+/** Indices of `files/stat` calls targeting `rel`. */
+const statOf = (rel: string): number[] =>
+  mocks.gatewayUrls
+    .map((u, i) => ({ u, i }))
+    .filter(({ u }) => u.includes('files/stat') && relOf(argsOf(u)[0] ?? '') === rel)
+    .map(({ i }) => i);
+
 const hasTrace = (result: any, needle: string): boolean =>
   (result.trace ?? []).some((t: unknown) => String(t).includes(needle));
 
@@ -304,6 +327,7 @@ beforeEach(() => {
   mocks.provenanceSawHtml = '';
   mocks.destinations = {};
   mocks.pageHashes = {};
+  mocks.statHashes = {};
   mocks.rootEntries = {};
   mocks.prevTxtEntries = null;
   mocks.txtEntries = null;
@@ -341,9 +365,9 @@ describe('evm-update — the destination is read once, or not at all', () => {
     expect(rmOf(DEST)).toEqual([]);
   });
 
-  it('the same bytes at the destination skip on the CID, without a copy', async () => {
+  it('the same bytes at the destination skip on the file\u2019s own stat\u2019s CID', async () => {
     mocks.destinations[DEST] = { text: mocks.sourceHtml };
-    mocks.pageHashes['/hello-world'] = { 'index.html': SOURCE_CID };
+    mocks.statHashes[DEST] = SOURCE_CID;
 
     const result: any = await main({
       ...baseInput,
@@ -352,9 +376,12 @@ describe('evm-update — the destination is read once, or not at all', () => {
     });
 
     expect(result.ok).toBe(true);
-    // Same bytes → the listing decides, and it is the only extra request.
+    // Same bytes → the stat on the FILE decides; the directory is not listed.
     expect(mocks.reads).toEqual([DEST]);
-    expect(mocks.lsDirs).toContain('/hello-world');
+    expect(statOf(DEST).length).toBe(1);
+    expect(mocks.lsDirs).not.toContain('/hello-world');
+    // An unchanged page costs exactly read + cat + stat.
+    expect(mocks.catCalls).toBe(1);
     expect(hasTrace(result, `skip (unchanged): ${FILE_PATH}`)).toBe(true);
     expect(cpTo(DEST)).toEqual([]);
     expect(rmOf(DEST)).toEqual([]);
@@ -455,10 +482,11 @@ describe('evm-update — unchanged assets and root txt cost no writes', () => {
     expect(hasTrace(result, '✓ root txt robots.txt (unchanged)')).toBe(true);
   });
 
-  it('a stale root txt name absent from the listing is skipped, not rm\u2019d', async () => {
+  it('a stale root txt name absent from the listing is still rm\u2019d', async () => {
     mocks.prevTxtEntries = [txtFile('robots.txt'), txtFile('llms.txt')];
     mocks.txtEntries = [txtFile('llms.txt')];
-    // The previous-root copy did not leave robots.txt at the root.
+    // The root listing does not carry robots.txt, but a missing name is not
+    // proof the path is gone: the stale rm runs anyway.
 
     const result: any = await main({
       ...baseInput,
@@ -467,9 +495,111 @@ describe('evm-update — unchanged assets and root txt cost no writes', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(rmOf('/robots.txt')).toEqual([]);
-    expect(hasTrace(result, 'skip stale root robots.txt: not present')).toBe(true);
+    expect(rmOf('/robots.txt').length).toBe(1);
+    expect(hasTrace(result, 'rm stale root robots.txt')).toBe(true);
     // The name that IS still in assets/txt is mirrored.
     expect(cpTo('/llms.txt').length).toBe(1);
+  });
+});
+
+describe('evm-update — the destination stat decides only when the bytes match', () => {
+  it('a failed stat after matching bytes removes then copies, and the job succeeds', async () => {
+    mocks.destinations[DEST] = { text: mocks.sourceHtml };
+    mocks.statHashes[DEST] = 'FAIL';
+
+    const result: any = await main({
+      ...baseInput,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    // The file was just read, so it is there: rm before the cp.
+    expect(rmOf(DEST).length).toBe(1);
+    expect(cpTo(DEST).length).toBe(1);
+    expect(rmOf(DEST)[0]).toBeLessThan(cpTo(DEST)[0]);
+    expect(hasTrace(result, `\u2713 ${FILE_PATH}`)).toBe(true);
+  });
+
+  it('a stat that says the file does not exist copies without an rm', async () => {
+    mocks.destinations[DEST] = { text: mocks.sourceHtml };
+    mocks.statHashes[DEST] = 'MISSING';
+
+    const result: any = await main({
+      ...baseInput,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(statOf(DEST).length).toBe(1);
+    expect(rmOf(DEST)).toEqual([]);
+    expect(cpTo(DEST).length).toBe(1);
+  });
+});
+
+describe('evm-update — preview overwrites through the same stat', () => {
+  it('a preview whose stat fails removes then copies instead of skipping the rm', async () => {
+    mocks.statHashes[DEST] = 'FAIL';
+
+    const result: any = await main({
+      ...baseInput,
+      preview: true,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(statOf(DEST).length).toBe(1);
+    expect(rmOf(DEST).length).toBe(1);
+    expect(cpTo(DEST).length).toBe(1);
+    expect(rmOf(DEST)[0]).toBeLessThan(cpTo(DEST)[0]);
+  });
+});
+
+describe('evm-update — the root listing is a positive fact only', () => {
+  it('an empty listing after a job wrote a page falls back to per-name stats and still removes assets', async () => {
+    // The stub's root listing is empty, although the job cp just wrote a page
+    // and the previous root was copied in.
+    mocks.txtEntries = [txtFile('robots.txt')];
+
+    const result: any = await main({
+      ...baseInput,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(hasTrace(result, 'root ls came back empty after writes')).toBe(true);
+    // The assets rm is unconditional, not skipped by the empty listing.
+    expect(rmOf('/assets').length).toBe(1);
+    // The txt file's presence is asked per name instead of read from the
+    // discarded listing.
+    expect(statOf('/robots.txt').length).toBe(1);
+    expect(cpTo('/robots.txt').length).toBe(1);
+  });
+});
+
+describe('evm-update — baseCid must be the published tree', () => {
+  it('aborts before any copy or write when baseCid names a different tree', async () => {
+    const result: any = await main({
+      ...baseInput,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+      ...({ baseCid: 'QmDifferent' } as any),
+    });
+
+    expect(result.ok).toBe(false);
+    // Both addresses are named, and the refusal says why.
+    expect(result.error).toContain('QmDifferent');
+    expect(result.error).toContain('QmPrevRoot');
+    expect(result.error).toContain('not what is published');
+    // Nothing was written: no cp, no mkdir, no on-chain write.
+    expect(mocks.gatewayUrls.some((u) => u.includes('files/cp'))).toBe(false);
+    expect(mocks.gatewayUrls.some((u) => u.includes('files/mkdir'))).toBe(false);
+    expect(hasTrace(result, 'cp root')).toBe(false);
+    expect(hasTrace(result, 'mkdir')).toBe(false);
+    const { evmWrite } = await import('../libs/evm');
+    expect(evmWrite).not.toHaveBeenCalled();
   });
 });

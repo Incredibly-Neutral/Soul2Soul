@@ -452,8 +452,10 @@ describe('evm-update — stale root txt cleanup', () => {
 
     expect(result.ok).toBe(true);
     expect(rmOf('/robots.txt').length).toBe(1);
-    // The surviving name is re-copied, not removed then re-added twice.
-    expect(rmOf('/llms.txt')).toEqual([]);
+    // The surviving name is removed and re-copied once (the pre-cp rm is
+    // unconditional), not added twice.
+    expect(rmOf('/llms.txt').length).toBe(1);
+    expect(rmOf('/llms.txt')[0]).toBeLessThan(cpTo('/llms.txt')[0]);
     expect(result.trace.some((t: string) => t.includes('rm stale root robots.txt'))).toBe(true);
   });
 
@@ -532,7 +534,8 @@ describe('evm-update — root txt outside the preview path', () => {
 
     expect(result.ok).toBe(true);
     expect(cpTo('/robots.txt').length).toBe(1);
-    expect(rmOf('/robots.txt')).toEqual([]); // nothing stale in a fresh tree
+    // The pre-cp rm is unconditional: removing a missing path is harmless.
+    expect(rmOf('/robots.txt').length).toBe(1);
     // The reset branch still never copies the previous root.
     expect(indicesOf('arg=/ipfs/QmPrevRoot')).toEqual([]);
     expect(result.data.cid).toBe('QmNewRoot');
@@ -540,6 +543,53 @@ describe('evm-update — root txt outside the preview path', () => {
 });
 
 describe('evm-update — root txt copy failure', () => {
+  it('a taken root txt path: one rm and one cp retry, then success', async () => {
+    mocks.txtEntries = [txtFile('robots.txt')];
+    let cpAttempts = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        mocks.gatewayUrls.push(url);
+        if (url.includes('files/cp') && argsOf(url).some((a) => relOf(a) === '/robots.txt')) {
+          cpAttempts += 1;
+          if (cpAttempts === 1) {
+            return new Response(errorBody('file already exists'), { status: 500 });
+          }
+        }
+        return gatewayResponse(url);
+      }),
+    );
+
+    const result: any = await main({ ...baseInput, signature: await makeSignature() });
+
+    expect(result.ok).toBe(true);
+    expect(cpAttempts).toBe(2);
+    const cp = cpTo('/robots.txt');
+    expect(cp.length).toBe(2);
+    // Exactly one rm between the failed cp and the retry.
+    const recoveryRms = rmOf('/robots.txt').filter((i) => i > cp[0] && i < cp[1]);
+    expect(recoveryRms.length).toBe(1);
+    expect(result.trace.some((t: string) => t.includes('✓ root txt robots.txt'))).toBe(true);
+  });
+
+  it('a second cp failure reports the ORIGINAL error', async () => {
+    mocks.txtEntries = [txtFile('robots.txt')];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        mocks.gatewayUrls.push(url);
+        if (url.includes('files/cp') && argsOf(url).some((a) => relOf(a) === '/robots.txt')) {
+          return new Response('file already exists', { status: 500 });
+        }
+        return gatewayResponse(url);
+      }),
+    );
+
+    const result: any = await main({ ...baseInput, signature: await makeSignature() });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Failed to cp root txt robots.txt');
+    expect(result.error).toContain('file already exists');
+  });
   it('throws when copying a root txt file fails (a publish never keeps a stale file)', async () => {
     mocks.txtEntries = [txtFile('robots.txt')];
     vi.stubGlobal(

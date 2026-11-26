@@ -136,6 +136,38 @@ async function lsMfsDir(gateway: string, dirPath: string): Promise<TxtEntry[] | 
 }
 
 /**
+ * What `files/stat` says about ONE MFS file. Three outcomes, because a caller
+ * must tell "the gateway says there is no such file" (write without an rm)
+ * from "the gateway could not answer" (the caller knows more than the gateway
+ * does here): a failed call is not an absent file, and a body without a Hash is
+ * not an answer either.
+ */
+type MfsStat = { state: 'hash'; hash: string } | { state: 'absent' } | { state: 'unknown' };
+
+async function statMfsFile(gateway: string, path: string): Promise<MfsStat> {
+  try {
+    const res = await fetchWithTimeout(
+      `${gateway}/api/v0/files/stat?arg=${encodeURIComponent(path)}`,
+      { method: 'POST' },
+      TIMEOUTS.stat,
+    );
+    const body = await res.text();
+    if (!res.ok) return isMissingMfsPath(body) ? { state: 'absent' } : { state: 'unknown' };
+    let data: { Hash?: unknown };
+    try {
+      data = JSON.parse(body) as { Hash?: unknown };
+    } catch {
+      return { state: 'unknown' };
+    }
+    return typeof data.Hash === 'string' && data.Hash !== ''
+      ? { state: 'hash', hash: data.Hash }
+      : { state: 'unknown' };
+  } catch {
+    return { state: 'unknown' };
+  }
+}
+
+/**
  * Why an `assets/txt` entry must never be written to — or removed from — the
  * tree root. `null` = safe.
  *
@@ -317,12 +349,44 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
     let newRootCid: string;
 
+    // The run's stated base, when the caller names one. Compared through the
+    // shared contenthash helpers, never as raw strings: the same tree spelled
+    // as a CIDv0 (Qm…) and a CIDv1 (bafy…) is the same address.
+    const statedBase = (input as unknown as { baseCid?: unknown }).baseCid;
+    const baseCid = typeof statedBase === 'string' && statedBase !== '' ? statedBase : '';
+
     // A reset forces the fresh `mkdir` branch even when a previous root exists:
     // the old (confused) tree is never copied, so every page dir AND root
     // index.html vanish; assets are still re-copied below; the root is rewritten.
     const hasPrevRoot = Boolean(prevEncoded && prevEncoded.length > 0 && !reset);
+
+    // Decode before anything is copied or written: a base mismatch is a
+    // refusal, and the refusal must land before the temp tree is built. Only
+    // the branches that read the previous tree decode it, except when a base
+    // was stated — then the record is what the base is compared with.
+    let prevCid = '';
+    if (hasPrevRoot || (baseCid && prevEncoded && prevEncoded.length > 0)) {
+      prevCid = contenthashToIPFS(prevEncoded);
+    }
+
+    if (baseCid) {
+      let sameBase = false;
+      try {
+        sameBase = prevCid !== '' && toHexString(baseCid) === toHexString(prevCid);
+      } catch {
+        sameBase = false;
+      }
+      if (!sameBase) {
+        throw (
+          `base mismatch: this run's base is ${baseCid}, but the ` +
+          `contenthash_wrapped record names ${prevCid || 'no tree'} — this run's ` +
+          `base is not what is published; re-read the publication and retry.`
+        );
+      }
+      trace.push(`base: ${baseCid} matches the published tree`);
+    }
+
     if (hasPrevRoot) {
-      const prevCid = contenthashToIPFS(prevEncoded);
       trace.push(`cp root ${prevCid} → ${mfsPath}`);
 
       // The copy is a reference copy only when the node already holds the root.
@@ -390,10 +454,6 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // A tree with no previous root (or a reset) has nothing at any destination,
     // so the destination reads below are skipped rather than answered by a call.
     const treeIsFresh = !hasPrevRoot;
-    // What the overwrite decision knows when the bytes at the destination differ
-    // from the source: a different CID follows from different bytes, so the
-    // directory listing is not needed to prove it.
-    const PRESENT_AND_DIFFERENT = '(present, bytes differ)';
     // One `files/read` answers both questions about a destination — is a page
     // there, and which identity does it claim — where the identity read plus the
     // `files/ls` (or `files/stat`) cost two. `unknown` keeps an unreadable path
@@ -416,6 +476,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     };
 
     // Copy delta jobs in parallel — blocks already on the kubo node
+    let wrotePage = false;
     trace.push(`cp ${jobs.length} files`);
     await Promise.all(
       (jobs as any[]).map(async (job) => {
@@ -503,26 +564,55 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           }
         }
 
-        // Check if dest entry already exists (from previous run's root copy)
-        // Kubo files/cp does NOT overwrite — must rm first.
+        // Decide the overwrite from the destination FILE itself.
         //
-        // Different bytes are a different CID, so the listing is only needed
-        // when the read found the same bytes (the unchanged skip still compares
-        // CIDs exactly) or could not decide (`unknown`, and the listing answers
-        // "" for an absent path just as it always did).
-        let prevHash: string;
+        // The destination read already answered whether a page is there and
+        // whether its bytes are the source's. Where it did:
+        //   * bytes differ  → a different CID follows, so rm then cp, no stat;
+        //   * bytes equal   → stat decides: the same hash skips, a different
+        //                     hash removes first, and an unanswerable stat also
+        //                     removes first — the file was just read, so it is
+        //                     there;
+        //   * absent        → cp only;
+        //   * unreadable    → the directory listing, exactly as before.
+        // A PREVIEW has no destination read, so it stats the file it would
+        // overwrite (a freshly built tree has nothing to stat).
+        let skipCopy = false;
+        let removeFirst = false;
         if (preview) {
-          prevHash = treeIsFresh ? '' : await hashAt(destPath);
+          if (!treeIsFresh) {
+            const stat = await statMfsFile(gateway!, destPath);
+            if (stat.state === 'hash') {
+              if (stat.hash === sourceCid) skipCopy = true;
+              else removeFirst = true;
+            } else if (stat.state === 'unknown') {
+              // The empty hash that skipped the rm made the cp fail on a path
+              // that is in fact occupied. Remove first instead.
+              removeFirst = true;
+            }
+          }
         } else if (pageState === 'absent') {
-          prevHash = '';
+          // Nothing there: cp only.
         } else if (pageState === 'present' && pageText !== (await sourceHtml)) {
-          prevHash = PRESENT_AND_DIFFERENT;
+          removeFirst = true;
+        } else if (pageState === 'present') {
+          const stat = await statMfsFile(gateway!, destPath);
+          if (stat.state === 'hash') {
+            if (stat.hash === sourceCid) skipCopy = true;
+            else removeFirst = true;
+          } else if (stat.state === 'unknown') {
+            removeFirst = true;
+          }
+          // absent: cp only — the gateway says the path is free.
         } else {
-          prevHash = await hashAt(destPath);
+          // The destination read could not decide: keep the listing fallback.
+          const prevHash = await hashAt(destPath);
+          if (prevHash && prevHash === sourceCid) skipCopy = true;
+          else removeFirst = Boolean(prevHash);
         }
 
-        // Fast path: skip if dest already matches source
-        if (prevHash && prevHash === sourceCid) {
+        // Fast path: the destination file already carries the source CID.
+        if (skipCopy) {
           trace.push(`skip (unchanged): ${filePath}`);
           return;
         }
@@ -544,7 +634,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         }
 
         // Remove existing entry so cp can overwrite
-        if (prevHash) {
+        if (removeFirst) {
           await fetchWithTimeout(
             `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(destPath)}`,
             { method: 'POST' },
@@ -563,6 +653,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           const text = await res.text();
           throw `Failed to cp ${job.path}: ${text}`;
         }
+        wrotePage = true;
         trace.push(`✓ ${filePath} (${sourceCid.slice(0, 9)})`);
       }),
     );
@@ -682,6 +773,16 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       trace.push(`warn: root ls failed, checking names one by one: ${String(e)}`);
     }
 
+    // An empty listing after work was written is a broken answer, not an empty
+    // tree: a previous root was copied in, or a job wrote a page, so the root
+    // holds at least that much. Discard it — every check then falls back to its
+    // own `files/stat` and an unconditional rm, which is what it would have
+    // done had the listing failed.
+    if (rootEntries && rootEntries.size === 0 && (hasPrevRoot || wrotePage)) {
+      trace.push('warn: root ls came back empty after writes, checking names one by one');
+      rootEntries = null;
+    }
+
     /** `files/stat` on a root name — the check every caller made before the listing. */
     const occupantAt = async (name: string): Promise<RootEntry | null> => {
       const res = await fetchWithTimeout(
@@ -696,28 +797,25 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // Copy assets into /assets
     const mirroredRootTxt = new Set<string>();
     if (config.assetsCid) {
-      // Same assetsCid at /assets means the same blocks: the rm + cp would
-      // rebuild the very directory node already there, so both are skipped and
-      // the previous assets/txt listing is the new one (the copy is what would
-      // have changed it).
+      // The listed node IS this assets tree (same hash = same blocks): the rm +
+      // cp would rebuild the node already there, so both are skipped and the
+      // previous assets/txt listing is the new one. The listing is used only
+      // for this positive fact — never to conclude that /assets is absent.
       const listedAssets = rootEntries?.get('assets');
       let txtEntries: TxtEntry[] | null;
-      if (hasPrevRoot && listedAssets && listedAssets.Hash === config.assetsCid) {
+      if (listedAssets && listedAssets.Hash === config.assetsCid) {
         trace.push(`✓ assets (${config.assetsCid.slice(0, 9)}) already in place`);
         txtEntries = previousTxtEntries;
       } else {
         trace.push(`cp assets ${config.assetsCid} → ${assetsDestPath}`);
 
-        // Remove existing /assets if present. The listing already knows whether
-        // it is there, except when the listing failed — then the rm is tried
-        // blind and a failure stays a warning, as it always was.
-        if (!rootEntries || listedAssets) {
-          await fetchWithTimeout(
-            `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(assetsDestPath)}&recursive=true`,
-            { method: 'POST' },
-            TIMEOUTS.rm,
-          ).catch((e) => trace.push(`warn: rm assets failed: ${String(e)}`));
-        }
+        // Unconditional: a name the listing does not carry is not evidence
+        // that /assets is absent, and removing a missing path is harmless.
+        await fetchWithTimeout(
+          `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(assetsDestPath)}&recursive=true`,
+          { method: 'POST' },
+          TIMEOUTS.rm,
+        ).catch((e) => trace.push(`warn: rm assets failed: ${String(e)}`));
         const assetsUrl =
           `${gateway}/api/v0/files/cp?` +
           `arg=/ipfs/${encodeURIComponent(config.assetsCid)}` +
@@ -753,7 +851,9 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           }
 
           const txtDestPath = `${mfsPath}/${txtName}`;
-          // The root listing answers what the `files/stat` here used to ask.
+          // The root listing answers what the `files/stat` here used to ask,
+          // but only as a POSITIVE fact. When the listing failed (or was
+          // discarded) the same question is asked per name.
           const existing = rootEntries ? rootEntries.get(txtName) : await occupantAt(txtName);
 
           // A page whose slug is this name owns a DIRECTORY here. The page
@@ -763,27 +863,25 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
             trace.push(`skip root txt ${txtName}: a page occupies this path`);
             continue;
           }
-          if (existing) {
+          if (existing && typeof entry.Hash === 'string' && existing.Hash === entry.Hash) {
             // The root entry carries the same hash as the assets/txt file, so
             // the cp would write the bytes already there — the outcome of rm +
             // cp is this tree, unchanged, so neither is issued.
-            if (typeof entry.Hash === 'string' && existing.Hash === entry.Hash) {
-              trace.push(`✓ root txt ${txtName} (unchanged)`);
-              mirroredRootTxt.add(txtName);
-              continue;
-            }
-            // Kubo files/cp does not overwrite, and the previous-root copy
-            // already put last run's /robots.txt (etc.) at the root — clear it
-            // first.
-            await fetchWithTimeout(
-              `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(txtDestPath)}`,
-              { method: 'POST' },
-              TIMEOUTS.rm,
-            ).catch((e: unknown) =>
-              trace.push(`warn: rm root txt failed ${txtName}: ${String(e)}`),
-            );
-            trace.push(`rm existing root ${txtName}`);
+            trace.push(`✓ root txt ${txtName} (unchanged)`);
+            mirroredRootTxt.add(txtName);
+            continue;
           }
+
+          // Kubo files/cp does not overwrite, and the previous-root copy may
+          // have put last run's copy here. The rm is unconditional: a name the
+          // listing does not carry is not evidence that the path is free, and
+          // removing a missing path is harmless.
+          await fetchWithTimeout(
+            `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(txtDestPath)}`,
+            { method: 'POST' },
+            TIMEOUTS.rm,
+          ).catch((e: unknown) => trace.push(`warn: rm root txt failed ${txtName}: ${String(e)}`));
+          if (existing) trace.push(`rm existing root ${txtName}`);
 
           trace.push(`cp root txt ${txtName}`);
           const txtUrl =
@@ -791,10 +889,22 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
             `arg=${encodeURIComponent(`${txtDirPath}/${txtName}`)}` +
             `&arg=${encodeURIComponent(txtDestPath)}` +
             `&parents=false&flush=false`;
-          const txtRes = await fetchWithTimeout(txtUrl, { method: 'POST' }, TIMEOUTS.cpFile);
+          const cpTxt = () => fetchWithTimeout(txtUrl, { method: 'POST' }, TIMEOUTS.cpFile);
+          let txtRes = await cpTxt();
           if (!txtRes.ok) {
-            const text = await txtRes.text();
-            throw `Failed to cp root txt ${txtName}: ${text}`;
+            // A path that was taken (a directory the listing did not show, a
+            // race) rejects the cp. Clear the path and retry once; a second
+            // failure reports the ORIGINAL error.
+            const firstError = await txtRes.text();
+            await fetchWithTimeout(
+              `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(txtDestPath)}`,
+              { method: 'POST' },
+              TIMEOUTS.rm,
+            ).catch((e: unknown) =>
+              trace.push(`warn: rm root txt failed ${txtName}: ${String(e)}`),
+            );
+            txtRes = await cpTxt();
+            if (!txtRes.ok) throw `Failed to cp root txt ${txtName}: ${firstError}`;
           }
           trace.push(`✓ root txt ${txtName}`);
           mirroredRootTxt.add(txtName);
@@ -807,17 +917,14 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // longer in assets/txt — or that has no assets at all any more — must not
     // linger. Non-recursive on purpose: where a page now owns the path it is a
     // directory, the rm fails and is traced; a page is never deleted to clear a
-    // txt file, and a failed rm is never fatal. A name the listing does not
-    // carry is already gone, so no request is spent on it.
+    // txt file, and a failed rm is never fatal. The rm is unconditional: a name
+    // the listing does not carry is not proof the path is gone, and removing a
+    // missing path is harmless.
     for (const oldName of previousRootTxtNames) {
       if (mirroredRootTxt.has(oldName)) continue;
       const reserved = rootTxtSkipReason(oldName);
       if (reserved) {
         trace.push(`skip stale root txt ${oldName}: ${reserved}`);
-        continue;
-      }
-      if (rootEntries && !rootEntries.has(oldName)) {
-        trace.push(`skip stale root ${oldName}: not present`);
         continue;
       }
       const stalePath = `${mfsPath}/${oldName}`;
