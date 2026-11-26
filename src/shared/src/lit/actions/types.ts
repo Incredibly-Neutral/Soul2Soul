@@ -101,6 +101,8 @@ export interface EvmUpdateInput {
   signature: string;
   authorSafeAddress: string;
   preview?: boolean;
+  // The CID a batch expects the published record to name before it writes.
+  baseCid?: string;
   // Reset drops the existing MFS tree (incl. home index.html), keeps assets,
   // and rewrites contenthash_wrapped. Publication-owner gated (canReset).
   reset?: boolean;

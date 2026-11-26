@@ -472,7 +472,10 @@ export const renderwithLitActions = async (
   // the source, the stat that confirms its address, the path gate, rm, cp. A withdrawal adds
   // five. The cap is 50 requests per session, with no slack below it. Four pages is
   // 23 + 24 = 47; three pages plus one withdrawal is 23 + 18 + 5 = 46; two pages plus two
-  // withdrawals is 23 + 12 + 10 = 45. Five pages would be 23 + 30 = 53, over the cap.
+  // withdrawals is 23 + 12 + 10 = 45. Five pages would be 23 + 30 = 53, over the cap. The 23
+  // assumes the root listing answers; a listing that fails or is discarded spends one more per
+  // root txt name, so four pages leaves three requests and a site with more than three root txt
+  // names would overrun that fallback.
   const RUN_FIXED_REQUESTS = 23;
   const RUN_JOB_REQUESTS = 6;
   const RUN_BUDGET_REQUESTS = 50;

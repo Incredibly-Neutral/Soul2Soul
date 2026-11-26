@@ -352,8 +352,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // The run's stated base, when the caller names one. Compared through the
     // shared contenthash helpers, never as raw strings: the same tree spelled
     // as a CIDv0 (Qm…) and a CIDv1 (bafy…) is the same address.
-    const statedBase = (input as unknown as { baseCid?: unknown }).baseCid;
-    const baseCid = typeof statedBase === 'string' && statedBase !== '' ? statedBase : '';
+    const baseCid = input.baseCid && input.baseCid !== '' ? input.baseCid : '';
 
     // A reset forces the fresh `mkdir` branch even when a previous root exists:
     // the old (confused) tree is never copied, so every page dir AND root

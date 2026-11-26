@@ -818,12 +818,17 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   six: read the destination, cat the source, the stat that confirms its address, the path gate,
   rm, cp the new one. Four pages is 23 + 24 = 47; three pages plus one withdrawal is
   23 + 18 + 5 = 46; two pages plus two withdrawals is 23 + 12 + 10 = 45. Five pages would be
-  23 + 30 = 53, over the 50-request cap. The cap is 50 with no slack below it, so `sequence.ts`
-  uses three constants: four pages with no withdrawal, three with one, two with two. It fills one
-  batch in job order until adding the next page would pass 50, capped at the size the pending
-  withdrawals allow. Six pages therefore ride as 4 + 2, and a render with one withdrawal as
-  3 + 3. Each batch runs
-  sequentially: each call writes a contenthash and the next copies that tree forward. A removal
+  23 + 30 = 53, over the 50-request cap. The 23 assumes the root listing answers; a listing that
+  fails or is discarded spends one more per root txt name, so four pages leaves three requests
+  and a site with more than three root txt names would overrun that fallback. The cap is 50 with
+  no slack below it, so `sequence.ts` uses three constants: four pages with no withdrawal, three
+  with one, two with two. It fills one batch in job order until adding the next page would pass
+  50, capped at the size the pending withdrawals allow. Six pages therefore ride as 4 + 2, and a
+  render with one withdrawal as 3 + 3. Each batch runs sequentially: each call writes a
+  contenthash and the next copies that tree forward. A later publish batch passes the previous
+  batch's root as `baseCid`; the action refuses before copying or writing when
+  `contenthash_wrapped` names a different root; preview and dev pass none, and a failed later
+  batch now reports the last landed root with `success:false` rather than dropping it. A removal
   rides with the batch that carries the genesis named in its `replacedBy` (the update only applies
   it when that genesis is among its own jobs), and one whose replacement appears in no batch rides
   the last batch so the update traces the skip rather than dropping it; a revoke rides with the
