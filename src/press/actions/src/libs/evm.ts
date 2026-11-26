@@ -1,4 +1,5 @@
 import { parseCID, encodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
+import { fetchWithTimeout } from './helpers';
 
 const NETWORK_CONFIG: Record<string, { chainId: number; name: string }> = {
     L1:           { chainId: 1,     name: "homestead" },
@@ -50,12 +51,18 @@ const READ_TIMEOUT_MS = 8000;
 //
 // So we poll getTransactionReceipt ourselves with a bounded retry-with-backoff
 // loop that treats BOTH a null receipt (still indexing) AND a transient
-// transport error as "not ready yet": sleep + exponential backoff (250ms floor
+// transport error as "not ready yet": sleep + exponential backoff (1s floor
 // growing to a ~10s ceiling, matching ethers' own scaling) up to a bounded total
 // budget before giving up. We only fail hard once that budget is exhausted — or
 // later when the mined receipt confirms status === 0 (reverted).
+//
+// The first poll waits one block (2s) before asking at all. ethers' own poll
+// starts at 0ms and backs off 0/250/750ms: on Base a transaction cannot be in a
+// block that fast, so those first polls could never see a receipt — they only
+// spent HTTP requests from the Lit session budget to be told the same null.
 // ---------------------------------------------------------------------------
-const RECEIPT_POLL_INITIAL_MS = 250;   // floor — matches ethers' own poll start
+const RECEIPT_FIRST_POLL_MS = 2000;    // wait one block before the first ask
+const RECEIPT_POLL_INITIAL_MS = 1000;  // backoff floor after a not-ready poll
 const RECEIPT_POLL_MAX_MS = 10_000;    // ceiling — in line with ethers' growth
 const RECEIPT_RETRY_BUDGET_MS = 90_000; // ~90s total budget before we give up
 
@@ -104,6 +111,9 @@ const waitForReceipt = async (provider: any, txHash: string): Promise<any> => {
     const deadline = start + RECEIPT_RETRY_BUDGET_MS;
     let delay = RECEIPT_POLL_INITIAL_MS;
 
+    // One block has to pass before a receipt can exist at all.
+    await new Promise((resolve) => setTimeout(resolve, RECEIPT_FIRST_POLL_MS));
+
     for (let attempt = 0; ; attempt++) {
         let receipt: any = null;
         try {
@@ -136,6 +146,106 @@ const waitForReceipt = async (provider: any, txHash: string): Promise<any> => {
         await new Promise((resolve) => setTimeout(resolve, delay));
         delay = Math.min(delay * 2, RECEIPT_POLL_MAX_MS);
     }
+};
+
+// ---------------------------------------------------------------------------
+// JSON-RPC batching.
+//
+// Every RPC read costs one of Lit's 50 requests per session, so independent
+// reads made in the same tick share one HTTP request. Calls are queued per RPC
+// URL list and flushed on the next tick: a queue holding more than one call is
+// sent as one JSON-RPC batch (split at RPC_BATCH_MAX), and a queue holding one
+// call rejects it with RPC_SOLO so the caller runs the original per-URL loop
+// instead — a lone call gains nothing from a batch envelope.
+//
+// Batching must never change what a caller sees on failure: a batch that is
+// refused, answers with a non-array body, or fails in transport rejects every
+// call in it, and each caller falls through to the per-URL loop, which keeps
+// the error strings and the failover order exactly as they were. A single
+// error entry inside an otherwise successful batch rejects only that call, with
+// the node's message, and marks it `rpcAnswered` so a caller can tell a node
+// that refused from a node that never answered.
+// ---------------------------------------------------------------------------
+const RPC_BATCH_MAX = 20;
+const RPC_SOLO = Symbol('rpc-solo');
+
+type RpcCall = {
+    method: string;
+    params: any[];
+    resolve: (value: any) => void;
+    reject: (reason: any) => void;
+};
+
+const rpcQueues: Map<string, RpcCall[]> = new Map();
+
+/** Queue one read; it goes out with the other calls made in the same tick. */
+export const rpcEnqueue = (urls: string[], method: string, params: any[]) =>
+    new Promise((resolve, reject) => {
+        const qkey = urls.join('\n');
+        let queue = rpcQueues.get(qkey);
+        if (!queue) {
+            queue = [];
+            rpcQueues.set(qkey, queue);
+            setTimeout(() => {
+                rpcQueues.delete(qkey);
+                if (queue!.length === 1) {
+                    queue![0].reject(RPC_SOLO);
+                    return;
+                }
+                for (let i = 0; i < queue!.length; i += RPC_BATCH_MAX) {
+                    sendRpcBatch(urls[0], queue!.slice(i, i + RPC_BATCH_MAX));
+                }
+            }, 0);
+        }
+        queue.push({ method, params, resolve, reject });
+    });
+
+/** Send `calls` as one JSON-RPC batch to `url`, settling each by its id. */
+export const sendRpcBatch = async (url: string, calls: RpcCall[]) => {
+    try {
+        const res = await fetchWithTimeout(
+            url,
+            {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(
+                    calls.map((c, id) => ({ jsonrpc: '2.0', id, method: c.method, params: c.params })),
+                ),
+            },
+            READ_TIMEOUT_MS,
+        );
+        const body: any = await res.json();
+        if (!Array.isArray(body)) throw new Error('RPC answered a batch with a non-array body');
+        const byId = new Map(body.map((entry: any) => [entry?.id, entry]));
+        calls.forEach((call, id) => {
+            const entry = byId.get(id);
+            if (entry && entry.error == null && entry.result !== undefined) call.resolve(entry.result);
+            else {
+                const err: any = new Error(entry?.error?.message ?? 'no entry in batch response');
+                err.rpcAnswered = Boolean(entry?.error);
+                call.reject(err);
+            }
+        });
+    } catch (err) {
+        for (const call of calls) call.reject(err);
+    }
+};
+
+const batchedEthCall = async (
+    urls: string[],
+    contractAddress: string,
+    abi: any,
+    method: string,
+    args: any[],
+    blockTag?: number,
+) => {
+    const iface = new ethers.utils.Interface(abi);
+    const fragment = iface.getFunction(method);
+    const data = iface.encodeFunctionData(fragment, args);
+    const tag = blockTag ? ethers.utils.hexValue(blockTag) : 'latest';
+    const raw = await rpcEnqueue(urls, 'eth_call', [{ to: contractAddress, data }, tag]);
+    const decoded = iface.decodeFunctionResult(fragment, raw);
+    return fragment.outputs.length === 1 ? decoded[0] : decoded;
 };
 
 const evmProvider = (chain: string, rpcUrl?: string) => {
@@ -172,17 +282,32 @@ export const evmWrite = async (
     if (!rpc) throw "evmWrite: rpc is required";
     const { provider, contract } = evmSetup(contractAddress, abi, chain, rpc);
 
-    const pendingNonce = await provider.getTransactionCount(pkp, "pending");
     const txData = contract.interface.encodeFunctionData(method, args);
 
-    const estimatedGas = await provider.estimateGas({
-        to: contractAddress,
-        data: txData,
-        from: pkp,
-    }).catch((err: any) => {
-        console.log("Gas estimation failed:", err.message);
-        return ethers.BigNumber.from(60000);
-    });
+    // The nonce and the gas estimate do not depend on each other: ask for both
+    // in one batch instead of two sequential requests. Each falls back to the
+    // provider call it replaced when the batch does not answer it.
+    const [nonceAnswer, gasAnswer] = await Promise.allSettled([
+        rpcEnqueue([rpc], "eth_getTransactionCount", [pkp, "pending"]),
+        rpcEnqueue([rpc], "eth_estimateGas", [{ from: pkp, to: contractAddress, data: txData }]),
+    ]);
+
+    const pendingNonce = nonceAnswer.status === "fulfilled"
+        ? ethers.BigNumber.from(nonceAnswer.value).toNumber()
+        : await provider.getTransactionCount(pkp, "pending");
+
+    const estimatedGas = gasAnswer.status === "fulfilled"
+        ? ethers.BigNumber.from(gasAnswer.value)
+        : gasAnswer.reason?.rpcAnswered
+            ? (console.log("Gas estimation failed:", gasAnswer.reason.message), ethers.BigNumber.from(60000))
+            : await provider.estimateGas({
+                to: contractAddress,
+                data: txData,
+                from: pkp,
+            }).catch((err: any) => {
+                console.log("Gas estimation failed:", err.message);
+                return ethers.BigNumber.from(60000);
+            });
 
     console.log("Estimated gas:", estimatedGas.toString());
 
@@ -250,6 +375,49 @@ export const evmWrite = async (
     }
 };
 
+const readBlockTag = (blockTag?: number) =>
+    typeof blockTag === "number" && Number.isFinite(blockTag) && blockTag > 0
+        ? { blockTag }
+        : undefined;
+
+const readThrough = async (
+    chain: string,
+    contractAddress: string,
+    abi: any,
+    method: string,
+    args: any[],
+    urls: string[],
+    overrides: { blockTag: number } | undefined,
+) => {
+    // One batch entry, shared with every other read in this tick. A lone call
+    // rejects with RPC_SOLO; a refused batch rejects too. Either way the
+    // per-URL loop below is the answer, unchanged.
+    try {
+        return await batchedEthCall(urls, contractAddress, abi, method, args, overrides?.blockTag);
+    } catch {}
+
+    const failures: string[] = [];
+    let lastError: any;
+
+    for (const url of urls) {
+        try {
+            const { contract } = evmSetup(contractAddress, abi, chain, url);
+            return overrides
+                ? await contract[method](...args, overrides)
+                : await contract[method](...args);
+        } catch (error: any) {
+            const msg = `RPC call to ${url} failed: ${error?.message || String(error)}`;
+            failures.push(msg);
+            console.log(msg);
+            lastError = error;
+        }
+    }
+
+    const aggregated = new Error(failures.join(" | "));
+    (aggregated as any).failures = failures;
+    throw aggregated;
+};
+
 /**
  * Read a view function, FAILING FAST: try each RPC URL once (failover to the
  * next URL) and, on total transport failure, throw an aggregated error so the
@@ -270,6 +438,9 @@ export const evmWrite = async (
  * are the same version. A tag of 0 is not passed — the node reads genesis
  * state for it, and block 0 is this protocol's "no block was recorded" marker,
  * not a height to read at.
+ *
+ * One batch entry in the current tick, then the per-URL loop when the batch
+ * does not answer it (see the batching block).
  */
 export const evmRead = async (
     chain: string,
@@ -285,32 +456,30 @@ export const evmRead = async (
     const key = `read|${chain}|${contractAddress}|${method}|${JSON.stringify(args)}|${
         typeof blockTag === "number" && blockTag > 0 ? blockTag : ""
     }`;
-    return cached(key, async () => {
-    const failures: string[] = [];
-    let lastError: any;
-    const overrides =
-        typeof blockTag === "number" && Number.isFinite(blockTag) && blockTag > 0
-            ? { blockTag }
-            : undefined;
+    const overrides = readBlockTag(blockTag);
+    return cached(key, () => readThrough(chain, contractAddress, abi, method, args, urls, overrides));
+};
 
-    for (const url of urls) {
-        try {
-            const { contract } = evmSetup(contractAddress, abi, chain, url);
-            return overrides
-                ? await contract[method](...args, overrides)
-                : await contract[method](...args);
-        } catch (error: any) {
-            const msg = `RPC call to ${url} failed: ${error?.message || String(error)}`;
-            failures.push(msg);
-            console.log(msg);
-            lastError = error;
-        }
-    }
-
-    const aggregated = new Error(failures.join(" | "));
-    (aggregated as any).failures = failures;
-    throw aggregated;
-    });
+/**
+ * The same read as `evmRead`, skipping this invocation's read cache.
+ *
+ * Narrow by design: a caller that has to know whether something changed on
+ * chain (the `hasAgreement` retries) cannot be answered by a value the cache
+ * remembered earlier in the same session. Every other read goes through
+ * `evmRead` and keeps sharing.
+ */
+export const readFresh = async (
+    chain: string,
+    contractAddress: string,
+    abi: any,
+    method: string,
+    args: any[],
+    rpcs?: string[],
+    blockTag?: number,
+) => {
+    const urls = rpcs || [];
+    if (urls.length === 0) throw "evmRead: rpcs array is empty or missing";
+    return readThrough(chain, contractAddress, abi, method, args, urls, readBlockTag(blockTag));
 };
 
 /**
@@ -330,6 +499,10 @@ export const evmGetCode = async (
     const urls = rpcs || [];
     if (urls.length === 0) throw "evmGetCode: rpcs array is empty or missing";
     return cached(`code|${chain}|${address}`, async () => {
+    try {
+        return ethers.utils.hexlify(await rpcEnqueue(urls, "eth_getCode", [address, "latest"]));
+    } catch {}
+
     const failures: string[] = [];
 
     for (const url of urls) {

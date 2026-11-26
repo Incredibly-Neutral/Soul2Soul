@@ -811,15 +811,28 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   execution — a fresh invocation starts empty, so nothing stale survives into the next session.
   The update action turns the same cache on at the top of `main()`; its path gate asks
   `hasAgreement` through `evmRead` rather than building a provider of its own, and the
-  per-page `files/stat` is now one `files/ls?long=true` per parent directory.
-- **Update batches (2026-11-25):** an update session writes every page it is given, and each
-  page costs about five IPFS requests on top of ~14 fixed reads, so seven pages in one call
-  overflow the 50-request session even after the read cache. `sequence.ts` splits the pages of
-  a bulk render into batches of six and runs the update once per batch, sequentially: each call
-  writes a contenthash and the next copies that tree forward. A removal rides with the batch
-  that carries the genesis named in its `replacedBy` (the update only applies it when that
-  genesis is among its own jobs); a revoke rides with the last batch. A reset is never batched,
-  because it starts from an empty tree.
+  per-page `files/stat` is now one `files/ls?long=true` of the page's own directory, since the
+  path it lists ends in that page's `/index.html`.
+- **Update batches (2026-11-25):** an update run costs 23 requests in the worst case: 17
+  measured, plus 6 for a run whose assets tree and both root txt files all change. A page adds
+  six: read the destination, cat the source, the stat that confirms its address, the path gate,
+  rm, cp the new one. Four pages is 23 + 24 = 47; three pages plus one withdrawal is
+  23 + 18 + 5 = 46; two pages plus two withdrawals is 23 + 12 + 10 = 45. Five pages would be
+  23 + 30 = 53, over the 50-request cap. The 23 assumes the root listing answers; a listing that
+  fails or is discarded spends one more per root txt name, so four pages leaves three requests
+  and a site with more than three root txt names would overrun that fallback. The cap is 50 with
+  no slack below it, so `sequence.ts` uses three constants: four pages with no withdrawal, three
+  with one, two with two. It fills one batch in job order until adding the next page would pass
+  50, capped at the size the pending withdrawals allow. Six pages therefore ride as 4 + 2, and a
+  render with one withdrawal as 3 + 3. Each batch runs sequentially: each call writes a
+  contenthash and the next copies that tree forward. A later publish batch passes the previous
+  batch's root as `baseCid`; the action refuses before copying or writing when
+  `contenthash_wrapped` names a different root; preview and dev pass none, and a failed later
+  batch now reports the last landed root with `success:false` rather than dropping it. A removal
+  rides with the batch that carries the genesis named in its `replacedBy` (the update only applies
+  it when that genesis is among its own jobs), and one whose replacement appears in no batch rides
+  the last batch so the update traces the skip rather than dropping it; a revoke rides with the
+  last batch. A reset is never batched, because it starts from an empty tree.
 - **Hardcoded secrets (GAP-9) — action-side resolved 2026-08-07:** `libs/constants.ts` (and
   `renderer/constants.ts`) deleted; gateway + RPCs now arrive via the `endpoints` action input,
   not hardcoded. Zero secrets in `actions/src`. Remaining: orchestrator `rpcs` source unwired

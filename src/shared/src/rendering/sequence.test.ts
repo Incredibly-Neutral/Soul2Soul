@@ -1030,10 +1030,16 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
 // ============================================================================
 // A bulk render's pages go to the update action in batches.
 //
-// One update session spends about five IPFS requests per page on top of ~14
-// fixed reads, so seven pages in one call die on the 50-request cap. The pages
-// ride in batches of six, sequentially, and each batch writes the contenthash
-// the next one copies forward.
+// One update run costs 23 requests in the worst case: 17 measured, plus 6 for
+// a run whose assets tree and both root txt files all change. A page adds six:
+// read the destination, cat the source, the stat that confirms its address, the
+// path gate, rm, cp. A withdrawal adds five. Four pages is 23 + 24 = 47; three
+// pages plus one withdrawal is 23 + 18 + 5 = 46; two pages plus two withdrawals
+// is 23 + 12 + 10 = 45. Five pages would be 23 + 30 = 53, over the 50-request
+// cap. So pages ride in batches of four, three while one withdrawal is pending,
+// two while two are. Each batch writes the contenthash; a later publish batch
+// names it as baseCid, so a node that is behind aborts instead of dropping an
+// earlier batch's pages.
 // ============================================================================
 
 describe('renderwithLitActions — the update stage runs in batches', () => {
@@ -1063,8 +1069,10 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
 
   let updateCalls: any[] = [];
 
-  beforeEach(() => {
-    updateCalls = [];
+  // The three stages, driven off one job list: prep answers with it, render
+  // answers with the job it was given, update records the call and writes a
+  // root named after it.
+  const mockStages = (jobList: S2SJob[]) => {
     vi.mocked(runAction).mockImplementation(((
       _mode: string,
       _lit: unknown,
@@ -1075,7 +1083,7 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
         return Promise.resolve({
           ok: true,
           action: 'prep',
-          data: { jobs, remove: undefined },
+          data: { jobs: jobList, remove: undefined },
           trace: [],
         });
       }
@@ -1093,13 +1101,18 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
       }
       return Promise.reject(new Error('unexpected cid ' + cid));
     }) as any);
+  };
+
+  beforeEach(() => {
+    updateCalls = [];
+    mockStages(jobs);
   });
 
   afterEach(() => {
     vi.mocked(runAction).mockReset();
   });
 
-  const call = (remove?: { path: string; replacedBy?: string }[]) =>
+  const call = (remove?: { path: string; replacedBy?: string }[], reset?: boolean) =>
     renderwithLitActions(
       'dev',
       {} as LitService,
@@ -1114,19 +1127,58 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
       sampleEndpoints.rpcs,
       undefined,
       remove,
+      reset,
     );
 
-  it('splits seven pages into 6 + 1 and writes the last batch\'s root', async () => {
+  it('sends four pages in a single batch', async () => {
+    mockStages(jobs.slice(0, 4));
+
+    const res: any = await call();
+
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].jobs).toHaveLength(4);
+    expect(res.success).toBe(true);
+    expect(res.cid).toBe('bafyroot1');
+  });
+
+  it('splits six pages into 4 + 2 and writes the last batch\'s root', async () => {
+    const six = jobs.slice(0, 6);
+    mockStages(six);
+
     const res: any = await call();
 
     expect(updateCalls).toHaveLength(2);
-    expect(updateCalls[0].jobs).toHaveLength(6);
-    expect(updateCalls[1].jobs).toHaveLength(1);
-    expect(updateCalls[1].jobs[0].id).toBe(jobs[6].id);
+    expect(updateCalls[0].jobs).toHaveLength(4);
+    expect(updateCalls[1].jobs).toHaveLength(2);
+    expect(updateCalls[1].jobs[0].id).toBe(six[4].id);
     expect(res.success).toBe(true);
     // The root the site resolves is the one the last batch wrote.
     expect(res.cid).toBe('bafyroot2');
     expect(res.trace).toEqual(['batch 1', 'batch 2']);
+    // A dev batch writes no contenthash, so it never carries a baseCid.
+    expect(updateCalls[1].baseCid).toBeUndefined();
+  });
+
+  it('passes the previous root as baseCid on later publish batches only', async () => {
+    const six = jobs.slice(0, 6);
+    mockStages(six);
+
+    const res: any = await renderwithLitActions(
+      'publish',
+      {} as LitService,
+      SIGNATURE,
+      'usage',
+      protocolInfo,
+      null,
+      '0x0000...0001',
+      'test.soul2soul.eth',
+      ['0xcontent-id-1'],
+      undefined,
+      sampleEndpoints.rpcs,
+    );
+
+    expect(updateCalls.map((c) => c.baseCid)).toEqual([undefined, 'bafyroot1']);
+    expect(res.cid).toBe('bafyroot2');
   });
 
   it('sends a removal with the batch that carries its replacement, and a revoke last', async () => {
@@ -1134,9 +1186,97 @@ describe('renderwithLitActions — the update stage runs in batches', () => {
     const revoked = { path: '/posts/revoked' };
     await call([changed, revoked]);
 
-    expect(updateCalls).toHaveLength(2);
+    // A withdrawal is pending, so the batches hold three pages or fewer.
+    expect(updateCalls.map((c) => c.jobs.length)).toEqual([3, 3, 1]);
     expect(updateCalls[0].remove).toEqual([changed]);
+    expect(updateCalls[2].remove).toEqual([revoked]);
+  });
+
+  it('caps a revoke batch at three pages, so six pages ride as 3 + 3', async () => {
+    const six = jobs.slice(0, 6);
+    const revoked = { path: '/posts/revoked' };
+    mockStages(six);
+
+    const res: any = await call([revoked]);
+
+    expect(updateCalls.map((c) => c.jobs.length)).toEqual([3, 3]);
+    expect(updateCalls[0].remove).toBeUndefined();
     expect(updateCalls[1].remove).toEqual([revoked]);
+    expect(res.success).toBe(true);
+  });
+
+  it('keeps a two-page render with a revoke in one call', async () => {
+    const two = jobs.slice(0, 2);
+    const revoked = { path: '/posts/revoked' };
+    mockStages(two);
+
+    // 23 + 12 + 5 = 40, well inside the budget, so no split is needed.
+    const res: any = await call([revoked]);
+
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].jobs).toHaveLength(2);
+    expect(updateCalls[0].remove).toEqual([revoked]);
+    expect(res.success).toBe(true);
+  });
+
+  it('never splits a reset, even with more pages than a batch holds', async () => {
+    const res: any = await call(undefined, true);
+
+    // A reset starts from an empty tree: a second batch would delete the pages
+    // the first one wrote.
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].jobs).toHaveLength(7);
+    expect(updateCalls[0].reset).toBe(true);
+    expect(res.success).toBe(true);
+  });
+
+  it('rides a removal whose replacement is in no batch on the last batch', async () => {
+    const orphan = { path: '/posts/orphan', replacedBy: '0x' + 'de'.repeat(32) };
+    await call([orphan]);
+
+    // Dropped from every batch, the removal would vanish with no trace; sent
+    // last, the update's own `replacedBy ... not in job set` line records it.
+    expect(updateCalls).toHaveLength(2);
+    expect(updateCalls.map((c) => c.jobs.length)).toEqual([4, 3]);
+    expect(updateCalls[0].remove).toBeUndefined();
+    expect(updateCalls[1].remove).toEqual([orphan]);
+  });
+
+  it('keeps the last landed root when a later batch fails', async () => {
+    vi.mocked(runAction).mockImplementation(((_mode: string, _lit: unknown, cid: string, inputs: any) => {
+      if (cid === 'cid-prep') {
+        return Promise.resolve({ ok: true, action: 'prep', data: { jobs }, trace: [] });
+      }
+      if (cid === 'cid-render') {
+        return Promise.resolve({ ok: true, action: 'render', data: { job: inputs.job }, trace: [] });
+      }
+      if (cid === 'cid-update') {
+        updateCalls.push(inputs);
+        if (updateCalls.length === 2) {
+          return Promise.resolve({
+            ok: false,
+            action: 'evm-update',
+            error: 'batch 2 failed',
+            trace: ['batch 2 failed'],
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          action: 'evm-update',
+          data: { cid: `bafyroot${String(updateCalls.length)}` },
+          trace: [`batch ${String(updateCalls.length)}`],
+        });
+      }
+      return Promise.reject(new Error('unexpected cid ' + cid));
+    }) as any);
+
+    const res: any = await call();
+
+    expect(updateCalls).toHaveLength(2);
+    expect(res.success).toBe(false);
+    // Batch one landed, and the domain serves its tree while batch two is
+    // missing, so the envelope names the address that did land.
+    expect(res.cid).toBe('bafyroot1');
   });
 });
 

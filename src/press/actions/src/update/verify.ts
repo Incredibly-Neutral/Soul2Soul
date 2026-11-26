@@ -11,7 +11,7 @@ import {
   PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { ADDRESS_RE } from '../libs/address';
-import { evmRead } from '../libs/evm';
+import { evmRead, readFresh } from '../libs/evm';
 import { isOutOfForce } from '../libs/gates';
 import { accountAddress } from '../../../../shared/dist/manuscript/identity/author-address';
 
@@ -110,9 +110,39 @@ export const pageIdentityOf = (schema: any): PageIdentity => {
 };
 
 /**
+ * Cat a page's HTML from IPFS. The one request that reads the source bytes, so
+ * a caller that also needs those bytes (update/main.ts verifies the page and
+ * then compares it with the destination) starts this once and hands the
+ * promise to {@link verifyProvenance} instead of paying for a second cat.
+ */
+export async function fetchPageHtml(gateway: string, htmlCid: string): Promise<string> {
+  const resp = await fetchWithTimeout(
+    `${gateway}/api/v0/cat?arg=${htmlCid}`,
+    { method: 'POST' },
+    30_000,
+  );
+  if (!resp.ok) {
+    throw `Failed to fetch HTML ${htmlCid.slice(0, 12)}… for verify: ${resp.status}`;
+  }
+  return resp.text();
+}
+
+/**
+ * The answer {@link readPageIdentity} gives, for bytes already in hand.
+ * Unparseable bytes are not a page (null), exactly as a failed read is not.
+ */
+export function identityOfText(html: string): PageIdentity | null {
+  try {
+    return pageIdentityOf(extractSchema(html));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Verify that the HTML at `htmlCid` carries a valid PKP provenance signature.
  *
- * 1. Cat the HTML from IPFS.
+ * 1. Cat the HTML from IPFS (or take the caller's cat of the same page).
  * 2. Extract JSON-LD schema, separate proof, canonicalize both, recover address.
  * 3. Verify recovered address matches expected PKP.
  * 4. Verify sha256 of HTML body matches schema claim.
@@ -126,17 +156,11 @@ export async function verifyProvenance(
   pkpEthAddress: string,
   gateway: string,
   trace?: any[],
+  prefetchedHtml?: Promise<string>,
 ): Promise<PageIdentity> {
-  // Fetch the HTML content from IPFS
-  const resp = await fetchWithTimeout(
-    `${gateway}/api/v0/cat?arg=${htmlCid}`,
-    { method: 'POST' },
-    30_000,
-  );
-  if (!resp.ok) {
-    throw `Failed to fetch HTML ${htmlCid.slice(0, 12)}… for verify: ${resp.status}`;
-  }
-  const html = await resp.text();
+  // The bytes, from the caller's cat when it started one (same request, same
+  // error text — fetchPageHtml's rejection is what the await below throws).
+  const html = await (prefetchedHtml ?? fetchPageHtml(gateway, htmlCid));
 
   const schema = extractSchema(html);
 
@@ -283,6 +307,40 @@ const HAS_AGREEMENT_ABI = ['function hasAgreement(bytes32 genesis) view returns 
 const HEX32_RE = /^0x[0-9a-fA-F]{64}$/;
 
 /**
+ * `isOutOfForce` with the read cache bypassed — the same question, the same
+ * three rules (`=== false` is out of force, a throw is in force, `genesis` is
+ * already bytes32), asked of the chain through `readFresh` instead of
+ * `evmRead`.
+ *
+ * A retry exists precisely because the answer in the cache may predate the
+ * revoke this update is carrying; `evmRead` would hand back that same answer
+ * for the rest of the session. Narrow by design: only the repeated
+ * `hasAgreement` asks go this way.
+ */
+const isOutOfForceFresh = async (
+  genesis: string,
+  publicationModule: string,
+  rpcs?: string[],
+): Promise<boolean> => {
+  try {
+    return (
+      (await readFresh(
+        'L2',
+        publicationModule,
+        HAS_AGREEMENT_ABI,
+        'hasAgreement',
+        [genesis],
+        rpcs,
+      )) === false
+    );
+  } catch {
+    // A transport error must never make a live page look removable — the gate's
+    // rule, kept here so a retry cannot turn a broken replica into a permission.
+    return false;
+  }
+};
+
+/**
  * Verify that content at an MFS path is revocable:
  *  - Extract genesis from the existing HTML at ${mfsRoot}/${cleanPath}/index.html
  *  - Convert to bytes32 (keccak256 if not already)
@@ -299,6 +357,8 @@ export async function verifyRevocable(
   cleanPath: string,
   publicationModule: string,
   rpcs: string[] | undefined,
+  attempts = 1,
+  retryDelayMs = 0,
 ): Promise<void> {
   // Tree entries are directory nodes containing index.html files
   const filePath = `${mfsRoot}/${cleanPath}/index.html`;
@@ -309,8 +369,23 @@ export async function verifyRevocable(
     ? genesis.toLowerCase()
     : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(genesis));
 
-  if (!(await isOutOfForce(bytes32Genesis, publicationModule, rpcs))) {
-    throw `Refusing to remove: genesis ${bytes32Genesis.slice(0, 12)}… is still in force`;
+  // Only the chain question is retried: the page was read once above, and a
+  // read that failed has already thrown. A replica that has not caught up with
+  // the revoke still answers `in force`, so ask again before believing it —
+  // and ask the chain, not the session's read cache, which is exactly what
+  // remembered the stale answer. The first attempt keeps the ordinary read: a
+  // cached hit there is another caller's answer to the same question, and a
+  // stale one can only cost a retry, never change the verdict.
+  for (let attempt = 0; ; attempt++) {
+    const outOfForce =
+      attempt === 0
+        ? await isOutOfForce(bytes32Genesis, publicationModule, rpcs)
+        : await isOutOfForceFresh(bytes32Genesis, publicationModule, rpcs);
+    if (outOfForce) return;
+    if (attempt >= attempts - 1) {
+      throw `Refusing to remove: genesis ${bytes32Genesis.slice(0, 12)}… is still in force`;
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
   }
 }
 
@@ -329,7 +404,7 @@ export async function readPageIdentity(
       30_000,
     );
     if (!resp.ok) return null;
-    return pageIdentityOf(extractSchema(await resp.text()));
+    return identityOfText(await resp.text());
   } catch {
     return null;
   }

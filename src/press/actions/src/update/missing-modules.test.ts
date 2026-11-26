@@ -74,6 +74,8 @@ vi.mock('./verify', () => ({
   verifyPathAvailable: vi.fn(),
   verifyRevocable: vi.fn(),
   readPageIdentity: vi.fn(),
+  fetchPageHtml: vi.fn(async () => ''),
+  identityOfText: vi.fn(() => null),
   sanitizeRemovePath: (p: string) => p,
 }));
 

@@ -119,6 +119,19 @@ export async function renderCalls(
 
 		console.log({ RES: res });
 
+		// A failed update envelope still names the root an earlier batch wrote:
+		// the domain serves that tree, but it is not the publish the caller asked
+		// for. Fail here, before any pin, before any link, so the catch reports the
+		// real cause and the archive-cache mirror still runs. Mirroring only the
+		// archive is the catch's job; the partial tree is never pinned.
+		if (res.success === false) {
+			throw new Error(
+				`render envelope reported failure: ${res.error ?? 'no error detail'}${
+					res.cid ? ` (partial root ${res.cid})` : ''
+				}`,
+			);
+		}
+
 		if (main.notice) main.notice.setMessage('5/5 Pinning ...');
 
 		if (res.cid) {

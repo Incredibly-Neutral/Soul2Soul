@@ -40,7 +40,7 @@
     "typescript",
     "vite"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@ipld/car": "^5.4.6",
     "@phosphor-icons/webcomponents": "2.1.5",
