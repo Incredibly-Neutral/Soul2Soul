@@ -910,6 +910,83 @@ describe('fetchCollections: archive drift tracking', () => {
 });
 
 // ============================================================================
+// fetchCollections: encrypted items survive private-field filters.
+//
+// A filter on title/slug/custom can only be judged after decryption. Judging it
+// on the ciphertext body drops every encrypted member (undefined !== value), so
+// the pre-decrypt filter applies ONLY the fields an encrypted item exposes, and
+// render/main.ts filters again once the plaintext exists. A plaintext item is
+// unaffected: it keeps the full filterCollection.
+// ============================================================================
+
+describe('fetchCollections: encrypted items and private-field filters', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // toBody shape for an encrypted item: public fields present, private ones
+  // (title, slug, custom) absent until decryption.
+  const encryptedBody = (overrides: Record<string, unknown> = {}) => ({
+    id: 'g-enc',
+    author: '0xAuthor',
+    locale: 'en',
+    parent: '',
+    position: '0',
+    postType: 'post',
+    creationDate: '2026-08-13',
+    modifiedDate: '2026-08-13',
+    tags: ['news'],
+    attributes: {},
+    publication: 'pub',
+    label: 'Cipher',
+    encryption: true,
+    content: 'ciphertext',
+    ...overrides,
+  });
+
+  const plaintextBody = (overrides: Record<string, unknown> = {}) => ({
+    ...encryptedBody({ encryption: false, content: 'plain' }),
+    id: 'g-plain',
+    title: 'Other Title',
+    slug: 'other',
+    custom: {},
+    ...overrides,
+  });
+
+  const runCollections = async (bodies: any[], collections: any[]) => {
+    (fetchByPublicationDetailed as any).mockResolvedValue({
+      bodies,
+      items: new Map(),
+      entries: [],
+    });
+    return fetchCollections({ collections } as any, 'module', ['rpc'], 'gateway', undefined);
+  };
+
+  it('keeps an encrypted item that cannot match a title filter before decryption', async () => {
+    const result = await runCollections([encryptedBody()], [
+      { slug: 'posts', filters: [{ title: 'Secret Title' }] },
+    ]);
+    // Dropped today (no title to compare); kept for the post-decrypt filter.
+    expect(result.collections.posts.map((i: any) => i.id)).toEqual(['g-enc']);
+  });
+
+  it('still drops an encrypted item that fails a public-field filter', async () => {
+    const result = await runCollections([encryptedBody({ postType: 'page' })], [
+      { slug: 'posts', filters: [{ postType: 'post' }] },
+    ]);
+    expect(result.collections.posts).toEqual([]);
+  });
+
+  it('filters a plaintext item exactly as before (title filter applies)', async () => {
+    const result = await runCollections(
+      [plaintextBody({ id: 'g-match', title: 'Secret Title' }), plaintextBody()],
+      [{ slug: 'posts', filters: [{ title: 'Secret Title' }] }],
+    );
+    expect(result.collections.posts.map((i: any) => i.id)).toEqual(['g-match']);
+  });
+});
+
+// ============================================================================
 // fetchCollections: archive read-path integrity (plaintextHash).
 //
 // The archive stores re-serialised items, so a stored item's cid can never be
