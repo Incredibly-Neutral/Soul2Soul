@@ -363,6 +363,12 @@ export const EvmUpdateActionInputSchema = z
     signature: z.string().min(1, 'signature is required'),
     authorSafeAddress: z.string().min(1, 'authorSafeAddress is required'),
     preview: z.boolean().optional(),
+    // The CID a batch expects the published record to name before it writes.
+    // Later batches pass the root the previous batch returned; the action
+    // aborts before copying or writing when the record names anything else, so
+    // a node that is behind cannot drop an earlier batch's pages. Publish only:
+    // a dev/preview batch writes no contenthash, so its record cannot carry one.
+    baseCid: z.string().min(1, 'baseCid must be a non-empty string').optional(),
     // A reset drops the existing MFS tree (including root index.html), keeps
     // assets, and rewrites contenthash_wrapped. See RFC-reset-tree-button.md.
     reset: z.boolean().optional(),

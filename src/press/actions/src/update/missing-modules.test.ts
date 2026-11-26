@@ -30,6 +30,7 @@ const FACTORY = '0x' + '77'.repeat(20);
 const ZERO_ADDRESS = '0x' + '00'.repeat(20);
 
 vi.mock('../libs/evm', () => ({
+  enableReadCache: vi.fn(),
   evmRead: vi.fn(
     async (chain: string, address: string, abi: unknown, method: string, args: any[]) => {
       state.reads.push({ method, args });
@@ -73,6 +74,8 @@ vi.mock('./verify', () => ({
   verifyPathAvailable: vi.fn(),
   verifyRevocable: vi.fn(),
   readPageIdentity: vi.fn(),
+  fetchPageHtml: vi.fn(async () => ''),
+  identityOfText: vi.fn(() => null),
   sanitizeRemovePath: (p: string) => p,
 }));
 

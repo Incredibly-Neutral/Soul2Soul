@@ -45,6 +45,8 @@ const state = vi.hoisted(() => {
     answers: {} as Record<string, string>,
     // 'revert' or 'transport' makes every moduleAddress read throw in that shape.
     factoryFailure: null as null | 'revert' | 'transport',
+    // A gate the moduleAddress reads wait on, so a test can hold both in flight.
+    moduleHold: null as null | Promise<void>,
     // Deployed code per address (lowercased). Absent means '0x' — no code.
     code: {} as Record<string, string>,
     // Every evmRead, every evmGetCode, and every namehash, in order.
@@ -98,6 +100,7 @@ vi.mock('./evm', () => ({
         case 'ownerOf':
           return state.owner;
         case 'moduleAddress': {
+          if (state.moduleHold) await state.moduleHold;
           if (state.factoryFailure === 'revert') {
             throw rpcFailure('execution reverted: no moduleAddress');
           }
@@ -143,6 +146,7 @@ beforeEach(() => {
   state.owner = OWNER;
   state.answers = {};
   state.factoryFailure = null;
+  state.moduleHold = null;
   state.code = {};
   state.reads = [];
   state.codeReads = [];
@@ -248,6 +252,29 @@ describe('getDomainOwnerAndModules — both kinds from the factory', () => {
     expect(codeAddresses()).toEqual([]);
     // 2 ENS reads + 2 factory reads, and nothing else.
     expect(state.reads.length).toBe(4);
+  });
+
+  it('asks the factory for both kinds before either answer returns', async () => {
+    // The two kinds are independent reads of the same factory, so both are in
+    // flight at once and share one batch. A sequential implementation would
+    // never issue the second read while the first is held.
+    nameKind(RECORDS_KIND, RECORDS);
+    nameKind(PUBLICATION_KIND, PUBLICATION);
+    hasCode(RECORDS);
+    hasCode(PUBLICATION);
+
+    let release!: () => void;
+    state.moduleHold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const pending = getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+    await vi.waitFor(() => expect(factoryReads()).toHaveLength(2));
+    release();
+
+    const result = await pending;
+    expect(result.configModule).toBe(RECORDS);
+    expect(result.publicationModule).toBe(PUBLICATION);
   });
 
   it('fails loudly when the factory does not answer — an older factory reverts', async () => {

@@ -467,28 +467,128 @@ export const renderwithLitActions = async (
   if (notice) notice.setMessage('merging EVM update ...');
   else console.log('preparing evm update...');
 
-  const evmInputs = validateEvmUpdateInput({
-    signature,
-    authorSafeAddress,
-    publication,
-    jobs: resetOnly ? [] : activeJobs,
-    preview,
-    endpoints,
-    remove: allRemove.length > 0 ? allRemove : undefined,
-    reset: reset ? true : undefined,
-  });
+  // One update run costs 23 requests in the worst case: 17 measured, plus 6 for a run whose
+  // assets tree and both root txt files all change. A page adds six: read the destination, cat
+  // the source, the stat that confirms its address, the path gate, rm, cp. A withdrawal adds
+  // five. The cap is 50 requests per session, with no slack below it. Four pages is
+  // 23 + 24 = 47; three pages plus one withdrawal is 23 + 18 + 5 = 46; two pages plus two
+  // withdrawals is 23 + 12 + 10 = 45. Five pages would be 23 + 30 = 53, over the cap. The 23
+  // assumes the root listing answers; a listing that fails or is discarded spends one more per
+  // root txt name, so four pages leaves three requests and a site with more than three root txt
+  // names would overrun that fallback.
+  const RUN_FIXED_REQUESTS = 23;
+  const RUN_JOB_REQUESTS = 6;
+  const RUN_BUDGET_REQUESTS = 50;
+  const REVOKE_REQUESTS = 5;
+  // Four pages with no withdrawal, three while one is pending, two while two are.
+  const UPDATE_BATCH_SIZE = 4;
+  const UPDATE_BATCH_SIZE_WITH_REVOKE = 3;
+  const UPDATE_BATCH_SIZE_WITH_TWO_REVOKES = 2;
 
-  const evmAction: any = await runAction(
-    mode === 'publish' ? 'lit' : 'runner',
-    lit,
-    protocolInfo.litActions.update,
-    evmInputs,
-    litUsageKey,
-    'update',
-  );
-  const validated = validateEvmUpdateOutput(evmAction);
-  if (!validated.ok) console.log(JSON.stringify(validated, null, 2));
-  if (validated.ok) cid = (validated as any).data.cid;
+  const updateJobs = resetOnly ? [] : activeJobs;
+  const pendingRevokes = allRemove.filter((entry) => !entry.replacedBy).length;
+  const batchCap =
+    pendingRevokes >= 2
+      ? UPDATE_BATCH_SIZE_WITH_TWO_REVOKES
+      : pendingRevokes === 1
+        ? UPDATE_BATCH_SIZE_WITH_REVOKE
+        : UPDATE_BATCH_SIZE;
+  const batches: any[][] = [];
+  if (reset) {
+    // A reset is never batched: it starts from an empty tree, so a second batch
+    // would delete the pages the first one wrote.
+    batches.push(updateJobs);
+  } else {
+    // Fill one batch in job order until adding the next page would pass the
+    // budget, capped at the size the pending withdrawals allow. The withdrawals
+    // ride the last batch, so their five requests are counted in every batch's
+    // cost: three pages plus one withdrawal is 23 + 18 + 5 = 46.
+    let current: any[] = [];
+    for (const job of updateJobs as any[]) {
+      const nextCount = current.length + 1;
+      const nextCost =
+        RUN_FIXED_REQUESTS +
+        nextCount * RUN_JOB_REQUESTS +
+        pendingRevokes * REVOKE_REQUESTS;
+      if (current.length > 0 && (nextCount > batchCap || nextCost > RUN_BUDGET_REQUESTS)) {
+        batches.push(current);
+        current = [];
+      }
+      current.push(job);
+    }
+    // An empty job list still needs one call: a revoke or a removal-only render
+    // has no pages to write but must reach the update action.
+    if (current.length > 0 || batches.length === 0) batches.push(current);
+  }
+
+  // A removal only lands when the genesis that replaced the page is among the
+  // jobs of the same call — otherwise the update skips it and the old page stays
+  // live. Send each removal with the batch carrying its replacement; a revoke
+  // (no replacement) goes with the last batch.
+  //
+  // A removal whose replacement is in NO batch (prep named a genesis this render
+  // did not produce) must still be sent, or it vanishes with no trace at all.
+  // It rides the last batch, where the update's own `replacedBy ... not in job
+  // set` line records the skip — the costs are zero requests and an honest
+  // trace instead of a silent drop.
+  const replacementIds = new Set<string>();
+  for (const j of updateJobs as any[]) {
+    if (j?.id) replacementIds.add(j.id);
+    if (j?.sourceId) replacementIds.add(j.sourceId);
+  }
+  const removeForBatch = (batchJobs: any[], isLast: boolean) =>
+    allRemove.filter((entry) => {
+      if (!entry.replacedBy) return isLast;
+      if (!replacementIds.has(entry.replacedBy)) return isLast;
+      return batchJobs.some((j) => j.id === entry.replacedBy || j.sourceId === entry.replacedBy);
+    });
+
+  let validated: any = { ok: false, error: 'update action was not run' };
+  let lastEvmAction: any = null;
+  const updateTrace: unknown[] = [];
+  let baseCid: string | undefined;
+  for (let i = 0; i < batches.length; i++) {
+    const batchJobs = batches[i];
+    const batchRemove = removeForBatch(batchJobs, i === batches.length - 1);
+    const evmInputs = validateEvmUpdateInput({
+      signature,
+      authorSafeAddress,
+      publication,
+      jobs: resetOnly ? [] : batchJobs,
+      preview,
+      endpoints,
+      remove: batchRemove.length > 0 ? batchRemove : undefined,
+      reset: reset ? true : undefined,
+      // A later publish batch starts from the root the previous batch returned.
+      // A preview or dev batch writes no contenthash, so its record cannot name
+      // a tree and it carries no baseCid.
+      ...(mode === 'publish' && baseCid ? { baseCid } : {}),
+    });
+    if (notice && batches.length > 1) {
+      notice.setMessage(`merging EVM update ${i + 1}/${batches.length} ...`);
+    } else if (batches.length > 1) {
+      console.log(`update batch ${i + 1}/${batches.length}: ${batchJobs.length} page(s)`);
+    }
+    lastEvmAction = await runAction(
+      mode === 'publish' ? 'lit' : 'runner',
+      lit,
+      protocolInfo.litActions.update,
+      evmInputs,
+      litUsageKey,
+      'update',
+    );
+    validated = validateEvmUpdateOutput(lastEvmAction);
+    updateTrace.push(...((lastEvmAction as any)?.trace ?? []));
+    if (!validated.ok) {
+      console.log(JSON.stringify(validated, null, 2));
+      // Earlier batches landed and the domain serves the root the last of them
+      // wrote, so report that address rather than losing it. The failing batch's
+      // error travels on the envelope; the trace carries each batch's write.
+      break;
+    }
+    cid = (validated as any).data.cid;
+    baseCid = (validated as any).data.cid;
+  }
 
   // ── Parallel per-publication cache maintenance ─────────────────────────┐
   // A successful render flagged pending archive drift (data.maintainCache).
@@ -506,7 +606,7 @@ export const renderwithLitActions = async (
     // write: the trace says whether each one landed, and a caller that asked
     // for a removal needs to name what it asked for.
     remove: allRemove,
-    trace: evmAction.trace,
+    trace: updateTrace,
     // Surface the REAL failure cause so callers (e.g. the website-tree reset
     // tab) can display it instead of a generic "did not report success".
     // `validated` is the schema-checked envelope (error present when ok:false);
@@ -514,7 +614,9 @@ export const renderwithLitActions = async (
     error: validated.ok
       ? undefined
       // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-      : ((validated as any)?.error || (evmAction as any)?.error || 'update action failed'),
+      : ((validated as any)?.error ||
+        (lastEvmAction as any)?.error ||
+        'update action failed'),
     // Result of the dedicated maintain-cache action (null when not fired). Kept
     // on the envelope so callers/observers can see the cache write outcome.
     maintainCache: maintainCacheResult,
