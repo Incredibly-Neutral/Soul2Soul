@@ -235,6 +235,29 @@ describe('evm-update reset — branch selection', () => {
     expect(hasCall('files/mkdir')).toBe(true);
     expect(hasCall('arg=/ipfs/QmPrevRoot')).toBe(false);
   });
+
+  it('accepts a baseCid spelled as CIDv0 when the record holds the CIDv1 of the same tree', async () => {
+    const V0 = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+    const V1 = parseCID(V0).toV1().toString();
+    mocks.prevEncoded = '0xe30101701220' + 'ab'.repeat(32);
+    const { contenthashToIPFS } = await import('../libs/ipfs.factory');
+    vi.mocked(contenthashToIPFS).mockReturnValueOnce(V1);
+
+    const result: any = await main({
+      ...baseInput,
+      signature: await makeSignature(),
+      reset: true,
+      ...({ baseCid: V0 } as any),
+    });
+
+    // Same tree, different label: not a mismatch, so the run proceeds.
+    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(result.data.cid).toBe('QmNewRoot');
+    expect(result.trace.some((t: string) => String(t).includes('matches the published tree'))).toBe(
+      true,
+    );
+  });
 });
 
 describe('evm-update — contenthash_wrapped write failure propagation', () => {
