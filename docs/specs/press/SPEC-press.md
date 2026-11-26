@@ -135,14 +135,16 @@ absent from the public docs.
   sees attested can be re-derived by anyone from the repository. This is what makes PRESS-1's
   attestation checkable rather than trustable; it is not a protocol requirement, since a protocol
   cannot require a particular build system.
-- **A page may be built with parts missing.** Data failures are classified (config, template,
+- **A page may be built with content missing.** Data failures are classified (config, template,
   content) and only config and template failures fail the build; unavailable content items are
-  dropped from the page and reported. The protocol says nothing about partial pages — it says a page
-  carries a valid colophon, which this still satisfies.
-- **Removal, and the condition on it.** Withdrawing a manuscript renders an empty page for its path
-  and the update removes that path from the tree — but only after checking on the ledger that no
-  agreement is in force over it. Removal is not a protocol requirement; it is what GATES-4's "has
-  carried" is for.
+  dropped from the page and reported. Template failures include a missing referenced partial and a
+  render that produces nothing, so a page is never published with its header, footer or body block
+  silently absent. The protocol says nothing about partial pages — it says a page carries a valid
+  colophon, which this still satisfies.
+- **Removal, and the condition on it.** Withdrawing a manuscript returns the job with its path and
+  no html, and the update removes that path from the tree — but only after checking on the ledger
+  that no agreement is in force over it. Removal is not a protocol requirement; it is what GATES-4's
+  "has carried" is for.
 - **A path gate.** Before a page is written to a path, the incumbent page is read and the write is
   refused when the incoming page's signature does not bind the body it publishes. This exists
   because earlier pages signed a skeleton rather than the page; it is a repair, not an invariant.
