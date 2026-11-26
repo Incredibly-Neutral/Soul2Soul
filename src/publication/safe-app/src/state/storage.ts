@@ -7,6 +7,7 @@ const ROOT_STORAGE_KEY = 'root';
 const OFFERS_STORAGE_KEY = 'offers';
 const PIECES_STORAGE_KEY = 'pieces';
 const PET_NAMES_STORAGE_KEY = 'pet-names';
+const UNPUBLISHED_STORAGE_KEY = 'unpublished';
 
 export function loadRootFromStorage(): string | null {
   try {
@@ -121,6 +122,37 @@ export function loadPetNamesFromStorage(): PetNameMap | null {
     console.warn('Failed to load pet names from localStorage:', e);
   }
   return null;
+}
+
+/**
+ * Genesis ids whose page is still unpublished. Kept across remounts so an
+ * admitted offer does not lose its Publish control before the proposal runs.
+ */
+export function loadUnpublished(): string[] | null {
+  try {
+    const stored = localStorage.getItem(UNPUBLISHED_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((id): id is string => typeof id === 'string');
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load unpublished ids from localStorage:', e);
+  }
+  return null;
+}
+
+export function saveUnpublished(list: string[] | null): void {
+  try {
+    if (list === null) {
+      localStorage.removeItem(UNPUBLISHED_STORAGE_KEY);
+    } else {
+      localStorage.setItem(UNPUBLISHED_STORAGE_KEY, JSON.stringify(list));
+    }
+  } catch (e) {
+    console.warn('Failed to save unpublished ids to localStorage:', e);
+  }
 }
 
 export function savePetNamesToStorage(names: PetNameMap | null): void {
