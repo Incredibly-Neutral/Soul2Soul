@@ -69,7 +69,10 @@ Four things about this file decide how a publication behaves:
    match `filters`, sort by `sortBy`, inject under `slug` so a template can iterate
    `{{#each chapters}}`. Direction is part of this mapping contract: `sortDirection` is optional
    (`"asc"` | `"desc"`), and absent means ascending, so a date-ordered collection that wants newest
-   first must say `"desc"`.
+   first must say `"desc"`. A date sort key is read as a timestamp whether it arrives as a number or as
+   a digit string of unix seconds, which is what a published body carries (`toBody` writes
+   `String(creationDate)`); an ISO date string is the third accepted form, and anything unparseable
+   sorts last in both directions.
 4. **`templateConfig[].filters` is dead.** The type has it, mappings write it, and nothing reads it —
    `grep` finds only `collection.filters` and `ripple.filters`. A mapping may carry it and it will never
    do anything.
