@@ -1,6 +1,7 @@
 {
   "name": "@s2s/soul2soul-shared",
   "version": "0.1.4",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

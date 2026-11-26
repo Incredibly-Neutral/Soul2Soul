@@ -1,6 +1,7 @@
 {
   "name": "ccip-read-gateway",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "CCIP-Read gateway for ENS resolver",
   "main": "dist/main.js",
   "scripts": {

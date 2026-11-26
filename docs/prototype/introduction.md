@@ -38,5 +38,5 @@ With ENS, the right to change a publication's record can belong to the press's k
 
 ## Code and licence
 
-The code is a monorepo on [GitHub](https://github.com/Incredibly-Neutral/Soul2Soul) under Apache-2.0. The white paper and these texts are under CC BY 4.0. Use them, fork them, build your own take on them.
+The code is a monorepo on [GitHub](https://github.com/Incredibly-Neutral/Soul2Soul) under the MIT licence. The white paper and these texts are under CC BY 4.0. Use them, fork them, build your own take on them.
 

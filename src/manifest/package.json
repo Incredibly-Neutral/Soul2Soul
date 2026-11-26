@@ -1,6 +1,7 @@
 {
   "name": "@s2s/manifest",
   "version": "1.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "S2SManifestModule: the manifest document, its version, and every version before it",

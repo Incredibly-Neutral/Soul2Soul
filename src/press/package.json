@@ -1,6 +1,7 @@
 {
   "name": "@s2s/press",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "Smart contract protocol",
   "type": "module",
   "scripts": {
