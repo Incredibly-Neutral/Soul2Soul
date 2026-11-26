@@ -202,8 +202,8 @@ describe('createPath: {slug} substitution (unchanged)', () => {
 // sortCollection unit tests — optional per-collection `sortBy`.
 //
 // Semantics: 'position' -> ascending numeric; 'creationDate'/'modifiedDate' ->
-// ascending by Date.parse; 'title' or absent -> ascending alphabetical by
-// title. Missing/null/non-parseable fields sort LAST. Never mutates input.
+// ascending by timestamp (numeric unix seconds/milliseconds or Date.parse'd
+// string); 'title' or absent -> ascending alphabetical by title. Missing/null/non-parseable fields sort LAST. Never mutates input.
 // ============================================================================
 
 const items = [
@@ -370,6 +370,61 @@ describe('sortCollection: creationDate / modifiedDate', () => {
       'p2',
       'p3',
     ]);
+  });
+
+  // Published bodies carry unix seconds as a NUMBER, not an ISO string.
+  const seconds = [
+    { id: 's3', creationDate: 1766000000, modifiedDate: 1764000000 },
+    { id: 's1', creationDate: 1764000000, modifiedDate: 1766000000 },
+    { id: 's2', creationDate: 1765000000, modifiedDate: 1765000000 },
+  ];
+
+  it('sorts ascending by numeric second timestamps', () => {
+    expect(ids(sortCollection(seconds, { slug: 'x', sortBy: 'creationDate' }))).toEqual([
+      's1',
+      's2',
+      's3',
+    ]);
+    expect(ids(sortCollection(seconds, { slug: 'x', sortBy: 'modifiedDate' }))).toEqual([
+      's3',
+      's2',
+      's1',
+    ]);
+  });
+
+  it('sorts numeric second timestamps descending', () => {
+    expect(
+      ids(sortCollection(seconds, { slug: 'x', sortBy: 'creationDate', sortDirection: 'desc' })),
+    ).toEqual(['s3', 's2', 's1']);
+  });
+
+  it('sorts numeric and ISO-string dates together', () => {
+    const mixedDates = [
+      { id: 'iso-new', creationDate: '2025-12-18T00:00:00.000Z' },
+      { id: 'seconds-old', creationDate: 1764000000 },
+      { id: 'seconds-mid', creationDate: 1765000000 },
+    ];
+    expect(ids(sortCollection(mixedDates, { slug: 'x', sortBy: 'creationDate' }))).toEqual([
+      'seconds-old',
+      'seconds-mid',
+      'iso-new',
+    ]);
+  });
+
+  it('treats a numeric timestamp already in milliseconds as milliseconds', () => {
+    const millis = [
+      { id: 'm3', creationDate: 1766000000000 },
+      { id: 'm1', creationDate: 1764000000000 },
+      { id: 'm2', creationDate: 1765000000000 },
+    ];
+    expect(ids(sortCollection(millis, { slug: 'x', sortBy: 'creationDate' }))).toEqual([
+      'm1',
+      'm2',
+      'm3',
+    ]);
+    expect(
+      ids(sortCollection(millis, { slug: 'x', sortBy: 'creationDate', sortDirection: 'desc' })),
+    ).toEqual(['m3', 'm2', 'm1']);
   });
 });
 
