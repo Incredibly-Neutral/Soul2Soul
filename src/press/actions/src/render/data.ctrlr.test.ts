@@ -443,6 +443,68 @@ describe('sortCollection: defensive missing/null fields', () => {
 });
 
 // ============================================================================
+// sortCollection: direction — `sortDirection` is optional; absent is ascending.
+// Only the ORDER of the comparison flips, never the missing-values rule.
+// ============================================================================
+
+describe('sortCollection: direction', () => {
+  it('sorts descending by numeric position', () => {
+    expect(
+      ids(sortCollection(items, { slug: 'x', sortBy: 'position', sortDirection: 'desc' })),
+    ).toEqual(['p3', 'p2', 'p1']);
+  });
+
+  it('sorts descending by creationDate', () => {
+    expect(
+      ids(sortCollection(items, { slug: 'x', sortBy: 'creationDate', sortDirection: 'desc' })),
+    ).toEqual(['p1', 'p2', 'p3']);
+  });
+
+  it('sorts descending by modifiedDate', () => {
+    expect(
+      ids(sortCollection(items, { slug: 'x', sortBy: 'modifiedDate', sortDirection: 'desc' })),
+    ).toEqual(['p3', 'p2', 'p1']);
+  });
+
+  it('sorts descending by title', () => {
+    expect(
+      ids(sortCollection(items, { slug: 'x', sortBy: 'title', sortDirection: 'desc' })),
+    ).toEqual(['p3', 'p2', 'p1']);
+  });
+
+  it('keeps missing/null fields LAST when descending', () => {
+    const withMissing = [
+      { id: 'has1', title: 'Alpha', position: '1' },
+      { id: 'has3', title: 'Charlie', position: '3' },
+      { id: 'noPos', title: 'Bravo', position: null },
+      { id: 'emptyPos', title: 'Delta', position: '' },
+    ];
+    // Valid keys descend (has3, has1); the missing group stays at the end in
+    // stable input order.
+    expect(
+      ids(sortCollection(withMissing, { slug: 'x', sortBy: 'position', sortDirection: 'desc' })),
+    ).toEqual(['has3', 'has1', 'noPos', 'emptyPos']);
+
+    const nullTitle = [
+      { id: 'b', title: 'Beta' },
+      { id: 'none', title: null },
+      { id: 'a', title: 'Alpha' },
+    ];
+    expect(ids(sortCollection(nullTitle, { slug: 'x', sortDirection: 'desc' }))).toEqual([
+      'b',
+      'a',
+      'none',
+    ]);
+  });
+
+  it('treats anything but desc as ascending', () => {
+    expect(
+      ids(sortCollection(items, { slug: 'x', sortBy: 'position', sortDirection: 'asc' })),
+    ).toEqual(['p1', 'p2', 'p3']);
+  });
+});
+
+// ============================================================================
 // bodiesFromReconcile — the read-path reconcile wiring (pure).
 //
 // Assembles the deal-ordered body list from a reconcile() result: archive

@@ -150,6 +150,24 @@ describe('render-dev: collections', () => {
     expect((res as any).html).toContain('<ul>Apple|Mango|Zebra|</ul>');
   });
 
+  it('renders newest-first for sortBy "creationDate" with sortDirection "desc"', async () => {
+    const res = await main({
+      ...baseInput,
+      templateConfig: {
+        ...baseInput.templateConfig,
+        collections: [{ slug: 'bydate', sortBy: 'creationDate', sortDirection: 'desc' }],
+      },
+      allDeals: [
+        { id: 'a', title: 'Old', creationDate: '2026-08-01' },
+        { id: 'b', title: 'New', creationDate: '2026-08-03' },
+        { id: 'c', title: 'Mid', creationDate: '2026-08-02' },
+      ],
+      templateSource: `<ul>{{#each collections.bydate}}{{title}}|{{/each}}</ul>`,
+    });
+    expect(res.ok).toBe(true);
+    expect((res as any).html).toContain('<ul>New|Mid|Old|</ul>');
+  });
+
   it('renders in default title-alphabetical order when sortBy is absent', async () => {
     const res = await main({
       ...baseInput,
