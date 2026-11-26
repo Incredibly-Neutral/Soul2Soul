@@ -420,12 +420,16 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         maintainCache,
       });
 
-      // One decrypt per genesis per run. The same genesis can be listed in
+      // One decrypt per (genesis, cid) per run. The same body can be listed in
       // several collections (a bundle, a post appearing in two feeds), and the
       // decrypt, the integrity verdict and the availability error are the same
-      // answer each time. The PROMISE is what is cached, so collections visited
-      // in parallel share one in-flight decrypt and the availability entry is
-      // logged once. A failed decrypt caches null: it is not retried.
+      // answer each time. The CID is part of the key: the same genesis at two
+      // different CIDs is two different plaintexts, each with its own signed
+      // plaintextHash, so they must be decrypted and verified separately. The
+      // PROMISE is what is cached, so collections visited in parallel share one
+      // in-flight decrypt and the availability entry is logged once. A failed
+      // decrypt caches null: it is not retried. An item with neither id nor cid
+      // has no key and is never cached.
       const decryptedByGenesis = new Map<string, Promise<any | null>>();
 
       const decryptCollectionItem = async (item: any): Promise<any | null> => {
@@ -506,13 +510,14 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       for (const key of Object.keys(collections)) {
         const decrypted = await Promise.all(
           collections[key].map(async (item: any) => {
-            if (item.encryption) {
-              const genesisKey = String(item.id ?? item.cid ?? '');
-              let pending = decryptedByGenesis.get(genesisKey);
-              if (!pending) {
-                pending = decryptCollectionItem(item);
-                decryptedByGenesis.set(genesisKey, pending);
-              }
+            if (item.encryption === true) {
+              const genesisKey = item.id
+                ? `${item.id}:${item.cid ?? ''}`
+                : (item.cid ?? '');
+              const cached = genesisKey ? decryptedByGenesis.get(genesisKey) : undefined;
+              if (cached) return cached;
+              const pending = decryptCollectionItem(item);
+              if (genesisKey) decryptedByGenesis.set(genesisKey, pending);
               return pending;
             }
             item.path = pathsForCollections(item, config);

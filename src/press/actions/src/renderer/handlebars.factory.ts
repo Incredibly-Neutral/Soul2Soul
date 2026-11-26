@@ -672,13 +672,21 @@ export const replacePartials = (
 const partialName = (path: string): string =>
   path.substring(path.lastIndexOf("/") + 1).split(".")[0];
 
+// A bare partial name: `{{> name}}` and nothing else. Anything a name-shaped
+// token cannot express — a Handlebars built-in such as `{{> @partial-block}}`,
+// a dotted name, or a parameterised reference such as
+// `{{> footer title="x"}}` — is not a reference the fetcher resolves: it stays
+// in the source for `replacePartials`, which leaves it literal (as it always
+// has).
+const STATIC_PARTIAL_NAME = /^[A-Za-z0-9_-]+$/;
+
 // `{{> name}}` references in a template or partial source.
 const referencedPartialNames = (source: string): Set<string> => {
   const names = new Set<string>();
   const regex = /{{\s*>\s*([^\s}]+)\s*}}/g;
   let match;
   while ((match = regex.exec(source)) !== null) {
-    names.add(match[1]);
+    if (STATIC_PARTIAL_NAME.test(match[1])) names.add(match[1]);
   }
   return names;
 };
@@ -687,12 +695,14 @@ const referencedPartialNames = (source: string): Set<string> => {
  * PRODUCTION gateway wrapper: resolves partial CIDs to source text.
  *
  * Fetches only the partials the template actually references, transitively:
- * start from the `{{> name}}` references in `templateSource`, fetch that wave
- * in parallel, then scan each fetched partial for new references and fetch the
- * next wave. A referenced name missing from the listing, a non-OK response, or
- * a thrown fetch fails the whole render — a missing partial is never silently
- * omitted. This is the ONLY place the gateway `cat?arg=partial.cid` fetch
- * lives — it is NOT part of the pure `replacePartials` path.
+ * start from the bare `{{> name}}` references in `templateSource`, fetch that
+ * wave in parallel, then scan each fetched partial for new references and
+ * fetch the next wave. A BARE name that is missing from the listing, a non-OK
+ * response, or a thrown fetch fails the whole render. Only bare `{{> name}}`
+ * references are fetched; a built-in, dotted or parameterised tag is not a
+ * fetch target and is left to `replacePartials`, which leaves it literal. This
+ * is the ONLY place the gateway `cat?arg=partial.cid` fetch lives — it is NOT
+ * part of the pure `replacePartials` path.
  */
 export const fetchPartialsSourceMap = async (
   partials: Partial[],

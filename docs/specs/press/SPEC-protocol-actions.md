@@ -98,7 +98,10 @@ Discriminated on `ok`; `action` is the producer (`"prep"|"single"|"evm-update"`)
 still produced, e.g. one collection item failed to decrypt but the page rendered) → push to `trace`,
 stay `ok:true`. Never join non-fatal problems into `error`. `trace` is declared **before** the
 `try` so the `catch` returns it too. Throw strings, not `Error` (Bun/Deno serialize `Error.message`
-inconsistently).
+inconsistently). The render's fatal set is explicit: a failed template bundle, a failed fetch of a
+referenced partial, an empty render, and a failed signature on a publish all fail the job. An
+unsigned preview is not a failure path — it skips only the PKP key read and emits the colophon
+without a `proofValue`.
 
 **Validation — client-side only, both ends.** zod schemas live in `shared/src/rendering/action-io.ts`,
 reusing the canonical base schemas in **`shared/src/publication/validation.ts`** (never a second
@@ -251,8 +254,12 @@ decryption, or when the genesis is out of force for this mode.
 6. `initTemplateData(...)` → decrypts body if `body.encryption` (gated `canRead`: the publication's
    admission, then ownership of the author Safe at the append block, or live ownership of the
    reader Safe it named; a preview gates on `canPreview` instead, see below); sets `revoked`
-7. if not revoked: `fetchCollections` → per-item `decrypt` (the same gate as the run) → `renderHTML` →
-   `addAndSignMetadata` (the colophon; PKP sign unless `unsigned`, INV-5) → `uploadFile` → CID
+7. if not revoked: `fetchCollections` → per-item `decrypt` (the same gate as the run; one decrypt per
+   `(genesis, cid)`) → `renderHTML` → `addAndSignMetadata` (the colophon; PKP sign unless
+   `unsigned`, INV-5) → `uploadFile` → CID. A failed template bundle, a failed fetch of a
+   referenced partial, and an empty render each fail the job here (fatal `template` availability
+   entry). A failed signature fails a publish; an unsigned preview skips only the key read and
+   emits the signatureless colophon
 8. if the job is a triggered id and the page has a path: `isRevokedByAgreementState(job.id,
    publicationModule, rpcs, preview)`. A publish revokes when `hasAgreement` is false. A preview
    reads the module's `safe()` and then one `canRead(genesis, safe)`, which answers
@@ -627,7 +634,7 @@ revoke takes the whole folder.
 | `fetchByPublication(pubModule, rpcs, gateway)`                                        | module addr     | `S2SBody[]` — `getAgreements` (paginated) → cat each → `toBody`                                                                                                                                                                                                                                                  |
 | `getAgreements(pubModule, rpcs, pageSize=100)`                                        | module addr     | `Entry[]` — enumerates the publication's agreements, the module read being `getAgreements(offset, limit)`, which the helper asks for by that name from bundle 0.1.2 (0.1.0/0.1.1 ask for `getDeals`); `pageSize` defaults to **100** (was 200, briefly 10) to keep each RPC response minimal inside the Lit fetch budget                                                                                                                                                        |
 | `initTemplateData(protocolInfo, authorSafe, signer, templateConfig, body, pubModule)` | —               | templateData `{ ...body, assets_gateway, path, content(unescaped), revoked }`                                                                                                                                                                                                                               |
-| `fetchCollections(templateConfig, pubModule, rpcs, gateway)`                          | templateConfig  | `{ [slug]: items[] }` — calls `fetchByPublication` **once**, caches in `allDeals`, filters per-collection in-memory (Lit fetch-budget fix; previously one `getAgreements` call per collection)                                                                                                                        |
+| `fetchCollections(templateConfig, pubModule, rpcs, gateway)`                          | templateConfig  | `{ [slug]: items[] }` — calls `fetchByPublication` **once**, caches in `allDeals`, filters per-collection in-memory (Lit fetch-budget fix; previously one `getAgreements` call per collection). An encrypted item is judged only on the fields it exposes in the clear (`id`, `author`, `locale`, `parent`, `position`, `postType`, dates, `tags`, `attributes`, `publication`, `label`): a filter on a private field (`title`, `slug`, `custom`, `content`) is deferred and applied in `render/main.ts` after `mergeDecrypted`, where the plaintext exists                                                                                                                        |
 | `renderHTML(config, templateConfig, templateData)`                                    | —               | `string` (HTML)                                                                                                                                                                                                                                                                                             |
 | `addAndSignMetadata(id, html, protocolInfo, contentInfo?)`                            | —               | `string` (HTML + signed JSON-LD)                                                                                                                                                                                                                                                                            |
 | `canPublish(authorSafe, pubModule, signer)`                                           | —               | `boolean` (canPublish ∧ `isOwnerAt` with no block) — the **add** gate, asked per page: a destination path that does not yet carry the incoming genesis                                                                                                                                                                        |
@@ -804,6 +811,13 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   helper's `pageSize` (100, lowered from 200) supplies the read's `limit`: it is a helper
   parameter (`module.factory.ts`), not an argument of `getAgreements(offset, limit)`. Lesson:
   inside a Lit action, never issue N identical on-chain reads — fetch once and filter locally.
+- **A filter cannot read ciphertext (2026-11-26).** A collection item's `title`, `slug`, `custom`
+  and `content` live inside the encrypted body, so comparing them before decryption dropped every
+  encrypted member of a filtered collection. `fetchCollections` therefore applies only the public
+  fields before decryption (the `PUBLIC_BODY_KEYS` set in `render/data.ctrlr.ts`); a filter whose
+  keys are private passes there, and `render/main.ts` runs the whole `filterCollection` again on the
+  merged plaintext. An encrypted item's sort order is likewise taken after decryption, where the
+  title exists. A plaintext item keeps the single pre-decryption filter.
 - **One invocation, one read budget (2026-11-25):** the render action judges every encrypted
   collection item through `canRead`, and each judgement resolved the author Safe's modules
   (`getModulesPaginated` plus two `supportsInterface` probes per enabled module) and asked

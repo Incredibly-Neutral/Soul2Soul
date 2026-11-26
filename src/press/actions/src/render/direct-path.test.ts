@@ -568,6 +568,38 @@ describe('render action — decrypted integrity (encrypted collection items)', (
     expect(templateData.collections.drafts).toHaveLength(1);
   });
 
+  it('decrypts the same genesis at two different cids separately', async () => {
+    const otherCid = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zz';
+    const otherVersion = { ...encryptedItem, cid: otherCid };
+    vi.mocked(fetchCollections).mockResolvedValue({
+      collections: {
+        posts: [encryptedItem] as never,
+        drafts: [otherVersion] as never,
+      },
+      drift: null,
+      skips: [],
+    });
+    vi.mocked(decryptRaw).mockResolvedValue({
+      raw: PLAINTEXT,
+      parsed: JSON.parse(PLAINTEXT) as never,
+      rawFromDecryptor: true,
+    });
+
+    const result = await main(input([{ slug: 'posts' }, { slug: 'drafts' }]));
+
+    expect(result.ok).toBe(true);
+    // Same id, different cid: two bodies, so two decrypts and two integrity
+    // checks. The cid is part of the cache key.
+    expect(vi.mocked(decryptRaw)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(decryptRaw).mock.calls[0][1].cid).toBe(ENCRYPTED_CID);
+    expect(vi.mocked(decryptRaw).mock.calls[1][1].cid).toBe(otherCid);
+    const templateData = vi.mocked(renderHTML).mock.calls[0][2] as {
+      collections: Record<string, { cid?: string }[]>;
+    };
+    expect(templateData.collections.posts[0].cid).toBe(ENCRYPTED_CID);
+    expect(templateData.collections.drafts[0].cid).toBe(otherCid);
+  });
+
   it('surfaces a collection skip (forged body upstream) as a non-fatal data entry', async () => {
     vi.mocked(fetchCollections).mockResolvedValue({
       collections: { posts: [] },

@@ -125,6 +125,23 @@ describe('renderHTML fatal failures', () => {
     expect(fetchedUrls.some((url) => url.includes(INNER_CID))).toBe(true);
   });
 
+  it('leaves a Handlebars built-in tag literal instead of treating it as a partial', async () => {
+    installFetch({
+      template: { status: 200, body: '<html><body>{{> @partial-block}}</body></html>' },
+    });
+    const html = await renderHTML(config, templateConfig, data, GW);
+    expect(html).toContain('{{> @partial-block}}');
+  });
+
+  it('leaves a parameterised partial tag literal instead of treating it as a partial', async () => {
+    installFetch({
+      template: { status: 200, body: '<html><body>{{> footer title="x"}}</body></html>' },
+    });
+    const html = await renderHTML(config, templateConfig, data, GW);
+    expect(html).toContain('{{> footer title="x"}}');
+    expect(fetchedUrls.some((url) => url.includes(FOOTER_CID))).toBe(false);
+  });
+
   it('returns HTML on the plain happy path', async () => {
     installFetch();
     const html = await renderHTML(config, templateConfig, data, GW);
