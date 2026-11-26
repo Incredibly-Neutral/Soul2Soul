@@ -1,0 +1,51 @@
+{
+  "version": "d.0.10",
+  "groups": [
+    {
+      "name": "s2s@d.0.10",
+      "id": 15,
+      "actions": [
+        {
+          "name": "prep",
+          "cid": "QmTSVmwoWKMHdymP2FYkE4n5d2iy2pxqXo5WGakZtcpjB7",
+          "hashedCid": "0xb98120d25114e8e69036f9e42081abf1f48c10c34b0dcb85cbe3954f7536e2da"
+        },
+        {
+          "name": "render",
+          "cid": "Qmdm5qZdaQxRTEZyVdhwo4UHRQo64qXQX21JvwN5MrNW9p",
+          "hashedCid": "0x03d8b127b0403a927174d567b2659fc9348f9a76a4059d251c004379e58f2347"
+        },
+        {
+          "name": "update",
+          "cid": "QmUrQ1AB717WPy7oAHkSrTutxsqhLdzryHhwLUgJAKtX5Q",
+          "hashedCid": "0x387427d2b313dd5febb4ceeaf3fb6dd00e0305b9f02ec9204b486cab29bd8fd1"
+        },
+        {
+          "name": "maintain-cache",
+          "cid": "QmUUNnG5rXbDw38mzZLJhdBWvqztxPXp9kAzjsHAWTq15X",
+          "hashedCid": "0x40dcd50ef45fdaa41eb0c1d5b34c5cd683ffc925122575c5b0dead2c335016bf"
+        },
+        {
+          "name": "repoint-archive",
+          "cid": "QmUaGN7AipbpHGYAEYwtX6oQp9znRfjGSSj7wg48J1vaua",
+          "hashedCid": "0x85ec46e558b64c8ae009be61c4522d4f2d4d011539d5c8472fd642be831a05f0"
+        },
+        {
+          "name": "encrypt",
+          "cid": "QmQNnefQsHQoUGyLaGJHMNhTaRtEYGfccejPsQXhJn7Rsh",
+          "hashedCid": "0xf2925f24662e3bd9ab6c3087a0ab7f8384eb96bacd46729a8eaeaba828ce97e1"
+        },
+        {
+          "name": "decrypt",
+          "cid": "QmTt1UBiup8veX6iiJUc69wL4VxwF8ZrGsz31ZrRYd8BZC",
+          "hashedCid": "0x3eb6f99039b39b53a0509acae40e94cb95f869c15e617d54b67af24403e88bdb"
+        }
+      ],
+      "pkps": [
+        "0x0522b95938c3a18988bf71da2f964f8a52ae4004"
+      ],
+      "usage_key": "lk_6720065969543d100b2f6d367b24e327bbd7ca8ac44d91fe8bb6d2cb53ce3699"
+    }
+  ],
+  "safeTxHash": "0xd29a8781f026b31a627d1ca383dda05835cfde5e9f8290e6212c2d79361bfb52"
+}

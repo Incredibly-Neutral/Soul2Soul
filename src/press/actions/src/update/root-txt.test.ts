@@ -473,6 +473,8 @@ describe('evm-update — stale root txt cleanup', () => {
   });
 
   it('never removes a root index.html, even if the old assets/txt held one', async () => {
+    // The stale set comes from the root listing now, and index.html is the site
+    // root, so it is not a candidate: the name never reaches the rm.
     mocks.prevTxtStatus = 200;
     mocks.prevTxtEntries = [txtFile('index.html')];
     mocks.rootEntries['/index.html'] = 'file';
@@ -480,11 +482,21 @@ describe('evm-update — stale root txt cleanup', () => {
 
     expect(result.ok).toBe(true);
     expect(mutationsOf('/index.html')).toEqual([]);
-    expect(
-      result.trace.some((t: string) =>
-        t.includes('skip stale root txt index.html: root index.html'),
-      ),
-    ).toBe(true);
+  });
+
+  it('reads the stale names from the ROOT listing, so an empty assets/txt still clears them', async () => {
+    // assets/txt is now empty (a 200 with no entries). Taken as the whole set
+    // of previous names that is indistinguishable from "nothing was ever
+    // mirrored", and last run's robots.txt would stay at the root forever.
+    mocks.prevTxtStatus = 200;
+    mocks.prevTxtEntries = [];
+    mocks.txtEntries = [];
+    mocks.rootEntries['/robots.txt'] = 'file';
+    const result: any = await main({ ...baseInput, signature: await makeSignature() });
+
+    expect(result.ok).toBe(true);
+    expect(rmOf('/robots.txt').length).toBe(1);
+    expect(result.trace.some((t: string) => t.includes('rm stale root robots.txt'))).toBe(true);
   });
 
   it('a failed stale rm is a trace, never a throw', async () => {
@@ -534,8 +546,10 @@ describe('evm-update — root txt outside the preview path', () => {
 
     expect(result.ok).toBe(true);
     expect(cpTo('/robots.txt').length).toBe(1);
-    // The pre-cp rm is unconditional: removing a missing path is harmless.
-    expect(rmOf('/robots.txt').length).toBe(1);
+    // Fresh tree, and the root listing (or `files/stat` when it failed) says
+    // nothing is at the name: the pre-cp rm is skipped. If something did turn
+    // out to be there, the cp's own retry removes it.
+    expect(rmOf('/robots.txt').length).toBe(0);
     // The reset branch still never copies the previous root.
     expect(indicesOf('arg=/ipfs/QmPrevRoot')).toEqual([]);
     expect(result.data.cid).toBe('QmNewRoot');

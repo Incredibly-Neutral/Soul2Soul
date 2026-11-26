@@ -64,6 +64,10 @@ const mocks = vi.hoisted(() => ({
   lsDirs: [] as string[],
   reads: [] as string[],
   catCalls: 0,
+  /** `batchSetRecords`-style writes the action issued. */
+  writes: [] as any[][],
+  /** The node each contenthash_wrapped read named. */
+  prevReads: [] as string[],
 }));
 
 vi.mock('../libs/ens.factory', () => ({
@@ -92,9 +96,15 @@ vi.mock('../libs/evm', () => ({
     if (method === 'getText' && args?.[1] === 'aliases') return '';
     // No agreement on the existing page: the path gate allows the overwrite.
     if (method === 'hasAgreement') return false;
+    if (method === 'getText' && args?.[1] === 'contenthash_wrapped') {
+      mocks.prevReads.push(String(args[0]));
+    }
     return mocks.prevEncoded;
   }),
-  evmWrite: vi.fn(async () => mocks.evmWriteResult),
+  evmWrite: vi.fn(async (...args: any[]) => {
+    mocks.writes.push(args);
+    return mocks.evmWriteResult;
+  }),
   toHexString: (cid: string) => '0x' + cid,
 }));
 
@@ -336,6 +346,8 @@ beforeEach(() => {
   mocks.lsDirs = [];
   mocks.reads = [];
   mocks.catCalls = 0;
+  mocks.writes = [];
+  mocks.prevReads = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
@@ -404,9 +416,10 @@ describe('evm-update — the destination is read once, or not at all', () => {
     expect(cpTo(DEST).length).toBe(1);
   });
 
-  it('an unreadable destination falls back to the listing and still compares CIDs', async () => {
+  it('asks an unreadable destination twice, and treats a free path as free', async () => {
+    // 401 twice: the read cannot answer. `files/stat` then positively says the
+    // path is empty, which is the one answer that makes it a free path.
     mocks.destinations[DEST] = { status: 401, body: 'invalid auth token' };
-    mocks.pageHashes['/hello-world'] = { 'index.html': SOURCE_CID };
 
     const result: any = await main({
       ...baseInput,
@@ -415,10 +428,56 @@ describe('evm-update — the destination is read once, or not at all', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(mocks.reads).toEqual([DEST]);
-    expect(mocks.lsDirs).toContain('/hello-world');
-    expect(hasTrace(result, `skip (unchanged): ${FILE_PATH}`)).toBe(true);
+    expect(mocks.reads).toEqual([DEST, DEST]);
+    expect(mocks.lsDirs).not.toContain('/hello-world');
+    expect(cpTo(DEST).length).toBe(1);
+  });
+
+  it('refuses to overwrite a destination it cannot read and cannot prove empty', async () => {
+    // The read fails and `files/stat` says something IS there: the page cannot
+    // be checked for an active agreement, so the write fails closed instead of
+    // passing "no page" to the path gate.
+    mocks.destinations[DEST] = { status: 401, body: 'invalid auth token' };
+    mocks.statHashes[DEST] = 'QmSomeOtherPage';
+
+    const result: any = await main({
+      ...baseInput,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toMatch(/could not be read/);
+
+    expect(mocks.reads).toEqual([DEST, DEST]);
+    expect(rmOf(DEST)).toEqual([]);
     expect(cpTo(DEST)).toEqual([]);
+  });
+
+  it('a fresh tree issues no rm for /assets or a root txt name nothing could be at', async () => {
+    mocks.prevEncoded = '';
+    mocks.txtEntries = [txtFile('robots.txt')];
+
+    const result: any = await main({
+      ...baseInput,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    // Nothing was copied in and no job wrote under /assets, so the rm could
+    // only ever fail; the cp and the top-level txt mirror are unaffected.
+    // (7 is the index.html the previous-root copy would have made; the trace
+    // shows which rm it was.)
+    const assetsRms = mocks.gatewayUrls.filter(
+      (u) => u.includes('files/rm') && argsOf(u).some((a) => relOf(a) === '/assets'),
+    );
+    expect(assetsRms).toEqual([]);
+    const txtRms = mocks.gatewayUrls.filter(
+      (u) => u.includes('files/rm') && argsOf(u).some((a) => relOf(a) === '/robots.txt'),
+    );
+    expect(txtRms).toEqual([]);
+    expect(cpTo('/robots.txt').length).toBe(1);
   });
 
   it('a fresh tree reads no destination at all', async () => {
@@ -434,6 +493,83 @@ describe('evm-update — the destination is read once, or not at all', () => {
     expect(mocks.reads).toEqual([]);
     expect(mocks.lsDirs).not.toContain('/hello-world');
     expect(cpTo(DEST).length).toBe(1);
+  });
+});
+
+describe('evm-update — a preview is a rehearsal, not a write', () => {
+  it('previews the tree and writes no contenthash', async () => {
+    const result: any = await main({
+      ...baseInput,
+      preview: true,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.writes).toEqual([]);
+    // The rehearsal still had to build the tree to say what the root would be.
+    expect(result.data.cid).toBe('QmNewRoot');
+  });
+});
+
+describe('evm-update — a job with no resolved path is skipped, not written', () => {
+  it('skips a page whose path still holds a template placeholder', async () => {
+    // A revoked item re-renders from a stored body that has lost its slug, so
+    // its path can still be the template. There is no such directory to write.
+    const result: any = await main({
+      ...baseInput,
+      jobs: [{ ...sampleJob, path: '/{slug}' }],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(hasTrace(result, 'skip cp /{slug}: unresolved template placeholder')).toBe(true);
+    expect(cpTo('/{slug}/index.html')).toEqual([]);
+  });
+});
+
+describe('evm-update — the previous root must be on this node', () => {
+  it('reports that the tree has to be rebuilt when the copy of the previous root fails', async () => {
+    // A reference copy answers at once only when the node holds the blocks; a
+    // node that lost them goes to the network and the bounded request fails.
+    // The message says what to do, not that a request timed out.
+    const baseFetch = globalThis.fetch as unknown as (url: string) => Promise<Response>;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.includes('files/cp') && url.includes('/ipfs/QmPrevRoot')) {
+          throw new Error('The operation was aborted due to timeout');
+        }
+        return baseFetch(url);
+      }),
+    );
+
+    const result: any = await main({
+      ...baseInput,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toMatch(/copied within 60s/);
+    expect(String(result.error)).toMatch(/run reset \(publication owner\)/);
+  });
+});
+
+describe('evm-update — the pointer read is one request', () => {
+  it('reads contenthash_wrapped once, on the node the config names', async () => {
+    // The warm-up batch starts the read against the canonical node; with no
+    // legacy `domain` the write node IS the canonical node and the cache
+    // answers the real read, so one request leaves for the pointer.
+    const result: any = await main({
+      ...baseInput,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.prevReads).toHaveLength(1);
+    expect(mocks.prevReads[0]).toBe(ethers.utils.namehash(baseInput.publication));
   });
 });
 

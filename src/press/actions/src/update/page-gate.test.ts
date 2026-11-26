@@ -125,9 +125,13 @@ const gatewayResponse = (url: string): Response => {
   const [arg = ''] = argsOf(url);
   if (url.includes('files/read')) {
     const html = mocks.pages[relOf(arg)];
+    // Kubo's own "not there" answer — the string `isMissingMfsPath` reads as
+    // absent. Anything else is an inconclusive read, which the action refuses.
     return html
       ? new Response(html, { status: 200 })
-      : new Response('no such file', { status: 404 });
+      : new Response(JSON.stringify({ Message: 'file does not exist', Code: 0, Type: 'error' }), {
+          status: 500,
+        });
   }
   if (url.includes('files/stat')) {
     return new Response(JSON.stringify({ Hash: 'QmNewRoot' }), { status: 200 });
@@ -534,5 +538,25 @@ describe('evm-update — a collection member job attests the bundle genesis', ()
     expect(hasTrace(result, 'removed: /chapters/old')).toBe(true);
     expect(hasTrace(result, 'not in job set')).toBe(false);
     expect(removalsOf('/chapters/old').length).toBeGreaterThan(0);
+  });
+
+  it('skips a removal whose replacedBy genesis is in no job of the call', async () => {
+    // The update only removes a page when the genesis that replaces it is being
+    // written by the SAME call; otherwise the old page would vanish before its
+    // replacement exists. Batching depends on this: a removal rides with the
+    // batch that carries its replacement.
+    const ABSENT = '0x' + '99'.repeat(32);
+
+    const result: Awaited<ReturnType<typeof main>> = await main({
+      ...baseInput,
+      jobs: [makeJob('/chapters/one/')],
+      remove: [{ path: '/chapters/old', replacedBy: ABSENT }],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(hasTrace(result, 'skip remove /chapters/old: replacedBy genesis')).toBe(true);
+    expect(hasTrace(result, 'not in job set')).toBe(true);
+    expect(removalsOf('/chapters/old')).toEqual([]);
   });
 });

@@ -1,27 +1,17 @@
 /**
- * Regression test — evm-update Lit action crash on overwrite:
- *   "TypeError: Cannot read properties of null (reading 'call')"
+ * `verify.ts` end-to-end against a local JSON-RPC stub — the chain question the
+ * two gates ask (`hasAgreement`), with no external network.
  *
- * Root cause: verifyRevocable() and verifyPathAvailable() built their hasAgreement
- * Contract from a provider DESTRUCTURED OFF A PROVIDER INSTANCE:
- *
- *   const { provider } = new ethers.providers.StaticJsonRpcProvider(...);
- *
- * A StaticJsonRpcProvider instance has no `provider` property, so the
- * destructure yields `undefined`. ethers v5 then sets `contract.provider =
- * null`, and `contract.hasAgreement(...)` reads `this.provider.call(...)` and
- * throws the TypeError above — i.e. every time an existing page at the
- * destination is overwritten with different content.
- *
- * The fix constructs the provider directly:
- *
- *   const provider = new ethers.providers.StaticJsonRpcProvider(...);
- *
- * This test (a) proves the OLD pattern produces `contract.provider === null`
- * and the exact production TypeError, and (b) drives the REAL
- * verifyRevocable()/verifyPathAvailable() against a local JSON-RPC stub so
- * the fixed construction is exercised end-to-end (no external network).
- * Reverting verify.ts to the destructuring pattern FAILS this file.
+ * History this file was written against: both gates once built their own
+ * `StaticJsonRpcProvider`, and one release destructured `{ provider }` off the
+ * instance (a provider has no such property), which left `contract.provider`
+ * null and made every overwrite of a different page throw
+ * "Cannot read properties of null (reading 'call')". The gates now ask through
+ * `evmRead` in `libs/evm.ts` — one cached, failing-over read — so the cases
+ * below drive the real functions and pin the verdicts, not the construction:
+ *   - a different, unbound page at the path → allowed;
+ *   - the same genesis → allowed, and no chain read at all;
+ *   - an active agreement → refused, both for an overwrite and for a removal.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import * as http from 'node:http';
@@ -34,9 +24,7 @@ import { verifyPathAvailable, verifyRevocable } from './verify';
 // run unmocked.
 (globalThis as { ethers?: unknown }).ethers = ethers;
 
-const HAS_AGREEMENT_ABI = ['function hasAgreement(bytes32 genesis) view returns (bool)'];
 const PUB_MODULE = '0x' + '11'.repeat(20);
-const GENESIS_BYTES32 = '0x' + '22'.repeat(32);
 
 // ---------------------------------------------------------------------------
 // Local JSON-RPC stub — offline, deterministic replacement for the Base RPC.
@@ -96,63 +84,9 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// (a) Construction pattern — the old (buggy) vs the fixed.
-// Builds the provider/contract exactly the way verify.ts does.
-// ---------------------------------------------------------------------------
-
-describe('verify.ts provider construction pattern', () => {
-  it('OLD pattern — destructuring { provider } off the instance yields undefined → contract.provider is null', () => {
-    const instance = new ethers.providers.StaticJsonRpcProvider(rpcUrl, {
-      chainId: 8453,
-      name: 'base',
-    });
-    // Deliberately reproducing the buggy pattern: the instance has no `provider`
-    // property (the cast makes that explicit — a direct destructure is a TS error).
-    const { provider } = instance as any; // ← the buggy verify.ts pattern
-    expect(provider).toBeUndefined();
-    const contract = new ethers.Contract(PUB_MODULE, HAS_AGREEMENT_ABI, provider);
-    // ethers v5 sets contract.provider = null for an undefined signer/provider
-    expect(contract.provider).toBeNull();
-  });
-
-  it('OLD pattern — hasAgreement rejects with the EXACT production TypeError', async () => {
-    const instance = new ethers.providers.StaticJsonRpcProvider(rpcUrl, {
-      chainId: 8453,
-      name: 'base',
-    });
-    const { provider } = instance as any; // ← the buggy verify.ts pattern
-    const contract = new ethers.Contract(PUB_MODULE, HAS_AGREEMENT_ABI, provider);
-    await expect(contract.hasAgreement(GENESIS_BYTES32)).rejects.toThrow(
-      "Cannot read properties of null (reading 'call')",
-    );
-  });
-
-  it('FIXED pattern — contract.provider is the real provider instance (non-null)', () => {
-    const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, {
-      chainId: 8453,
-      name: 'base',
-    });
-    const contract = new ethers.Contract(PUB_MODULE, HAS_AGREEMENT_ABI, provider);
-    expect(contract.provider).not.toBeNull();
-    expect(contract.provider).toBe(provider);
-  });
-
-  it('FIXED pattern — hasAgreement completes a real RPC round-trip (no null-provider crash)', async () => {
-    nextHasAgreement = true;
-    const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, {
-      chainId: 8453,
-      name: 'base',
-    });
-    const contract = new ethers.Contract(PUB_MODULE, HAS_AGREEMENT_ABI, provider);
-    await expect(contract.hasAgreement(GENESIS_BYTES32)).resolves.toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// (b) Real verify.ts functions end-to-end against the local RPC.
-// Stubs only the IPFS gateway fetch; the provider/Contract/hasAgreement path is
-// the REAL code. With the old pattern these reject with the null-provider
-// TypeError instead.
+// The real functions, against the local RPC. Only the IPFS gateway fetch is
+// stubbed; provider selection, failover and the `hasAgreement` call are the real
+// `libs/evm.ts` path.
 // ---------------------------------------------------------------------------
 
 const schemaHtml = (identifier: string): string =>

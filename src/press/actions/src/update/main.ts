@@ -271,15 +271,31 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     const writeTargetsPromise = configPromise.then((prevConfig) =>
       resolveWriteTargets(prevConfig, publication),
     );
+    // Started against the CANONICAL node at once, so the pointer read leaves
+    // with the config read instead of behind it. When the config names no
+    // write-node override — every case but a legacy `domain` — the write node IS
+    // the canonical node and the cache answers the real read below with this
+    // one. A legacy domain pays one unused read and nothing else changes.
+    const canonicalPrevPromise = evmRead(
+      'L2',
+      protocolInfo.ensRecords,
+      RECORDS_CONTRACT_ABI,
+      'getText',
+      [canonicalNode, 'contenthash_wrapped'],
+      rpcs?.L2,
+    );
     const prevEncodedPromise = writeTargetsPromise.then(({ nodes: writeNodes }) =>
-      evmRead(
-        'L2',
-        protocolInfo.ensRecords,
-        RECORDS_CONTRACT_ABI,
-        'getText',
-        [writeNodes[0], 'contenthash_wrapped'],
-        rpcs?.L2,
-      ),
+      typeof writeNodes[0] === 'string' &&
+      writeNodes[0].toLowerCase() === canonicalNode.toLowerCase()
+        ? canonicalPrevPromise
+        : evmRead(
+            'L2',
+            protocolInfo.ensRecords,
+            RECORDS_CONTRACT_ABI,
+            'getText',
+            [writeNodes[0], 'contenthash_wrapped'],
+            rpcs?.L2,
+          ),
     );
     // The alias-tracking record is keyed on the canonical node, not the write
     // targets, so it does not wait for the config read at all.
@@ -291,7 +307,13 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       [canonicalNode, ALIASES_TRACKING_KEY],
       rpcs?.L2,
     );
-    for (const warm of [resetGate, configPromise, prevEncodedPromise, prevAliasesPromise]) {
+    for (const warm of [
+      resetGate,
+      configPromise,
+      canonicalPrevPromise,
+      prevEncodedPromise,
+      prevAliasesPromise,
+    ]) {
       warm?.catch(() => undefined);
     }
 
@@ -359,6 +381,13 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // index.html vanish; assets are still re-copied below; the root is rewritten.
     const hasPrevRoot = Boolean(prevEncoded && prevEncoded.length > 0 && !reset);
 
+    // A tree with no previous root has nothing at any destination, so every job
+    // in this request is an ADD and the publish gate WILL be asked: start it
+    // alongside the page reads rather than during the first job. A reset never
+    // asks it (canReset already judged the signer) and a tree that already holds
+    // pages may be all-refresh, so those runs keep asking lazily.
+    if (!reset && !hasPrevRoot && jobs.length > 0) mayPublish().catch(() => undefined);
+
     // Decode before anything is copied or written: a base mismatch is a
     // refusal, and the refusal must land before the temp tree is built. Only
     // the branches that read the previous tree decode it, except when a base
@@ -416,47 +445,14 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       `[update] jobs: ${JSON.stringify(jobs.map((j: any) => ({ id: j.id?.slice(0, 12), path: j.path, html: j.html?.slice(0, 12) })))}`,
     );
 
-    // What is already at each page's destination. The destination is the page
-    // FILE (`/index.html` inside the page's own directory), so the directory
-    // listed here is the page's own: one `files/ls` per page, the same single
-    // request the `files/stat` it replaced spent. It answers with every entry's
-    // hash, which is the one thing the copy below needs before it can overwrite.
-    const dirListings = new Map<string, Promise<Map<string, string>>>();
-    const hashAt = async (path: string): Promise<string> => {
-      const slash = path.lastIndexOf('/');
-      const dir = slash <= 0 ? '/' : path.slice(0, slash);
-      const name = path.slice(slash + 1);
-      let listing = dirListings.get(dir);
-      if (!listing) {
-        listing = fetchWithTimeout(
-          `${gateway}/api/v0/files/ls?arg=${encodeURIComponent(dir)}&long=true`,
-          { method: 'POST' },
-          TIMEOUTS.stat,
-        )
-          .then(async (res) => {
-            const entries = new Map<string, string>();
-            if (!res.ok) return entries;
-            const body = (await res.json().catch(() => ({}))) as { Entries?: TxtEntry[] };
-            for (const entry of body.Entries ?? []) {
-              if (typeof entry.Name === 'string' && typeof entry.Hash === 'string') {
-                entries.set(entry.Name, entry.Hash);
-              }
-            }
-            return entries;
-          })
-          .catch(() => new Map<string, string>());
-        dirListings.set(dir, listing);
-      }
-      return (await listing).get(name) ?? '';
-    };
-
     // A tree with no previous root (or a reset) has nothing at any destination,
     // so the destination reads below are skipped rather than answered by a call.
     const treeIsFresh = !hasPrevRoot;
     // One `files/read` answers both questions about a destination — is a page
-    // there, and which identity does it claim — where the identity read plus the
-    // `files/ls` (or `files/stat`) cost two. `unknown` keeps an unreadable path
-    // on the old path: the listing still decides, exactly as it did before.
+    // there, and which identity does it claim. An unreadable answer is never
+    // passed on as "nothing there": a failed read must not make a path look
+    // free, or one flaky request lets a job overwrite a page that another
+    // genesis holds under an active agreement.
     const readMfsText = async (
       path: string,
     ): Promise<{ state: 'present'; text: string } | { state: 'absent' } | { state: 'unknown' }> => {
@@ -514,9 +510,10 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         // checks are the bytes compared with the destination below.
         let existingPage: PageIdentity | null = null;
         // What the destination read found: its bytes when it is a page, and
-        // whether it is there at all (`fresh` = the tree has nothing at any
-        // path, `unknown` = the read failed and the listing still decides).
-        let pageState: 'present' | 'absent' | 'unknown' | 'fresh' = 'fresh';
+        // whether it is there at all. A fresh tree has nothing anywhere, so the
+        // question is not asked; an unreadable answer is resolved below, and
+        // never leaves this block as "free".
+        let pageState: 'present' | 'absent' = 'absent';
         let pageText = '';
         // A preview writes nothing and verifies nothing, so it never cats.
         const sourceHtml: Promise<string> = preview
@@ -527,11 +524,30 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           // skips the page must not surface the rejected fetch.
           sourceHtml.catch(() => undefined);
           if (!treeIsFresh) {
-            const read = await readMfsText(destPath);
+            let read = await readMfsText(destPath);
+            if (read.state === 'unknown') {
+              // Ask again — a transport hiccup is the likeliest cause — and then
+              // ask `files/stat`, which answers "no such file" from a different
+              // endpoint. Only an answer that positively says the path is empty
+              // makes it a free path.
+              read = await readMfsText(destPath);
+              if (read.state === 'unknown') {
+                const stat = await statMfsFile(gateway!, destPath);
+                if (stat.state === 'absent') read = { state: 'absent' };
+              }
+            }
+            if (read.state === 'unknown') {
+              // Fail closed: an occupied path we cannot read cannot be checked
+              // for an active agreement, so the write is refused rather than
+              // made blind.
+              throw (
+                `Refusing ${job.path}: the page already at that path could not be read, ` +
+                `so it cannot be checked for an active agreement. Nothing was written; ` +
+                `retry the update.`
+              );
+            }
             pageState = read.state;
             if (read.state === 'present') pageText = read.text;
-          } else {
-            pageState = 'absent';
           }
           existingPage = pageState === 'present' ? identityOfText(pageText) : null;
         }
@@ -572,8 +588,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         //                     hash removes first, and an unanswerable stat also
         //                     removes first — the file was just read, so it is
         //                     there;
-        //   * absent        → cp only;
-        //   * unreadable    → the directory listing, exactly as before.
+        //   * absent        → cp only.
         // A PREVIEW has no destination read, so it stats the file it would
         // overwrite (a freshly built tree has nothing to stat).
         let skipCopy = false;
@@ -594,20 +609,17 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           // Nothing there: cp only.
         } else if (pageState === 'present' && pageText !== (await sourceHtml)) {
           removeFirst = true;
-        } else if (pageState === 'present') {
+        } else {
           const stat = await statMfsFile(gateway!, destPath);
           if (stat.state === 'hash') {
             if (stat.hash === sourceCid) skipCopy = true;
             else removeFirst = true;
           } else if (stat.state === 'unknown') {
+            // The file was just read, so it is there, and the cp cannot
+            // overwrite: remove first instead of skipping the rm and failing.
             removeFirst = true;
           }
           // absent: cp only — the gateway says the path is free.
-        } else {
-          // The destination read could not decide: keep the listing fallback.
-          const prevHash = await hashAt(destPath);
-          if (prevHash && prevHash === sourceCid) skipCopy = true;
-          else removeFirst = Boolean(prevHash);
         }
 
         // Fast path: the destination file already carries the source CID.
@@ -745,10 +757,8 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     const previousTxtEntries: TxtEntry[] | null = hasPrevRoot
       ? await lsMfsDir(gateway!, txtDirPath)
       : null;
+    // Filled from the root listing below, once it is known to be trustworthy.
     const previousRootTxtNames = new Set<string>();
-    for (const entry of previousTxtEntries ?? []) {
-      if (entry.Type === 0 && typeof entry.Name === 'string') previousRootTxtNames.add(entry.Name);
-    }
 
     // The tree root, listed once. This one request answers every per-name
     // question below — does the name exist, is it a directory, is it already the
@@ -782,6 +792,24 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       rootEntries = null;
     }
 
+    // The root's own plain files ARE the last run's mirrored txt copies: a page
+    // is a directory, and the site root is `index.html`. This listing is the
+    // authority for which names to clear — the assets/txt listing cannot be,
+    // because a 200 with no entries there is indistinguishable from an empty
+    // assets/txt, and taking it as the whole set leaves a stale robots.txt at
+    // the root forever. It is only the fallback for when the root listing is
+    // unknown.
+    if (rootEntries) {
+      for (const [name, entry] of rootEntries) {
+        if (name === 'index.html') continue;
+        if (entry.Type === 0 || entry.Type === 'file') previousRootTxtNames.add(name);
+      }
+    } else {
+      for (const entry of previousTxtEntries ?? []) {
+        if (entry.Type === 0 && typeof entry.Name === 'string') previousRootTxtNames.add(entry.Name);
+      }
+    }
+
     /** `files/stat` on a root name — the check every caller made before the listing. */
     const occupantAt = async (name: string): Promise<RootEntry | null> => {
       const res = await fetchWithTimeout(
@@ -808,13 +836,20 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       } else {
         trace.push(`cp assets ${config.assetsCid} → ${assetsDestPath}`);
 
-        // Unconditional: a name the listing does not carry is not evidence
-        // that /assets is absent, and removing a missing path is harmless.
-        await fetchWithTimeout(
-          `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(assetsDestPath)}&recursive=true`,
-          { method: 'POST' },
-          TIMEOUTS.rm,
-        ).catch((e) => trace.push(`warn: rm assets failed: ${String(e)}`));
+        // A previous root may carry /assets; on a fresh tree the only way one is
+        // there is a job that wrote a page under that name, and the cp below
+        // rejects an existing destination. Skip the rm when nothing can be
+        // there — ~1 request saved on every reset.
+        const assetsWrittenByAJob = (jobs as any[]).some(
+          (j) => typeof j.path === 'string' && /^\/?assets(\/|$)/.test(j.path),
+        );
+        if (hasPrevRoot || assetsWrittenByAJob) {
+          await fetchWithTimeout(
+            `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(assetsDestPath)}&recursive=true`,
+            { method: 'POST' },
+            TIMEOUTS.rm,
+          ).catch((e) => trace.push(`warn: rm assets failed: ${String(e)}`));
+        }
         const assetsUrl =
           `${gateway}/api/v0/files/cp?` +
           `arg=/ipfs/${encodeURIComponent(config.assetsCid)}` +
@@ -872,14 +907,24 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           }
 
           // Kubo files/cp does not overwrite, and the previous-root copy may
-          // have put last run's copy here. The rm is unconditional: a name the
-          // listing does not carry is not evidence that the path is free, and
-          // removing a missing path is harmless.
-          await fetchWithTimeout(
-            `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(txtDestPath)}`,
-            { method: 'POST' },
-            TIMEOUTS.rm,
-          ).catch((e: unknown) => trace.push(`warn: rm root txt failed ${txtName}: ${String(e)}`));
+          // have put last run's copy here. On a fresh tree nothing can be at this
+          // name unless a job wrote it, and a job that did wrote a directory,
+          // which is skipped above — so no listed entry means no rm. Anywhere
+          // else the rm stays: there the listing is not proof the path is free,
+          // and removing a missing path is harmless. `existing` is the listing's
+          // answer, or `files/stat`'s when the listing was unavailable, so a
+          // failed listing is already covered. If the cp does meet an occupant,
+          // the retry below removes it.
+          const txtMayBeOccupied = hasPrevRoot || Boolean(existing);
+          if (txtMayBeOccupied) {
+            await fetchWithTimeout(
+              `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(txtDestPath)}`,
+              { method: 'POST' },
+              TIMEOUTS.rm,
+            ).catch((e: unknown) =>
+              trace.push(`warn: rm root txt failed ${txtName}: ${String(e)}`),
+            );
+          }
           if (existing) trace.push(`rm existing root ${txtName}`);
 
           trace.push(`cp root txt ${txtName}`);

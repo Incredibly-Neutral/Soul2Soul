@@ -546,6 +546,26 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
     ]);
   });
 
+  it('treats an unparseable alias-tracking record as nothing tracked, and still publishes', async () => {
+    // The auxiliary record is best-effort: a value written by an older build, or
+    // a half-written one, must not fail the update. Nothing is cleared, and the
+    // new list is still written.
+    mocks.prevAliasesJson = '["old.eth"';
+    mocks.config = { assetsCid: 'QmAssets', aliases: ['kept.eth'] };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(await batchNodesOf()).toEqual([
+      ethers.utils.namehash('alice.soul2soul.eth'),
+      ethers.utils.namehash('kept.eth'),
+    ]);
+  });
+
   it('never clears the canonical publication node even if it was previously tracked as an alias', async () => {
     mocks.prevAliasesJson = '["alice.soul2soul.eth","old.eth"]';
     mocks.config = { assetsCid: 'QmAssets', aliases: [] };

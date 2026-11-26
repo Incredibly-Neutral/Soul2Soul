@@ -810,9 +810,9 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   and `blocksOf(genesis)` differ per item and are never collapsed. The cache is per bundle
   execution — a fresh invocation starts empty, so nothing stale survives into the next session.
   The update action turns the same cache on at the top of `main()`; its path gate asks
-  `hasAgreement` through `evmRead` rather than building a provider of its own, and the
-  per-page `files/stat` is now one `files/ls?long=true` of the page's own directory, since the
-  path it lists ends in that page's `/index.html`.
+  `hasAgreement` through `evmRead` rather than building a provider of its own, and a page's
+  destination is read once (`files/read`), with the confirming `files/stat` only when the
+  bytes there already match the source's.
 - **Update batches (2026-11-25):** an update run costs 23 requests in the worst case: 17
   measured, plus 6 for a run whose assets tree and both root txt files all change. A page adds
   six: read the destination, cat the source, the stat that confirms its address, the path gate,
@@ -833,6 +833,21 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   it when that genesis is among its own jobs), and one whose replacement appears in no batch rides
   the last batch so the update traces the skip rather than dropping it; a revoke rides with the
   last batch. A reset is never batched, because it starts from an empty tree.
+- **Update fails closed (2026-11-26):** the destination read is the only evidence the path
+  gate gets, so an inconclusive answer is never handed on as "free". The read is asked once
+  more, then `files/stat` is asked; if neither positively says the path is empty, the job is
+  refused and nothing is written. (Before, one flaky read let a job classify an occupied path
+  as an ADD and skip the `hasAgreement` check.) The stale root txt names come from the ROOT
+  listing — its plain files other than `index.html`, since a page is a directory — because a
+  200 with no entries in `assets/txt` is indistinguishable from an empty directory, and taking
+  that as the whole set left a stale `robots.txt` at the root forever; the `assets/txt` listing
+  is only the fallback for when the root listing is unknown. On a fresh tree (reset or no
+  previous root) the `/assets` and root txt `rm`s are skipped when nothing can be at the name,
+  saving about four requests on a reset without trusting any listing. The previous-pointer read
+  starts against the canonical node in the warm-up batch instead of waiting behind the config
+  read; a legacy `domain` override spends one unused read, and nothing else changes. The publish
+  gate starts in the same batch only when the tree is fresh, where every job is an ADD and the
+  gate will certainly be asked.
 - **Hardcoded secrets (GAP-9) — action-side resolved 2026-08-07:** `libs/constants.ts` (and
   `renderer/constants.ts`) deleted; gateway + RPCs now arrive via the `endpoints` action input,
   not hardcoded. Zero secrets in `actions/src`. Remaining: orchestrator `rpcs` source unwired
