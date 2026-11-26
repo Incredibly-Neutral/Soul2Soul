@@ -67,7 +67,9 @@ Four things about this file decide how a publication behaves:
    exists in the config.
 3. **`collection`** (singular, in the starter) is the in-page data pull: fetch the publication's deals,
    match `filters`, sort by `sortBy`, inject under `slug` so a template can iterate
-   `{{#each chapters}}`.
+   `{{#each chapters}}`. Direction is part of this mapping contract: `sortDirection` is optional
+   (`"asc"` | `"desc"`), and absent means ascending, so a date-ordered collection that wants newest
+   first must say `"desc"`.
 4. **`templateConfig[].filters` is dead.** The type has it, mappings write it, and nothing reads it —
    `grep` finds only `collection.filters` and `ripple.filters`. A mapping may carry it and it will never
    do anything.

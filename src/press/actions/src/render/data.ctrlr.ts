@@ -452,18 +452,27 @@ const passesPublicFilters = (item: any, collection: any): boolean => {
  * optional `sortBy` key. Shared by production `fetchCollections` and the dev
  * render action (which injects `allDeals[]`).
  *
- *   'position'      -> ascending by Number(a.position) - Number(b.position)
- *   'creationDate'  -> ascending by Date.parse(creationDate)
- *   'modifiedDate'  -> ascending by Date.parse(modifiedDate)
- *   'title'         -> ascending alphabetically by String(title)
- *   absent/other    -> DEFAULT: ascending alphabetically by String(title)
+ *   'position'      -> by Number(position), ascending unless sortDirection is 'desc'
+ *   'creationDate'  -> by Date.parse(creationDate), same direction rule
+ *   'modifiedDate'  -> by Date.parse(modifiedDate), same direction rule
+ *   'title'         -> alphabetically by String(title), same direction rule
+ *   absent/other    -> DEFAULT: alphabetical by String(title), same direction rule
  *
- * Defensive: missing/null/non-parseable fields sort LAST (treated as empty),
+ * `sortDirection` is optional ('asc' | 'desc'); absent means ascending, which
+ * is today's behaviour. Direction reverses the order of the comparison only:
+ * missing/null/non-parseable fields still sort LAST in both directions,
  * matching the numeric-position convention in renderer/handlebars-helpers.ts.
  * Returns a NEW array (never mutates the input).
  */
 export const sortCollection = (items: any[], collection: any): any[] => {
+  // Mirrors the shared publication vocabulary without importing it here: this
+  // module is bundled into the Lit Action, which must not pull extra code in.
+  type CollectionSortDirection = 'asc' | 'desc';
   const sortBy = collection?.sortBy;
+  // Anything but 'desc' (including absent) keeps the ascending order.
+  const sortDirection = (collection as { sortDirection?: CollectionSortDirection } | undefined)
+    ?.sortDirection;
+  const direction = sortDirection === 'desc' ? -1 : 1;
   const itemsCopy = items.slice();
 
   // Treat null / undefined / empty string as missing -> sorts last.
@@ -494,8 +503,8 @@ export const sortCollection = (items: any[], collection: any): any[] => {
     if (ka === undefined && kb === undefined) return 0;
     if (ka === undefined) return 1;
     if (kb === undefined) return -1;
-    if (typeof ka === 'number' && typeof kb === 'number') return ka - kb;
-    return String(ka).localeCompare(String(kb));
+    if (typeof ka === 'number' && typeof kb === 'number') return (ka - kb) * direction;
+    return String(ka).localeCompare(String(kb)) * direction;
   });
 };
 
