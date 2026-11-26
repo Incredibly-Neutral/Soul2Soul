@@ -813,19 +813,16 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   `hasAgreement` through `evmRead` rather than building a provider of its own, and the
   per-page `files/stat` is now one `files/ls?long=true` of the page's own directory, since the
   path it lists ends in that page's `/index.html`.
-- **Update batches (2026-11-25):** an update run spends about 17 requests in total: roughly
-  nine in the prologue (manifest, owner and modules, the publish gate, config, the previous
-  contenthash, the root copy) and eight in the tail (assets, root txt, root stat, pin, cleanup,
-  the write: nonce, gas, send, receipt). A page adds five: read the destination, cat the source
-  once, its hasAgreement path gate, rm the entry it replaces, cp the new one. Five pages is
-  therefore 17 + 25 = 42, and a tail whose assets and root txt both change adds about five more,
-  so 47. A revoke costs five more (its page read, the "still in force" check with three attempts,
-  the rm), so four pages plus a revoke is 17 + 20 + 5 = 42, and 47 with that widened tail. Six
-  pages would be 47 nominal and 52 with the widened tail, over the cap of 50, which is why five
-  is the cap. The budget is 45 with five left as slack, so the arithmetic ceiling is five pages
-  with no revoke and four with one; `sequence.ts` uses those two constants. It fills one batch in
-  job order until adding the next page would pass the budget, capped at the size the revoke
-  allows. Six pages therefore ride as 5 + 1, and a render with a revoke as 4 + 2. Each batch runs
+- **Update batches (2026-11-25):** an update run costs 23 requests in the worst case: 17
+  measured, plus 6 for a run whose assets tree and both root txt files all change. A page adds
+  six: read the destination, cat the source, the stat that confirms its address, the path gate,
+  rm, cp the new one. Four pages is 23 + 24 = 47; three pages plus one withdrawal is
+  23 + 18 + 5 = 46; two pages plus two withdrawals is 23 + 12 + 10 = 45. Five pages would be
+  23 + 30 = 53, over the 50-request cap. The cap is 50 with no slack below it, so `sequence.ts`
+  uses three constants: four pages with no withdrawal, three with one, two with two. It fills one
+  batch in job order until adding the next page would pass 50, capped at the size the pending
+  withdrawals allow. Six pages therefore ride as 4 + 2, and a render with one withdrawal as
+  3 + 3. Each batch runs
   sequentially: each call writes a contenthash and the next copies that tree forward. A removal
   rides with the batch that carries the genesis named in its `replacedBy` (the update only applies
   it when that genesis is among its own jobs), and one whose replacement appears in no batch rides

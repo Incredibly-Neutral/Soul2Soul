@@ -467,27 +467,29 @@ export const renderwithLitActions = async (
   if (notice) notice.setMessage('merging EVM update ...');
   else console.log('preparing evm update...');
 
-  // One update run spends about 17 requests in total: roughly nine in the prologue (manifest,
-  // owner and modules, the publish gate, config, the previous contenthash, the root copy) and
-  // eight in the tail (assets, root txt, root stat, pin, cleanup, the write: nonce, gas, send,
-  // receipt). A page adds five: read the destination, cat the source once, its hasAgreement path
-  // gate, rm the entry it replaces, cp the new one. Five pages is therefore 17 + 25 = 42, and a
-  // tail whose assets and root txt both change adds about five more, so 47. A revoke costs five
-  // more (its page read, the "still in force" check with three attempts, the rm), so four pages
-  // plus a revoke is 17 + 20 + 5 = 42, and 47 with that widened tail. Six pages would be 47
-  // nominal and 52 with the widened tail, over the cap of 50, which is why five is the cap.
-  const RUN_FIXED_REQUESTS = 17;
-  const RUN_JOB_REQUESTS = 5;
-  const RUN_BUDGET_REQUESTS = 45;   // five left as slack for a run whose tail grows
+  // One update run costs 23 requests in the worst case: 17 measured, plus 6 for a run whose
+  // assets tree and both root txt files all change. A page adds six: read the destination, cat
+  // the source, the stat that confirms its address, the path gate, rm, cp. A withdrawal adds
+  // five. The cap is 50 requests per session, with no slack below it. Four pages is
+  // 23 + 24 = 47; three pages plus one withdrawal is 23 + 18 + 5 = 46; two pages plus two
+  // withdrawals is 23 + 12 + 10 = 45. Five pages would be 23 + 30 = 53, over the cap.
+  const RUN_FIXED_REQUESTS = 23;
+  const RUN_JOB_REQUESTS = 6;
+  const RUN_BUDGET_REQUESTS = 50;
   const REVOKE_REQUESTS = 5;
-  // Five is the arithmetic ceiling with no revoke (45 - 17 = 28, / 5 = 5); a revoke adds five,
-  // so four pages is its ceiling. Both are what the constants below use.
-  const UPDATE_BATCH_SIZE = 5;
-  const UPDATE_BATCH_SIZE_WITH_REVOKE = 4;
+  // Four pages with no withdrawal, three while one is pending, two while two are.
+  const UPDATE_BATCH_SIZE = 4;
+  const UPDATE_BATCH_SIZE_WITH_REVOKE = 3;
+  const UPDATE_BATCH_SIZE_WITH_TWO_REVOKES = 2;
 
   const updateJobs = resetOnly ? [] : activeJobs;
-  const pendingRevoke = allRemove.some((entry) => !entry.replacedBy);
-  const batchCap = pendingRevoke ? UPDATE_BATCH_SIZE_WITH_REVOKE : UPDATE_BATCH_SIZE;
+  const pendingRevokes = allRemove.filter((entry) => !entry.replacedBy).length;
+  const batchCap =
+    pendingRevokes >= 2
+      ? UPDATE_BATCH_SIZE_WITH_TWO_REVOKES
+      : pendingRevokes === 1
+        ? UPDATE_BATCH_SIZE_WITH_REVOKE
+        : UPDATE_BATCH_SIZE;
   const batches: any[][] = [];
   if (reset) {
     // A reset is never batched: it starts from an empty tree, so a second batch
@@ -495,16 +497,16 @@ export const renderwithLitActions = async (
     batches.push(updateJobs);
   } else {
     // Fill one batch in job order until adding the next page would pass the
-    // budget, capped at the size the presence of a revoke allows. The revoke
-    // rides the last batch, so its five requests are counted in every batch's
-    // cost: four pages plus a revoke is 17 + 20 + 5 = 42, under the budget.
+    // budget, capped at the size the pending withdrawals allow. The withdrawals
+    // ride the last batch, so their five requests are counted in every batch's
+    // cost: three pages plus one withdrawal is 23 + 18 + 5 = 46.
     let current: any[] = [];
     for (const job of updateJobs as any[]) {
       const nextCount = current.length + 1;
       const nextCost =
         RUN_FIXED_REQUESTS +
         nextCount * RUN_JOB_REQUESTS +
-        (pendingRevoke ? REVOKE_REQUESTS : 0);
+        pendingRevokes * REVOKE_REQUESTS;
       if (current.length > 0 && (nextCount > batchCap || nextCost > RUN_BUDGET_REQUESTS)) {
         batches.push(current);
         current = [];
@@ -541,6 +543,7 @@ export const renderwithLitActions = async (
   let validated: any = { ok: false, error: 'update action was not run' };
   let lastEvmAction: any = null;
   const updateTrace: unknown[] = [];
+  let baseCid: string | undefined;
   for (let i = 0; i < batches.length; i++) {
     const batchJobs = batches[i];
     const batchRemove = removeForBatch(batchJobs, i === batches.length - 1);
@@ -553,6 +556,10 @@ export const renderwithLitActions = async (
       endpoints,
       remove: batchRemove.length > 0 ? batchRemove : undefined,
       reset: reset ? true : undefined,
+      // A later publish batch starts from the root the previous batch returned.
+      // A preview or dev batch writes no contenthash, so its record cannot name
+      // a tree and it carries no baseCid.
+      ...(mode === 'publish' && baseCid ? { baseCid } : {}),
     });
     if (notice && batches.length > 1) {
       notice.setMessage(`merging EVM update ${i + 1}/${batches.length} ...`);
@@ -571,13 +578,13 @@ export const renderwithLitActions = async (
     updateTrace.push(...((lastEvmAction as any)?.trace ?? []));
     if (!validated.ok) {
       console.log(JSON.stringify(validated, null, 2));
-      // Earlier batches wrote their roots, but the tree the caller would pin is
-      // only whole once the last batch landed. Drop the partial root so a reader
-      // that takes `cid` off a failed envelope cannot pin a half-written site.
-      cid = null;
+      // Earlier batches landed and the domain serves the root the last of them
+      // wrote, so report that address rather than losing it. The failing batch's
+      // error travels on the envelope; the trace carries each batch's write.
       break;
     }
     cid = (validated as any).data.cid;
+    baseCid = (validated as any).data.cid;
   }
 
   // ── Parallel per-publication cache maintenance ─────────────────────────┐
