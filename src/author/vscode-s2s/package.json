@@ -4,7 +4,7 @@
   "description": "Upload, offer, preview and publish soul2soul manuscripts from a (remote) VS Code window — a thin wrapper over the s2s binary.",
   "version": "0.1.0",
   "publisher": "soul2soul",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": true,
   "engines": {
     "vscode": "^1.90.0"
