@@ -43,6 +43,12 @@ export type S2SContentInfoWithDates = S2SContentInfo & {
  * shared/src/metadata/proof-canonicalization.ts) so signer and verifier cannot
  * drift. `proof.canonicalization` records the scheme on the page so pre-JCS
  * pages can still be verified with the legacy canonicaliser.
+ *
+ * A publish render either carries a signature or does not happen: a signing
+ * failure throws. Only `options.unsigned` (a dev or preview run) emits a
+ * signatureless colophon, and it skips the key read rather than swallowing an
+ * error. Nothing here returns the input html: a page that cannot carry its
+ * colophon is never handed back as if it were a page.
  */
 export const addAndSignMetadata = async (
   id: string,
@@ -53,245 +59,241 @@ export const addAndSignMetadata = async (
 ) => {
   // console.log("pkp", protocolInfo.pkp.publicKey.replace("0x", ""));
 
-  try {
-    // 1. The hashed region — shared with update/verify.ts so that the bytes the
-    //    verifier re-derives after injection are exactly the bytes hashed here,
-    //    including for pages with no <html> tag.
-    const contentToHash = extractHashableHtml(html);
-    if (!hasHtmlBlock(html)) {
-      console.log('Could not find HTML tags, hashing entire content');
-    }
+  // 1. The hashed region — shared with update/verify.ts so that the bytes the
+  //    verifier re-derives after injection are exactly the bytes hashed here,
+  //    including for pages with no <html> tag.
+  const contentToHash = extractHashableHtml(html);
+  if (!hasHtmlBlock(html)) {
+    console.log('Could not find HTML tags, hashing entire content');
+  }
 
-    // 2. Hash the HTML (SHA-256 for Schema.org)
-    const htmlBytes = ethers.utils.toUtf8Bytes(contentToHash);
-    const sha256Hash = ethers.utils.sha256(htmlBytes).replace('0x', '');
+  // 2. Hash the HTML (SHA-256 for Schema.org)
+  const htmlBytes = ethers.utils.toUtf8Bytes(contentToHash);
+  const sha256Hash = ethers.utils.sha256(htmlBytes).replace('0x', '');
 
-    const pkpAddress = protocolInfo.pkp;
+  const pkpAddress = protocolInfo.pkp;
 
-    const timestamp = new Date().toISOString();
-    const currentUrl = contentInfo?.publisher?.url || '';
+  const timestamp = new Date().toISOString();
+  const currentUrl = contentInfo?.publisher?.url || '';
 
-    // 3. Build schema WITHOUT proof first
-    const schema: Record<string, unknown> = {
-      '@context': ['https://schema.org', 'https://w3id.org/security/data-integrity/v2'],
-      '@type': 'Article',
-      // Stable document identity (bytes32 genesis / objectId). Unchanged.
-      identifier: id,
-    };
+  // 3. Build schema WITHOUT proof first
+  const schema: Record<string, unknown> = {
+    '@context': ['https://schema.org', 'https://w3id.org/security/data-integrity/v2'],
+    '@type': 'Article',
+    // Stable document identity (bytes32 genesis / objectId). Unchanged.
+    identifier: id,
+  };
 
-    // The document's own dates, from the SIGNED envelope (never the chain
-    // timestamp): dateCreated is the genesis version's signing time, and
-    // dateModified is this version's — a republication moves only the latter.
-    if (contentInfo?.creationDate) {
-      schema.dateCreated = contentInfo.creationDate;
-    }
-    if (contentInfo?.modifiedDate) {
-      schema.dateModified = contentInfo.modifiedDate;
-    }
+  // The document's own dates, from the SIGNED envelope (never the chain
+  // timestamp): dateCreated is the genesis version's signing time, and
+  // dateModified is this version's — a republication moves only the latter.
+  if (contentInfo?.creationDate) {
+    schema.dateCreated = contentInfo.creationDate;
+  }
+  if (contentInfo?.modifiedDate) {
+    schema.dateModified = contentInfo.modifiedDate;
+  }
 
-    // Author (provenance). The author's EIP-712 proof is nested HERE, not on
-    // the top-level proof — the top-level proof is the PKP's DataIntegrityProof.
-    //
-    // The identifier is a CAIP-10 account id: the chain, then the author Safe's
-    // address exactly as the item carries it (a checksummed address is emitted
-    // checksummed). `name` says what the account is, so a reader does not have
-    // to infer it from the shape of the value.
-    if (contentInfo?.author) {
-      const author: Record<string, unknown> = {
-        '@type': 'Person',
-        identifier: {
-          '@type': 'PropertyValue',
-          propertyID: 'CAIP-10',
-          name: 'Safe smart account',
-          value: `eip155:${CHAIN_ID}:${accountAddress(contentInfo.author.address)}`,
-        },
-      };
-
-      // The author node keeps the genesis signing time: who authored the
-      // document, and when it was born, do not change on republication.
-      if (contentInfo.author.createdAt) {
-        author.dateCreated = contentInfo.author.createdAt;
-      }
-
-      if (contentInfo.author.proof) {
-        const authorProof = contentInfo.author.proof;
-        // The item's `objectId` is a SIBLING of `proof`, not part of it (a real
-        // mint emits proof = {type, signer, signature}). Render copies it onto
-        // the nested proof — falling back to the contentInfo sibling here — so
-        // the page carries the exact digest the author signed and a reader can
-        // verify the attestation without re-fetching the item.
-        const objectId = authorProof.objectId ?? contentInfo.objectId;
-        author.proof = {
-          type: authorProof.type,
-          ...(objectId ? { objectId } : {}),
-          signer: authorProof.signer,
-          signature: authorProof.signature,
-        };
-      }
-
-      schema.author = author;
-    }
-
-    // Publication node (`publication`). The publication itself, mirrored on
-    // the author node: one CAIP-10 value naming the Safe that owns the ENS
-    // name, plus the name that Safe answers to. The render signer is the
-    // proof's verificationMethod and appears nowhere here. The retired key was
-    // `publisher`; old pages keep it, and nothing reads the term.
-    if (contentInfo?.publisher) {
-      schema.publication = {
-        '@type': 'Organization',
-        // Omitting an empty name rather than emitting `name: ''`.
-        ...(contentInfo.publisher.url ? { name: contentInfo.publisher.url } : {}),
-        identifier: {
-          '@type': 'PropertyValue',
-          propertyID: 'CAIP-10',
-          name: 'Safe smart account',
-          value: `eip155:${CHAIN_ID}:${accountAddress(contentInfo.publisher.address)}`,
-        },
-      };
-    }
-
-    // Source attribution (derivative work tracking)
-    if (contentInfo?.isBasedOn) {
-      schema.isBasedOn = {
-        '@type': 'CreativeWork',
-        identifier: contentInfo.isBasedOn.genesis,
-        sha256: contentInfo.isBasedOn.contentHash,
-        dateModified: contentInfo.isBasedOn.timestamp,
-      };
-    }
-
-    // Licensed URL (domain license proof)
-    if (currentUrl) {
-      schema.mainEntityOfPage = {
-        '@type': 'WebPage',
-        '@id': currentUrl,
-      };
-    }
-
-    // Content integrity (self-authentication of the rendered page).
-    //
-    // This MediaObject asserts a digest OF THIS HTML, so it must not carry a
-    // contentUrl: the only CID we have is the content item's, and nothing is
-    // retrievable at that URL with this sha256. The item CID belongs on the
-    // sdContent node below, where it is paired with the plaintext hash.
-    const contentUrl = ipfsContentUrl(contentInfo?.contentCid);
-    const encoding: Record<string, unknown> = {
-      '@type': 'MediaObject',
-      sha256: sha256Hash,
-    };
-    if (contentInfo?.mediaType) {
-      encoding.encodingFormat = contentInfo.mediaType;
-    }
-    schema.encoding = encoding;
-
-    // Canonical plaintext identity (specVersion "1"): what the author signed,
-    // independent of this render. Emitted only when the body hash is known.
-    if (contentInfo?.plaintextHash) {
-      const sdContent: Record<string, unknown> = {
-        '@type': 'CreativeWork',
-        // keccak256 of the canonical body — NOT a schema.org sha256 (that term
-        // is taken by encoding.sha256, a real SHA-256 of the HTML). Naming the
-        // algorithm explicitly avoids two algorithms under one term.
-        identifier: contentInfo.plaintextHash,
-        digestMethod: 'keccak256',
-      };
-      if (contentInfo.mediaType) {
-        sdContent.encodingFormat = contentInfo.mediaType;
-      }
-      if (contentInfo.specVersion) {
-        sdContent.version = contentInfo.specVersion;
-      }
-      if (contentUrl) {
-        sdContent.contentUrl = contentUrl;
-      }
-      schema.sdContent = sdContent;
-    }
-
-    // License contract reference
-    if (contentInfo?.licenseContract) {
-      schema.license = {
-        '@type': 'CreativeWork',
-        name: 'License via Safe Deals Module',
-        identifier: {
-          '@type': 'PropertyValue',
-          propertyID: 'contract',
-          value: contentInfo.licenseContract,
-        },
-      };
-    }
-
-    // Lit Action reference
-    schema.sdPublisher = {
-      '@type': 'Organization',
-      name: 'Soul2Soul Protocol',
+  // Author (provenance). The author's EIP-712 proof is nested HERE, not on
+  // the top-level proof — the top-level proof is the PKP's DataIntegrityProof.
+  //
+  // The identifier is a CAIP-10 account id: the chain, then the author Safe's
+  // address exactly as the item carries it (a checksummed address is emitted
+  // checksummed). `name` says what the account is, so a reader does not have
+  // to infer it from the shape of the value.
+  if (contentInfo?.author) {
+    const author: Record<string, unknown> = {
+      '@type': 'Person',
       identifier: {
         '@type': 'PropertyValue',
-        propertyID: 'litAction',
-        value: protocolInfo.litActions.render,
+        propertyID: 'CAIP-10',
+        name: 'Safe smart account',
+        value: `eip155:${CHAIN_ID}:${accountAddress(contentInfo.author.address)}`,
       },
     };
 
-    // 4. Create proof metadata (without proofValue)
-    const proofOptions: Record<string, string> = {
-      type: 'DataIntegrityProof',
-      cryptosuite: 'ecdsa-secp256k1-2019',
-      created: timestamp,
-      verificationMethod: `did:pkh:eip155:${CHAIN_ID}:${pkpAddress}`,
-      proofPurpose: 'assertionMethod',
-      canonicalization: PROOF_CANONICALIZATION_JCS,
-    };
-
-    // 5. Hash schema + proof options for signing (W3C Data Integrity approach)
-    // Concatenate canonical schema + canonical proof options.
-    //
-    // JCS has no undefined type and throws on one, while JSON.stringify (used
-    // for emission, below) silently drops such a key. A runtime caller leaving
-    // an optional field undefined would therefore abort signing here, and the
-    // catch-all below would return the page with NO JSON-LD at all — a page the
-    // update gate can only ever reject. Strip first, so the signed bytes are
-    // exactly the emitted bytes.
-    const signable = stripUndefinedDeep(schema);
-    const toSign = canonicalizeProofPayload(signable, proofOptions);
-
-    const toSignHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
-
-    // 6. Sign with Lit PKP (may fail in preview — that's fine, metadata still gets embedded)
-    //
-    // An unsigned run has no key to ask for: skip the key read only, and emit
-    // the same signatureless proof the catch below emits. Every other step
-    // (hashing, schema, canonicalisation, insertion) is unchanged, so a dev or
-    // preview page keeps its whole colophon and loses only the signature.
-    if (options.unsigned) {
-      signable.proof = proofOptions;
-    } else {
-      try {
-        const signingKey = new ethers.utils.SigningKey(
-          await Lit.Actions.getPrivateKey({ pkpId: protocolInfo.pkp }),
-        );
-        const signature = ethers.utils.joinSignature(
-          signingKey.signDigest(ethers.utils.arrayify(toSignHash)),
-        );
-        signable.proof = {
-          ...proofOptions,
-          proofValue: signature,
-        };
-      } catch (signError) {
-        console.log('Signing skipped (preview or shim):', signError);
-        signable.proof = proofOptions;
-      }
+    // The author node keeps the genesis signing time: who authored the
+    // document, and when it was born, do not change on republication.
+    if (contentInfo.author.createdAt) {
+      author.dateCreated = contentInfo.author.createdAt;
     }
 
-    // 7. Create script tag (with proof if signed, without signature otherwise)
-    const scriptTag = `<script type="application/ld+json">
+    if (contentInfo.author.proof) {
+      const authorProof = contentInfo.author.proof;
+      // The item's `objectId` is a SIBLING of `proof`, not part of it (a real
+      // mint emits proof = {type, signer, signature}). Render copies it onto
+      // the nested proof — falling back to the contentInfo sibling here — so
+      // the page carries the exact digest the author signed and a reader can
+      // verify the attestation without re-fetching the item.
+      const objectId = authorProof.objectId ?? contentInfo.objectId;
+      author.proof = {
+        type: authorProof.type,
+        ...(objectId ? { objectId } : {}),
+        signer: authorProof.signer,
+        signature: authorProof.signature,
+      };
+    }
+
+    schema.author = author;
+  }
+
+  // Publication node (`publication`). The publication itself, mirrored on
+  // the author node: one CAIP-10 value naming the Safe that owns the ENS
+  // name, plus the name that Safe answers to. The render signer is the
+  // proof's verificationMethod and appears nowhere here. The retired key was
+  // `publisher`; old pages keep it, and nothing reads the term.
+  if (contentInfo?.publisher) {
+    schema.publication = {
+      '@type': 'Organization',
+      // Omitting an empty name rather than emitting `name: ''`.
+      ...(contentInfo.publisher.url ? { name: contentInfo.publisher.url } : {}),
+      identifier: {
+        '@type': 'PropertyValue',
+        propertyID: 'CAIP-10',
+        name: 'Safe smart account',
+        value: `eip155:${CHAIN_ID}:${accountAddress(contentInfo.publisher.address)}`,
+      },
+    };
+  }
+
+  // Source attribution (derivative work tracking)
+  if (contentInfo?.isBasedOn) {
+    schema.isBasedOn = {
+      '@type': 'CreativeWork',
+      identifier: contentInfo.isBasedOn.genesis,
+      sha256: contentInfo.isBasedOn.contentHash,
+      dateModified: contentInfo.isBasedOn.timestamp,
+    };
+  }
+
+  // Licensed URL (domain license proof)
+  if (currentUrl) {
+    schema.mainEntityOfPage = {
+      '@type': 'WebPage',
+      '@id': currentUrl,
+    };
+  }
+
+  // Content integrity (self-authentication of the rendered page).
+  //
+  // This MediaObject asserts a digest OF THIS HTML, so it must not carry a
+  // contentUrl: the only CID we have is the content item's, and nothing is
+  // retrievable at that URL with this sha256. The item CID belongs on the
+  // sdContent node below, where it is paired with the plaintext hash.
+  const contentUrl = ipfsContentUrl(contentInfo?.contentCid);
+  const encoding: Record<string, unknown> = {
+    '@type': 'MediaObject',
+    sha256: sha256Hash,
+  };
+  if (contentInfo?.mediaType) {
+    encoding.encodingFormat = contentInfo.mediaType;
+  }
+  schema.encoding = encoding;
+
+  // Canonical plaintext identity (specVersion "1"): what the author signed,
+  // independent of this render. Emitted only when the body hash is known.
+  if (contentInfo?.plaintextHash) {
+    const sdContent: Record<string, unknown> = {
+      '@type': 'CreativeWork',
+      // keccak256 of the canonical body — NOT a schema.org sha256 (that term
+      // is taken by encoding.sha256, a real SHA-256 of the HTML). Naming the
+      // algorithm explicitly avoids two algorithms under one term.
+      identifier: contentInfo.plaintextHash,
+      digestMethod: 'keccak256',
+    };
+    if (contentInfo.mediaType) {
+      sdContent.encodingFormat = contentInfo.mediaType;
+    }
+    if (contentInfo.specVersion) {
+      sdContent.version = contentInfo.specVersion;
+    }
+    if (contentUrl) {
+      sdContent.contentUrl = contentUrl;
+    }
+    schema.sdContent = sdContent;
+  }
+
+  // License contract reference
+  if (contentInfo?.licenseContract) {
+    schema.license = {
+      '@type': 'CreativeWork',
+      name: 'License via Safe Deals Module',
+      identifier: {
+        '@type': 'PropertyValue',
+        propertyID: 'contract',
+        value: contentInfo.licenseContract,
+      },
+    };
+  }
+
+  // Lit Action reference
+  schema.sdPublisher = {
+    '@type': 'Organization',
+    name: 'Soul2Soul Protocol',
+    identifier: {
+      '@type': 'PropertyValue',
+      propertyID: 'litAction',
+      value: protocolInfo.litActions.render,
+    },
+  };
+
+  // 4. Create proof metadata (without proofValue)
+  const proofOptions: Record<string, string> = {
+    type: 'DataIntegrityProof',
+    cryptosuite: 'ecdsa-secp256k1-2019',
+    created: timestamp,
+    verificationMethod: `did:pkh:eip155:${CHAIN_ID}:${pkpAddress}`,
+    proofPurpose: 'assertionMethod',
+    canonicalization: PROOF_CANONICALIZATION_JCS,
+  };
+
+  // 5. Hash schema + proof options for signing (W3C Data Integrity approach)
+  // Concatenate canonical schema + canonical proof options.
+  //
+  // JCS has no undefined type and throws on one, while JSON.stringify (used
+  // for emission, below) silently drops such a key. A runtime caller leaving
+  // an optional field undefined would therefore abort signing here, which now
+  // fails the render — so the whole colophon would be lost rather than
+  // emitted malformed. Strip first, so the signed bytes are exactly the
+  // emitted bytes.
+  const signable = stripUndefinedDeep(schema);
+  const toSign = canonicalizeProofPayload(signable, proofOptions);
+
+  const toSignHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
+
+  // 6. Sign with Lit PKP. A publish render must be signed: a key read or
+  // signing failure throws, so render never reports ok for a page that carries
+  // a signatureless proof it did not ask for.
+  //
+  // An unsigned run has no key to ask for: skip the key read only, and emit
+  // the signatureless proof here. Every other step (hashing, schema,
+  // canonicalisation, insertion) is unchanged, so a dev or preview page keeps
+  // its whole colophon and loses only the signature.
+  if (options.unsigned) {
+    signable.proof = proofOptions;
+  } else {
+    try {
+      const signingKey = new ethers.utils.SigningKey(
+        await Lit.Actions.getPrivateKey({ pkpId: protocolInfo.pkp }),
+      );
+      const signature = ethers.utils.joinSignature(
+        signingKey.signDigest(ethers.utils.arrayify(toSignHash)),
+      );
+      signable.proof = {
+        ...proofOptions,
+        proofValue: signature,
+      };
+    } catch (error) {
+      throw new Error(`page signing failed: ${String(error)}`);
+    }
+  }
+
+  // 7. Create script tag (with proof if signed, without signature otherwise)
+  const scriptTag = `<script type="application/ld+json">
 ${JSON.stringify(signable, null, 2)}
 </script>`;
 
-    // 8. Insert so the block lands outside the hashed region (see
-    //    shared/src/metadata/html-block.ts — insert and extract are a pair).
-    return insertJsonLdScript(html, scriptTag);
-  } catch (error) {
-    console.log('Error in addMetadata:', error);
-    return html;
-  }
+  // 8. Insert so the block lands outside the hashed region (see
+  //    shared/src/metadata/html-block.ts — insert and extract are a pair).
+  return insertJsonLdScript(html, scriptTag);
 };

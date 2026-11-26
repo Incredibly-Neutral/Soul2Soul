@@ -14,7 +14,7 @@
  *   - signing uses JCS-RFC8785, and the emitted page verifies byte-for-byte
  *     against the same canonicalisation (and NOT against the legacy one)
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as ethers from 'ethers5';
 import {
   canonicalizeProofPayload,
@@ -36,6 +36,13 @@ const getPrivateKey = vi.fn(async () => PRIV);
 (globalThis as unknown as { Lit: unknown }).Lit = {
   Actions: { getPrivateKey },
 };
+
+// A test that makes the key read fail must not leave the mock rejecting: put
+// the real implementation back before the next test signs.
+afterEach(() => {
+  getPrivateKey.mockReset();
+  getPrivateKey.mockImplementation(async () => PRIV);
+});
 
 const GENESIS = '0x' + '55'.repeat(32);
 const PLAINTEXT_HASH = '0x' + 'ab'.repeat(32);
@@ -189,6 +196,34 @@ describe('addAndSignMetadata — unsigned', () => {
 
     expect(getPrivateKey).toHaveBeenCalledTimes(1);
     expect(schema.proof.proofValue).toMatch(/^0x[0-9a-f]+$/i);
+  });
+});
+
+describe('addAndSignMetadata — a failed key read', () => {
+  it('rejects a publish render when the PKP key cannot be read', async () => {
+    // No options.unsigned: this is a page destined for publication, so a
+    // signatureless proof is not an acceptable outcome.
+    getPrivateKey.mockRejectedValueOnce(new Error('key unavailable'));
+
+    await expect(render(contentInfo())).rejects.toThrow(/^page signing failed: /);
+    expect(getPrivateKey).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not read the key at all on an unsigned render, and still returns the colophon', async () => {
+    getPrivateKey.mockRejectedValueOnce(new Error('key unavailable'));
+
+    const { html, schema } = await render(contentInfo(), PAGE, { unsigned: true });
+
+    expect(getPrivateKey).not.toHaveBeenCalled();
+    expect(extractHashableHtml(html)).toBe(extractHashableHtml(PAGE));
+    expect(schema.proof).toBeDefined();
+    expect(schema.proof).not.toHaveProperty('proofValue');
+  });
+
+  it('a later signed render is unaffected (mock restored between tests)', async () => {
+    const { schema } = await render(contentInfo());
+    expect(schema.proof.proofValue).toMatch(/^0x[0-9a-f]+$/i);
+    expect(recover(payloadOf(schema), schema.proof.proofValue)).toBe(PKP);
   });
 });
 
