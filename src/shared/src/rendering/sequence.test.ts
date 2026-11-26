@@ -37,6 +37,7 @@ import {
   validateEvmUpdateOutput,
 } from './action-io';
 import { sampleJob, sampleEndpoints } from './fixtures/inputs';
+import type { S2SJob } from './types';
 
 // RunAction spy: delegates to the real implementation by default (so the
 // chain/runner integration tests below keep working when env is present), but
@@ -1023,6 +1024,119 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
     const postedCids = vi.mocked(runAction).mock.calls.map((c) => c[2]);
     expect(postedCids).toContain('cid-maintain');
     expect(postedCids).not.toContain(updateCid);
+  });
+});
+
+// ============================================================================
+// A bulk render's pages go to the update action in batches.
+//
+// One update session spends about five IPFS requests per page on top of ~14
+// fixed reads, so seven pages in one call die on the 50-request cap. The pages
+// ride in batches of six, sequentially, and each batch writes the contenthash
+// the next one copies forward.
+// ============================================================================
+
+describe('renderwithLitActions — the update stage runs in batches', () => {
+  const protocolInfo: S2SManifest = {
+    version: '1.0.0',
+    gateway: 'https://ipfs.transport-union.dev',
+    ensRegistry: '0x0',
+    ensRecords: '0x0',
+    publicationFactory: '0x0',
+    moduleFactory: '0x0',
+    recordsFactory: '0x0',
+    pkp: '0x0',
+    litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },
+  };
+
+  const SIGNATURE =
+    '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
+
+  const jobFor = (i: number): S2SJob => ({
+    ...sampleJob,
+    id: `0x${String(i).padStart(64, '0')}`,
+    path: `/posts/page-${String(i)}`,
+    html: `bafypage${String(i)}`,
+  });
+
+  const jobs = Array.from({ length: 7 }, (_, i) => jobFor(i));
+
+  let updateCalls: any[] = [];
+
+  beforeEach(() => {
+    updateCalls = [];
+    vi.mocked(runAction).mockImplementation(((
+      _mode: string,
+      _lit: unknown,
+      cid: string,
+      inputs: any,
+    ): Promise<unknown> => {
+      if (cid === 'cid-prep') {
+        return Promise.resolve({
+          ok: true,
+          action: 'prep',
+          data: { jobs, remove: undefined },
+          trace: [],
+        });
+      }
+      if (cid === 'cid-render') {
+        return Promise.resolve({ ok: true, action: 'render', data: { job: inputs.job }, trace: [] });
+      }
+      if (cid === 'cid-update') {
+        updateCalls.push(inputs);
+        return Promise.resolve({
+          ok: true,
+          action: 'evm-update',
+          data: { cid: `bafyroot${String(updateCalls.length)}` },
+          trace: [`batch ${String(updateCalls.length)}`],
+        });
+      }
+      return Promise.reject(new Error('unexpected cid ' + cid));
+    }) as any);
+  });
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  const call = (remove?: { path: string; replacedBy?: string }[]) =>
+    renderwithLitActions(
+      'dev',
+      {} as LitService,
+      SIGNATURE,
+      'usage',
+      protocolInfo,
+      null,
+      '0x0000...0001',
+      'test.soul2soul.eth',
+      ['0xcontent-id-1'],
+      undefined,
+      sampleEndpoints.rpcs,
+      undefined,
+      remove,
+    );
+
+  it('splits seven pages into 6 + 1 and writes the last batch\'s root', async () => {
+    const res: any = await call();
+
+    expect(updateCalls).toHaveLength(2);
+    expect(updateCalls[0].jobs).toHaveLength(6);
+    expect(updateCalls[1].jobs).toHaveLength(1);
+    expect(updateCalls[1].jobs[0].id).toBe(jobs[6].id);
+    expect(res.success).toBe(true);
+    // The root the site resolves is the one the last batch wrote.
+    expect(res.cid).toBe('bafyroot2');
+    expect(res.trace).toEqual(['batch 1', 'batch 2']);
+  });
+
+  it('sends a removal with the batch that carries its replacement, and a revoke last', async () => {
+    const changed = { path: '/posts/old-slug', replacedBy: jobs[0].id };
+    const revoked = { path: '/posts/revoked' };
+    await call([changed, revoked]);
+
+    expect(updateCalls).toHaveLength(2);
+    expect(updateCalls[0].remove).toEqual([changed]);
+    expect(updateCalls[1].remove).toEqual([revoked]);
   });
 });
 
