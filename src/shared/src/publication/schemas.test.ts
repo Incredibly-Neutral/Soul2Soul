@@ -50,3 +50,62 @@ describe('collectionSchema / templateConfigSchema: sortBy', () => {
     expect(result.data?.sortBy).toBe('title');
   });
 });
+
+// ============================================================================
+// Template-config schema validation — collection `sortDirection`.
+//
+// Same contract as `sortBy`: the key is preserved only because it is DECLARED
+// on the schema, and an absent value means ascending.
+// ============================================================================
+
+describe('collectionSchema / templateConfigSchema: sortDirection', () => {
+  it('preserves a collection sortDirection through templateConfigSchema parse', () => {
+    const result = templateConfigSchema.safeParse({
+      reference: 'home',
+      file: 'home',
+      path: '/',
+      collections: [
+        {
+          slug: 'posts',
+          filters: [{ postType: 'post' }],
+          sortBy: 'creationDate',
+          sortDirection: 'desc',
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.data?.collections?.[0]?.sortDirection).toBe('desc');
+    expect(result.data?.collections?.[0]?.slug).toBe('posts');
+  });
+
+  it('accepts both sortDirection values through collectionSchema', () => {
+    for (const sortDirection of ['asc', 'desc']) {
+      const result = collectionSchema.safeParse({ slug: 'x', sortDirection });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it('is optional: a collection with no sortDirection parses with sortDirection undefined', () => {
+    const result = collectionSchema.safeParse({ slug: 'x', filters: [] });
+    expect(result.success).toBe(true);
+    expect(result.data?.sortDirection).toBeUndefined();
+  });
+
+  it('rejects an unsupported sortDirection value', () => {
+    const result = collectionSchema.safeParse({ slug: 'x', sortDirection: 'up' });
+    expect(result.success).toBe(false);
+  });
+
+  it('drops undeclared keys on parse (documents why sortDirection must be declared)', () => {
+    // A random undeclared key is stripped by default (non-passthrough) —
+    // this is exactly why `sortDirection` must be declared on the schema.
+    const result = collectionSchema.safeParse({
+      slug: 'x',
+      unknownKey: 'boom',
+      sortDirection: 'asc',
+    });
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty('unknownKey');
+    expect(result.data?.sortDirection).toBe('asc');
+  });
+});

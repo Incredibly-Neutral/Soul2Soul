@@ -13,6 +13,7 @@ export const collectionSchema = z.object({
   slug: z.string(),
   filters: z.array(z.any()).optional(),
   sortBy: z.enum(['position', 'creationDate', 'modifiedDate', 'title']).optional(),
+  sortDirection: z.enum(['asc', 'desc']).optional(),
 });
 
 export const templateConfigSchema = z.object({

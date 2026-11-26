@@ -48,7 +48,7 @@ An excerpt from a publication's mapping. The home page lists the posts in a coll
       "file": "home.handlebars",
       "path": "/",
       "collections": [
-        { "slug": "posts", "filters": [{ "postType": "post" }], "sortBy": "date" }
+        { "slug": "posts", "filters": [{ "postType": "post" }], "sortBy": "creationDate", "sortDirection": "desc" }
       ]
     },
     { "reference": "post", "file": "post.handlebars", "path": "/posts/{slug}/" }
@@ -58,6 +58,8 @@ An excerpt from a publication's mapping. The home page lists the posts in a coll
   ]
 }
 ```
+
+Direction is optional: a collection sorts ascending unless it declares `"sortDirection": "desc"`, which this home page does so the newest post comes first. Ascending is what a position-ordered list such as chapters uses.
 
 ## Roadmap
 

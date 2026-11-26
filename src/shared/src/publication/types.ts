@@ -8,10 +8,13 @@
 // ============================================================================
 
 export type CollectionSortBy = 'position' | 'creationDate' | 'modifiedDate' | 'title';
+export type CollectionSortDirection = 'asc' | 'desc';
 
 export interface S2SCollection {
   filters?: any[];
   sortBy?: CollectionSortBy;
+  // Absent means 'asc', so an existing mapping keeps its current order.
+  sortDirection?: CollectionSortDirection;
   slug: string;
 }
 
