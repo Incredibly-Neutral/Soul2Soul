@@ -1,6 +1,7 @@
 {
   "name": "@s2s/publication-contracts",
   "version": "1.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "main": "index.ts",
