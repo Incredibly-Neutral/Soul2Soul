@@ -420,85 +420,103 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         maintainCache,
       });
 
+      // One decrypt per genesis per run. The same genesis can be listed in
+      // several collections (a bundle, a post appearing in two feeds), and the
+      // decrypt, the integrity verdict and the availability error are the same
+      // answer each time. The PROMISE is what is cached, so collections visited
+      // in parallel share one in-flight decrypt and the availability entry is
+      // logged once. A failed decrypt caches null: it is not retried.
+      const decryptedByGenesis = new Map<string, Promise<any | null>>();
+
+      const decryptCollectionItem = async (item: any): Promise<any | null> => {
+        try {
+          const d = await decryptRaw(
+            protocolInfo.pkp,
+            item,
+            authorSafeAddress,
+            publicationModule,
+            signerAddress,
+            rpcs?.L2,
+            { preview },
+          );
+          if (!d) {
+            const errorMsg = `Failed to decrypt item ${item.id || 'unknown'}`;
+            console.log(errorMsg);
+            errors.push(errorMsg);
+            availability.push({
+              kind: 'data',
+              genesis: item.id,
+              cid: item.cid,
+              reason: errorMsg,
+              fatal: false,
+            });
+            return null;
+          }
+          // Integrity: the decrypted plaintext must hash to the
+          // author-signed plaintextHash (the stored body is ciphertext, so
+          // the check in readItemByEntry cannot apply). Hash the RAW bytes
+          // the decryptor returned (d.raw) — never JSON.stringify(d.parsed),
+          // which is not the string the author signed. A mismatch is
+          // handled exactly like a decrypt failure — non-fatal to the page
+          // (the item is dropped), because the remaining collections can
+          // still render honestly. The unverified plaintext is NEVER used.
+          const plaintextVerdict = verifyDecryptedBody(item, d.raw);
+          if (plaintextVerdict === 'mismatch') {
+            const errorMsg = `Plaintext hash mismatch for item ${item.id || 'unknown'}${item.cid ? ` (${item.cid})` : ''}: decrypted body does not match the author-signed plaintextHash`;
+            console.log(errorMsg);
+            errors.push(errorMsg);
+            availability.push({
+              kind: 'data',
+              genesis: item.id,
+              cid: item.cid,
+              reason: errorMsg,
+              fatal: false,
+            });
+            return null;
+          }
+          if (plaintextVerdict !== 'verified') {
+            // Doubt, not tampering: 'weak' (the signed digest is not a
+            // keccak hex — a third-party hash algorithm, which
+            // inspectItemIntegrity also serves as 'unverifiable') or
+            // 'uncheckable' (nothing to check against). Dropping these
+            // would make the collection reader disagree with itself: the
+            // archive path keeps such an item. Log once per verdict and
+            // render.
+            warnUnverifiedDecrypted(plaintextVerdict, String(item.id ?? 'unknown'));
+          }
+          const obj: any = mergeDecrypted(item, d.parsed);
+          obj.path = pathsForCollections(obj, config);
+          return obj;
+        } catch (error) {
+          const errorMsg = `Decryption error for item ${item.id || 'unknown'}: ${error instanceof Error ? error.message : String(error)}`;
+          console.log(errorMsg);
+          errors.push(errorMsg);
+          availability.push({
+            kind: 'data',
+            genesis: item.id,
+            cid: item.cid,
+            reason: errorMsg,
+            fatal: false,
+          });
+          return null;
+        }
+      };
+
       const decryptedCollections: Record<string, any[]> = {};
       for (const key of Object.keys(collections)) {
         const decrypted = await Promise.all(
           collections[key].map(async (item: any) => {
             if (item.encryption) {
-              try {
-                const d = await decryptRaw(
-                  protocolInfo.pkp,
-                  item,
-                  authorSafeAddress,
-                  publicationModule,
-                  signerAddress,
-                  rpcs?.L2,
-                  { preview },
-                );
-                if (!d) {
-                  const errorMsg = `Failed to decrypt item ${item.id || 'unknown'}`;
-                  console.log(errorMsg);
-                  errors.push(errorMsg);
-                  availability.push({
-                    kind: 'data',
-                    genesis: item.id,
-                    cid: item.cid,
-                    reason: errorMsg,
-                    fatal: false,
-                  });
-                  return null;
-                }
-                // Integrity: the decrypted plaintext must hash to the
-                // author-signed plaintextHash (the stored body is ciphertext, so
-                // the check in readItemByEntry cannot apply). Hash the RAW bytes
-                // the decryptor returned (d.raw) — never JSON.stringify(d.parsed),
-                // which is not the string the author signed. A mismatch is
-                // handled exactly like a decrypt failure — non-fatal to the page
-                // (the item is dropped), because the remaining collections can
-                // still render honestly. The unverified plaintext is NEVER used.
-                const plaintextVerdict = verifyDecryptedBody(item, d.raw);
-                if (plaintextVerdict === 'mismatch') {
-                  const errorMsg = `Plaintext hash mismatch for item ${item.id || 'unknown'}${item.cid ? ` (${item.cid})` : ''}: decrypted body does not match the author-signed plaintextHash`;
-                  console.log(errorMsg);
-                  errors.push(errorMsg);
-                  availability.push({
-                    kind: 'data',
-                    genesis: item.id,
-                    cid: item.cid,
-                    reason: errorMsg,
-                    fatal: false,
-                  });
-                  return null;
-                }
-                if (plaintextVerdict !== 'verified') {
-                  // Doubt, not tampering: 'weak' (the signed digest is not a
-                  // keccak hex — a third-party hash algorithm, which
-                  // inspectItemIntegrity also serves as 'unverifiable') or
-                  // 'uncheckable' (nothing to check against). Dropping these
-                  // would make the collection reader disagree with itself: the
-                  // archive path keeps such an item. Log once per verdict and
-                  // render.
-                  warnUnverifiedDecrypted(plaintextVerdict, String(item.id ?? 'unknown'));
-                }
-                const obj = mergeDecrypted(item, d.parsed);
-                return obj;
-              } catch (error) {
-                const errorMsg = `Decryption error for item ${item.id || 'unknown'}: ${error instanceof Error ? error.message : String(error)}`;
-                console.log(errorMsg);
-                errors.push(errorMsg);
-                availability.push({
-                  kind: 'data',
-                  genesis: item.id,
-                  cid: item.cid,
-                  reason: errorMsg,
-                  fatal: false,
-                });
-                return null;
+              const genesisKey = String(item.id ?? item.cid ?? '');
+              let pending = decryptedByGenesis.get(genesisKey);
+              if (!pending) {
+                pending = decryptCollectionItem(item);
+                decryptedByGenesis.set(genesisKey, pending);
               }
-            } else {
-              item.path = pathsForCollections(item, config);
-              return item;
+              return pending;
             }
+            item.path = pathsForCollections(item, config);
+            return item;
           }),
         );
         decryptedCollections[key] = (() => {
@@ -514,8 +532,8 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         })();
         // Members carry no path of their own: give each expanded member the
         // page path its postType resolves to. Only an expanded member is
-        // touched — a plain item already set its path above and keeps exactly
-        // today's behaviour; a pathless encrypted item stays pathless.
+        // touched — a plain or encrypted item already set its path above and
+        // keeps it; an expanded member carries no path of its own.
         for (const item of decryptedCollections[key]) {
           if ('collectionKey' in item) {
             item.path = item.path ?? pathsForCollections(item, config);
@@ -538,6 +556,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       // code-gen, no helper fetch, no eval is attempted here.
       try {
         html = await renderHTML(config, job.templateConfig, templateData, gateway);
+        if (typeof html !== 'string' || html.trim() === '') {
+          throw new Error('template render produced an empty page');
+        }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         availability.push({
