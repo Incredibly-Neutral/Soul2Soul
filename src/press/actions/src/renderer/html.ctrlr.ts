@@ -140,18 +140,25 @@ export const renderHTML = async (
   templateData: any,
   gateway?: string,
 ) => {
-  try {
-    // Fetch step (production-only, gateway-bound)
-    const bundle = await fetchTemplateBundle(config, templateConfig, gateway);
-    if (!bundle) return '';
+  // Fetch step (production-only, gateway-bound). A failed fetch is fatal: never
+  // publish an empty or partial page in place of the real template.
+  const bundle = await fetchTemplateBundle(config, templateConfig, gateway);
+  if (!bundle) throw new Error('template bundle unavailable');
 
-    // Resolve partial CIDs -> source map via the gateway (NOT in the pure path)
-    const partialsSourceMap = await fetchPartialsSourceMap(bundle.partials, gateway);
+  // Resolve partial CIDs -> source map via the gateway (NOT in the pure path)
+  const partialsSourceMap = await fetchPartialsSourceMap(
+    bundle.partials,
+    gateway,
+    bundle.templateSource,
+  );
 
-    // Pure render step from injected sources
-    return renderHTMLFromSource(bundle.templateSource, partialsSourceMap, templateData);
-  } catch (error) {
-    console.error('Error in renderer:', error);
-    return '';
-  }
+  // Pure render step from injected sources
+  const html = renderHTMLFromSource(
+    bundle.templateSource,
+    partialsSourceMap,
+    templateData,
+  );
+
+  if (!html.trim()) throw new Error('template render produced an empty page');
+  return html;
 };

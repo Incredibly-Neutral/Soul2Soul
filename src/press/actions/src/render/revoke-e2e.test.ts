@@ -47,7 +47,7 @@ import { getConfig } from './config.ctrl';
 import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { extractSignerAddress } from '../libs/gates';
-import { fetchTemplateBundle, fetchPartialsSourceMap } from '../renderer/html.ctrlr';
+import { renderHTML } from '../renderer/html.ctrlr';
 import { uploadFile } from '../libs/ipfs.factory';
 
 vi.mock('../../../../shared/src/rendering/helpers', async (importOriginal) => {
@@ -78,15 +78,15 @@ vi.mock('../libs/ens.factory', () => ({
 vi.mock('../libs/gates', () => ({
   extractSignerAddress: vi.fn(),
 }));
-// Keep the real renderHTML/renderHTMLFromSource but stub the gateway-bound
-// template fetch + partial source-map resolution so the REAL render main can
-// complete an ACTIVE render for the home destination in-process.
+// Stub renderHTML itself: mocking the module does NOT replace the
+// fetchTemplateBundle binding that the module's own renderHTML calls, so the
+// real render has to be replaced outright. Everything else in the module stays
+// real, and so does the render action around this call.
 vi.mock('../renderer/html.ctrlr', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../renderer/html.ctrlr')>();
   return {
     ...actual,
-    fetchTemplateBundle: vi.fn(),
-    fetchPartialsSourceMap: vi.fn(),
+    renderHTML: vi.fn(),
   };
 });
 vi.mock('../libs/ipfs.factory', async (importOriginal) => {
@@ -168,8 +168,7 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
     vi.mocked(getManifest).mockReset();
     vi.mocked(getDomainOwnerAndModules).mockReset();
     vi.mocked(extractSignerAddress).mockReset();
-    vi.mocked(fetchTemplateBundle).mockReset();
-    vi.mocked(fetchPartialsSourceMap).mockReset();
+    vi.mocked(renderHTML).mockReset();
     vi.mocked(uploadFile).mockReset();
   });
 
@@ -192,11 +191,7 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
     // a ripple destination (not the triggered id), so with the C/G fix the
     // hasAgreement check is scoped away from it and it must still render ACTIVE.
     vi.mocked(evmRead).mockResolvedValue(false);
-    vi.mocked(fetchTemplateBundle).mockResolvedValue({
-      templateSource: '<html>home</html>',
-      partials: [],
-    } as any);
-    vi.mocked(fetchPartialsSourceMap).mockResolvedValue({});
+    vi.mocked(renderHTML).mockResolvedValue('<html>home</html>');
     vi.mocked(uploadFile).mockResolvedValue(HOME_HTML_CID);
 
     const revokedJob = {
@@ -265,7 +260,7 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
     // (d) the destination (home) is NEVER marked revoked — it is a cascade
     // consequence, not the triggered id. hasAgreement(home) would be false, but the
     // hasAgreement check is scoped to the triggered content only, so home renders
-    // ACTIVE through the real render action.
+    // ACTIVE through the real render action (its template render stubbed).
     const homeUpdateJob = updateInputs.jobs.find((j: any) => j.id === HOME_ID);
     expect(homeUpdateJob).toBeDefined();
     expect(homeUpdateJob.revoked).toBeFalsy();

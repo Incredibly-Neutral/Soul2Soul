@@ -380,6 +380,29 @@ describe('render action — v2 envelope dates', () => {
   });
 });
 
+describe('render action — template output', () => {
+  it('fails the job with a fatal "template" entry when renderHTML returns an empty page', async () => {
+    vi.mocked(renderHTML).mockResolvedValue('   ');
+
+    const result = await main(input());
+    const failure = result as { ok: boolean; error?: string; trace: any[] };
+
+    expect(failure.ok).toBe(false);
+    expect(failure.error).toContain('template render failed');
+    expect(failure.error).toContain('empty page');
+    const availabilityTrace = failure.trace.find((t: any) => t?.availability) as
+      | { availability: Record<string, unknown>[] }
+      | undefined;
+    expect(availabilityTrace).toBeDefined();
+    const entry = availabilityTrace!.availability[0];
+    expect(entry.kind).toBe('template');
+    expect(entry.fatal).toBe(true);
+    // Nothing is signed or published from an empty page.
+    expect(vi.mocked(addAndSignMetadata)).not.toHaveBeenCalled();
+    expect(vi.mocked(uploadFile)).not.toHaveBeenCalled();
+  });
+});
+
 describe('render action — decrypted integrity (encrypted collection items)', () => {
   const encryptedItem = {
     id: '0x' + '33'.repeat(32),
@@ -498,6 +521,83 @@ describe('render action — decrypted integrity (encrypted collection items)', (
       collections: Record<string, unknown[]>;
     };
     expect(templateData.collections.posts).toHaveLength(1);
+  });
+
+  it('gives a decrypted collection item the path its postType resolves to', async () => {
+    vi.mocked(decryptRaw).mockResolvedValue({
+      raw: PLAINTEXT,
+      parsed: JSON.parse(PLAINTEXT) as never,
+      rawFromDecryptor: true,
+    });
+
+    const result = await main(input(collections));
+
+    expect(result.ok).toBe(true);
+    const templateData = vi.mocked(renderHTML).mock.calls[0][2] as {
+      collections: Record<string, Record<string, unknown>[]>;
+    };
+    // mergeDecrypted hands back no path of its own; the render sets it from the
+    // merged item, exactly as the plaintext branch does.
+    expect(templateData.collections.posts[0].path).toBe('/coll');
+    expect(vi.mocked(pathsForCollections)).toHaveBeenCalledTimes(1);
+  });
+
+  it('decrypts a genesis listed in two collections only once', async () => {
+    vi.mocked(fetchCollections).mockResolvedValue({
+      collections: {
+        posts: [encryptedItem] as never,
+        drafts: [encryptedItem] as never,
+      },
+      drift: null,
+      skips: [],
+    });
+    vi.mocked(decryptRaw).mockResolvedValue({
+      raw: PLAINTEXT,
+      parsed: JSON.parse(PLAINTEXT) as never,
+      rawFromDecryptor: true,
+    });
+
+    const result = await main(input([{ slug: 'posts' }, { slug: 'drafts' }]));
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(decryptRaw)).toHaveBeenCalledTimes(1);
+    const templateData = vi.mocked(renderHTML).mock.calls[0][2] as {
+      collections: Record<string, unknown[]>;
+    };
+    expect(templateData.collections.posts).toHaveLength(1);
+    expect(templateData.collections.drafts).toHaveLength(1);
+  });
+
+  it('decrypts the same genesis at two different cids separately', async () => {
+    const otherCid = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zz';
+    const otherVersion = { ...encryptedItem, cid: otherCid };
+    vi.mocked(fetchCollections).mockResolvedValue({
+      collections: {
+        posts: [encryptedItem] as never,
+        drafts: [otherVersion] as never,
+      },
+      drift: null,
+      skips: [],
+    });
+    vi.mocked(decryptRaw).mockResolvedValue({
+      raw: PLAINTEXT,
+      parsed: JSON.parse(PLAINTEXT) as never,
+      rawFromDecryptor: true,
+    });
+
+    const result = await main(input([{ slug: 'posts' }, { slug: 'drafts' }]));
+
+    expect(result.ok).toBe(true);
+    // Same id, different cid: two bodies, so two decrypts and two integrity
+    // checks. The cid is part of the cache key.
+    expect(vi.mocked(decryptRaw)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(decryptRaw).mock.calls[0][1].cid).toBe(ENCRYPTED_CID);
+    expect(vi.mocked(decryptRaw).mock.calls[1][1].cid).toBe(otherCid);
+    const templateData = vi.mocked(renderHTML).mock.calls[0][2] as {
+      collections: Record<string, { cid?: string }[]>;
+    };
+    expect(templateData.collections.posts[0].cid).toBe(ENCRYPTED_CID);
+    expect(templateData.collections.drafts[0].cid).toBe(otherCid);
   });
 
   it('surfaces a collection skip (forged body upstream) as a non-fatal data entry', async () => {

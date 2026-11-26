@@ -669,40 +669,98 @@ export const replacePartials = (
   return processTemplate(result, templateData);
 };
 
+const partialName = (path: string): string =>
+  path.substring(path.lastIndexOf("/") + 1).split(".")[0];
+
+// A bare partial name: `{{> name}}` and nothing else. Anything a name-shaped
+// token cannot express — a Handlebars built-in such as `{{> @partial-block}}`,
+// a dotted name, or a parameterised reference such as
+// `{{> footer title="x"}}` — is not a reference the fetcher resolves: it stays
+// in the source for `replacePartials`, which leaves it literal (as it always
+// has).
+const STATIC_PARTIAL_NAME = /^[A-Za-z0-9_-]+$/;
+
+// `{{> name}}` references in a template or partial source.
+const referencedPartialNames = (source: string): Set<string> => {
+  const names = new Set<string>();
+  const regex = /{{\s*>\s*([^\s}]+)\s*}}/g;
+  let match;
+  while ((match = regex.exec(source)) !== null) {
+    if (STATIC_PARTIAL_NAME.test(match[1])) names.add(match[1]);
+  }
+  return names;
+};
+
 /**
  * PRODUCTION gateway wrapper: resolves partial CIDs to source text.
  *
- * Fetches each partial's content from the IPFS gateway (`cat?arg=<cid>`) and
- * returns a `{ name -> rawSource }` map keyed by the partial's filename. This
+ * Fetches only the partials the template actually references, transitively:
+ * start from the bare `{{> name}}` references in `templateSource`, fetch that
+ * wave in parallel, then scan each fetched partial for new references and
+ * fetch the next wave. A BARE name that is missing from the listing, a non-OK
+ * response, or a thrown fetch fails the whole render. Only bare `{{> name}}`
+ * references are fetched; a built-in, dotted or parameterised tag is not a
+ * fetch target and is left to `replacePartials`, which leaves it literal. This
  * is the ONLY place the gateway `cat?arg=partial.cid` fetch lives — it is NOT
  * part of the pure `replacePartials` path.
  */
 export const fetchPartialsSourceMap = async (
   partials: Partial[],
-  gateway?: string,
+  gateway: string | undefined,
+  templateSource: string,
 ): Promise<{ [key: string]: string }> => {
-  const partialsSourceMap: { [key: string]: string } = {};
-
+  const cidByName = new Map<string, string>();
   for (const partial of partials) {
-    try {
-      const response = await fetchWithTimeout(
-        `${gateway}/api/v0/cat?arg=${partial.cid}`,
-        { method: "POST" },
-        30_000,
-      );
+    cidByName.set(partialName(partial.path), partial.cid);
+  }
 
-      if (!response.ok) continue;
+  const partialsSourceMap: { [key: string]: string } = {};
+  const seen = new Set<string>();
+  let wave = referencedPartialNames(templateSource);
 
-      const content = await response.text();
+  while (wave.size > 0) {
+    const names = [...wave].filter((name) => !seen.has(name));
+    if (names.length === 0) break;
+    for (const name of names) seen.add(name);
 
-      // Get filename without path or extension
-      const name = partial.path
-        .substring(partial.path.lastIndexOf("/") + 1)
-        .split(".")[0];
+    const fetched = await Promise.all(
+      names.map(async (name) => {
+        const cid = cidByName.get(name);
+        if (!cid) {
+          throw new Error(`partial not found in template listing: ${name}`);
+        }
+
+        let response: Response;
+        try {
+          response = await fetchWithTimeout(
+            `${gateway}/api/v0/cat?arg=${cid}`,
+            { method: "POST" },
+            30_000,
+          );
+        } catch (error) {
+          throw new Error(
+            `partial fetch failed: ${name} (${(error as Error).message})`,
+          );
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `partial fetch failed: ${name} (${response.status})`,
+          );
+        }
+
+        return [name, await response.text()] as const;
+      }),
+    );
+
+    const next = new Set<string>();
+    for (const [name, content] of fetched) {
       partialsSourceMap[name] = content;
-    } catch (error) {
-      continue;
+      for (const ref of referencedPartialNames(content)) {
+        if (!seen.has(ref)) next.add(ref);
+      }
     }
+    wave = next;
   }
 
   return partialsSourceMap;
@@ -720,7 +778,11 @@ export const processPartials = async (
   templateData: TemplateData,
   gateway?: string,
 ): Promise<string> => {
-  const partialsSourceMap = await fetchPartialsSourceMap(partials, gateway);
+  const partialsSourceMap = await fetchPartialsSourceMap(
+    partials,
+    gateway,
+    template,
+  );
   return replacePartials(template, partialsSourceMap, templateData);
 };
 

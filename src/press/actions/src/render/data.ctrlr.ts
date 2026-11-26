@@ -406,6 +406,48 @@ export const filterCollection = (allDeals: any[], collection: any): any[] => {
 };
 
 /**
+ * Body fields an ENCRYPTED item carries in the clear, so a collection filter on
+ * one of them can be judged before decryption. Everything else (title, slug,
+ * custom, content) lives inside the ciphertext and is deferred to the
+ * post-decrypt filter in render/main.ts.
+ */
+const PUBLIC_BODY_KEYS = new Set([
+  'id',
+  'author',
+  'locale',
+  'parent',
+  'position',
+  'postType',
+  'creationDate',
+  'modifiedDate',
+  'tags',
+  'attributes',
+  'publication',
+  'label',
+]);
+
+/**
+ * PURE: does an ENCRYPTED item satisfy the parts of `collection.filters` that
+ * can be judged while the body is still ciphertext?
+ *
+ * Only filters whose keys are public now are applied; a filter on a private
+ * key is treated as passing here (render/main.ts filters again after
+ * decryption, where the private value finally exists). Keeping the item is the
+ * point: dropping it now on a title/slug/custom mismatch would lose an item
+ * nobody has read yet.
+ */
+const passesPublicFilters = (item: any, collection: any): boolean => {
+  if (collection.filters === undefined) return true;
+  return collection.filters.every((filter: any) =>
+    Object.entries(filter).every(([key, value]) => {
+      if (!PUBLIC_BODY_KEYS.has(key)) return true;
+      const itemVal = item[key];
+      return Array.isArray(itemVal) ? itemVal.includes(value) : itemVal === value;
+    }),
+  );
+};
+
+/**
  * PURE collection sorter: orders a filtered `items[]` per the collection's
  * optional `sortBy` key. Shared by production `fetchCollections` and the dev
  * render action (which injects `allDeals[]`).
@@ -757,7 +799,15 @@ export const fetchCollections = async (
     // members are judged. Every non-container keeps today's filter exactly.
     collections[collection.slug] = sortCollection(
       allDeals.filter(
-        (item) => isCollectionContainer(item) || filterCollection([item], collection).length > 0,
+        (item) =>
+          isCollectionContainer(item) ||
+          // An encrypted item is judged only on the fields it still exposes
+          // (see passesPublicFilters); a plaintext item keeps exactly
+          // filterCollection. Both are filtered again after decryption in
+          // render/main.ts, where the private fields exist.
+          (item.encryption === true
+            ? passesPublicFilters(item, collection)
+            : filterCollection([item], collection).length > 0),
       ),
       collection,
     );
