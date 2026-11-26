@@ -426,6 +426,50 @@ describe('sortCollection: creationDate / modifiedDate', () => {
       ids(sortCollection(millis, { slug: 'x', sortBy: 'creationDate', sortDirection: 'desc' })),
     ).toEqual(['m3', 'm2', 'm1']);
   });
+
+  // toBody() writes the signed instant with String(), so the flat body a
+  // collection sorts carries unix seconds as a DIGIT STRING, and Date.parse of
+  // that string is NaN. This is the shape production serves.
+  const digitSeconds = [
+    { id: 'd3', creationDate: '1766000000', modifiedDate: '1764000000' },
+    { id: 'd1', creationDate: '1764000000', modifiedDate: '1766000000' },
+    { id: 'd2', creationDate: '1765000000', modifiedDate: '1765000000' },
+  ];
+
+  it('sorts digit-string second timestamps ascending', () => {
+    expect(ids(sortCollection(digitSeconds, { slug: 'x', sortBy: 'creationDate' }))).toEqual([
+      'd1',
+      'd2',
+      'd3',
+    ]);
+    expect(ids(sortCollection(digitSeconds, { slug: 'x', sortBy: 'modifiedDate' }))).toEqual([
+      'd3',
+      'd2',
+      'd1',
+    ]);
+  });
+
+  it('sorts digit-string second timestamps descending', () => {
+    expect(
+      ids(sortCollection(digitSeconds, { slug: 'x', sortBy: 'creationDate', sortDirection: 'desc' })),
+    ).toEqual(['d3', 'd2', 'd1']);
+    expect(
+      ids(sortCollection(digitSeconds, { slug: 'x', sortBy: 'modifiedDate', sortDirection: 'desc' })),
+    ).toEqual(['d1', 'd2', 'd3']);
+  });
+
+  it('sorts digit-string milliseconds and keeps ISO strings comparable with them', () => {
+    const mixed = [
+      { id: 'iso-new', creationDate: '2025-12-18T00:00:00.000Z' },
+      { id: 'digit-ms-old', creationDate: '1764000000000' },
+      { id: 'digit-s-mid', creationDate: '1765000000' },
+    ];
+    expect(ids(sortCollection(mixed, { slug: 'x', sortBy: 'creationDate' }))).toEqual([
+      'digit-ms-old',
+      'digit-s-mid',
+      'iso-new',
+    ]);
+  });
 });
 
 describe('sortCollection: title', () => {

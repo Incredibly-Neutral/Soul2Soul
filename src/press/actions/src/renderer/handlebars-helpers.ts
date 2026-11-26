@@ -3,7 +3,7 @@ function logObjectWithPosts(label: string, data: any) {
   if (Array.isArray(data)) {
     const truncatedPosts = data.map((p) => ({
       title: p?.title,
-      creation_date: p?.creation_date,
+      creationDate: p?.creationDate ?? p?.creation_date,
       stream_id: p?.stream_id?.slice(0, 20) + '...',
     }));
     console.log(label, truncatedPosts);
@@ -12,7 +12,7 @@ function logObjectWithPosts(label: string, data: any) {
       ...data,
       posts: data.posts.map((p) => ({
         title: p?.title,
-        creation_date: p?.creation_date,
+        creationDate: p?.creationDate ?? p?.creation_date,
         stream_id: p?.stream_id?.slice(0, 20) + '...',
       })),
     };
@@ -94,128 +94,69 @@ export const prevNextData = (collection: any, currentPosition: any): any[] => {
   return [ring.prev, ring.next];
 };
 
+/**
+ * A post's creation instant as unix SECONDS, or null when absent or
+ * unparseable. PURE, exported for unit testing.
+ *
+ * A published body carries `creationDate` as a DIGIT STRING of unix seconds
+ * (`toBody` writes `String(p.creationDate)`), so `new Date(raw)` and
+ * `Date.parse(raw)` both come back invalid. A number and an ISO date string are
+ * accepted too, so a dev fixture and a published body agree. `creation_date`
+ * is the retired snake_case name: no body carries it any more, and it stays
+ * only as a fallback for an old injected shape.
+ */
+export const creationTimestamp = (post: any): number | null => {
+  const raw = post?.creationDate ?? post?.creation_date;
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return null;
+    return raw < 1e12 ? Math.floor(raw) : Math.floor(raw / 1000);
+  }
+  const text = String(raw).trim();
+  if (/^\d+$/.test(text)) {
+    const n = Number(text);
+    return n < 1e12 ? n : Math.floor(n / 1000);
+  }
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? null : Math.floor(parsed / 1000);
+};
+
+/** The distinct years a set of posts spans, newest first. PURE, exported. */
+export const uniqueYears = (posts: any[]): string[] => {
+  if (!posts || !Array.isArray(posts)) return [];
+  const years: string[] = [];
+  for (const post of posts) {
+    const timestamp = creationTimestamp(post);
+    if (timestamp == null) continue;
+    const year = new Date(timestamp * 1000).getFullYear().toString();
+    if (!years.includes(year)) years.push(year);
+  }
+  return years.sort((a, b) => parseInt(b) - parseInt(a));
+};
+
+/** The posts whose creation year is `year`, newest first. PURE, exported. */
+export const filterByYear = (year: any, posts: any[]): any[] => {
+  if (!posts || !Array.isArray(posts) || !year) return [];
+  const wanted = String(year);
+  return posts
+    .map((post) => ({ post, timestamp: creationTimestamp(post) }))
+    .filter(
+      (entry): entry is { post: any; timestamp: number } =>
+        entry.timestamp != null &&
+        new Date(entry.timestamp * 1000).getFullYear().toString() === wanted,
+    )
+    .map((entry) => ({ ...entry.post, _timestamp: entry.timestamp }))
+    .sort((a, b) => b._timestamp - a._timestamp);
+};
+
 export const helpers = [
   {
     name: 'unique_years',
-    helper: function (posts: any[]) {
-      if (!posts || !Array.isArray(posts)) {
-        return [];
-      }
-
-      try {
-        // Extract years from creation_date fields
-        const years: string[] = [];
-
-        for (let i = 0; i < posts.length; i++) {
-          const post = posts[i];
-          if (!post || !post.creation_date) continue;
-
-          try {
-            // Try to handle Unix timestamp
-            const dateStr = post.creation_date;
-            let year: string | null = null;
-
-            if (/^\d+$/.test(dateStr)) {
-              // It's a Unix timestamp - convert to year
-              const date = new Date(parseInt(dateStr) * 1000);
-              year = date.getFullYear().toString();
-            } else {
-              // Extract year using regex
-              const match = dateStr.match(/\b(19|20)\d{2}\b/);
-              if (match) {
-                year = match[0];
-              } else if (dateStr.length >= 4 && /^\d{4}/.test(dateStr)) {
-                year = dateStr.substring(0, 4);
-              }
-            }
-
-            if (year && !years.includes(year)) {
-              years.push(year);
-            }
-          } catch (e) {
-            console.error('Error processing post date:', e);
-          }
-        }
-
-        // Sort years in descending order
-        years.sort((a, b) => parseInt(b) - parseInt(a));
-
-        return years;
-      } catch (error) {
-        console.error('Error in unique_years helper:', error);
-        return [];
-      }
-    },
+    helper: uniqueYears,
   },
   {
     name: 'filter_by_year',
-    helper: function (year: any, posts: any[]) {
-      if (!posts || !Array.isArray(posts) || !year) {
-        return [];
-      }
-
-      try {
-        // Filter posts by the given year
-        const filtered: any[] = [];
-
-        for (let i = 0; i < posts.length; i++) {
-          const post = posts[i];
-          if (!post || !post.creation_date) continue;
-
-          try {
-            const dateStr = post.creation_date;
-            let matches = false;
-            let timestamp = 0;
-
-            // Check if it's a Unix timestamp
-            if (/^\d+$/.test(dateStr)) {
-              timestamp = parseInt(dateStr);
-              const date = new Date(timestamp * 1000);
-              const postYear = date.getFullYear().toString();
-              if (postYear === year) {
-                matches = true;
-              }
-            } else {
-              // Try to extract year from date string
-              const yearMatch = dateStr.match(/\b(19|20)\d{2}\b/);
-              if (yearMatch && yearMatch[0] === year) {
-                matches = true;
-                // Try to convert to timestamp if it's an ISO date
-                const date = new Date(dateStr);
-                if (!isNaN(date.getTime())) {
-                  timestamp = Math.floor(date.getTime() / 1000);
-                }
-              } else if (dateStr.length >= 4 && dateStr.substring(0, 4) === year) {
-                matches = true;
-              }
-            }
-
-            // If we match the year, add the post to filtered list
-            if (matches) {
-              filtered.push({
-                ...post,
-                _timestamp: timestamp,
-              });
-            }
-          } catch (e) {
-            // Silently continue if there's an error processing a post
-          }
-        }
-
-        // Simple sort by creation_date in descending order (newest first)
-        filtered.sort((a, b) => {
-          const dateA = a._timestamp || (a.creation_date ? parseInt(a.creation_date) : 0);
-          const dateB = b._timestamp || (b.creation_date ? parseInt(b.creation_date) : 0);
-          return dateB - dateA; // Descending order
-        });
-
-        return filtered;
-      } catch (error) {
-        // Log error but continue
-        console.error('Error in filter_by_year helper:', error);
-        return [];
-      }
-    },
+    helper: filterByYear,
   },
   {
     name: 'extract_images',
