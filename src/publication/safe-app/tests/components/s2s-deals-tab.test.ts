@@ -189,7 +189,7 @@ vi.mock('@/state/index.js', () => ({
 import '../../src/components/s2s-deals-tab';
 import '../../src/components/s2s-button';
 import { store } from '../../src/state/index';
-import { loadPendingRenders, savePendingRenders } from '../../src/state/storage';
+import { loadUnpublished, saveUnpublished } from '../../src/state/storage';
 import { renderwithLitActions } from '@s2s/soul2soul-shared';
 
 type DealsTab = LitElement & {
@@ -420,7 +420,7 @@ describe('s2s-deals-tab', () => {
   beforeEach(() => {
     for (const spy of openSpies.splice(0)) spy.mockRestore();
     (store as unknown as { reset: () => void }).reset();
-    savePendingRenders(null);
+    saveUnpublished(null);
     vi.clearAllMocks();
     document.body.replaceChildren();
   });
@@ -980,7 +980,9 @@ describe('s2s-deals-tab', () => {
       // One last read at the cap, then the row stops claiming to wait.
       expect(m.safeIntegration.hasAgreement.mock.calls.length).toBeGreaterThan(readsBeforeCap);
       expect(root.textContent).not.toContain('Waiting for signers');
-      expect(rowRenderButton(root, '0xOffer1')).toBeNull();
+      // The id stays in the list, so the row keeps Publish on offer to retry.
+      expect(rowRenderButton(root, '0xOffer1')).not.toBeNull();
+      expect(root.textContent).toContain('Publish');
       expect(notificationTexts().join(' | ')).toContain(
         'Offer Title: the proposal has not executed. Render site will reconcile it.',
       );
@@ -1467,7 +1469,8 @@ describe('s2s-deals-tab', () => {
 
       // A read that always throws is not an answer, and the cap still holds.
       expect(root.textContent).not.toContain('Waiting for signers');
-      expect(rowRenderButton(root, '0xOffer1')).toBeNull();
+      expect(rowRenderButton(root, '0xOffer1')).not.toBeNull();
+      expect(root.textContent).toContain('Publish');
       expect(notificationTexts().join(' | ')).toContain(
         'Offer Title: the proposal could not be confirmed. Render site will reconcile it.',
       );
@@ -1609,7 +1612,7 @@ describe('s2s-deals-tab', () => {
       findRowButton(root, 'button[data-action="accept"]')!.click();
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
-      expect(loadPendingRenders()).toEqual({ '0xOffer1': true });
+      expect(loadUnpublished()).toEqual(['0xOffer1']);
 
       await vi.advanceTimersByTimeAsync(6_000);
       await flushUpdates(el);
@@ -1618,11 +1621,11 @@ describe('s2s-deals-tab', () => {
       await flushUpdates(el);
 
       expect(rowRenderButton(root, '0xOffer1')).toBeNull();
-      expect(loadPendingRenders()?.['0xOffer1']).toBeUndefined();
+      expect(loadUnpublished() ?? []).not.toContain('0xOffer1');
     });
   });
 
-  it('offers Publish after a teardown and rebuild from the persisted map', async () => {
+  it('offers Publish and Accept after a teardown and rebuild from the persisted list', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [],
       offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
@@ -1640,7 +1643,7 @@ describe('s2s-deals-tab', () => {
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
       expect(root.textContent).toContain('Waiting for signers');
-      expect(loadPendingRenders()).toEqual({ '0xOffer1': true });
+      expect(loadUnpublished()).toEqual(['0xOffer1']);
     });
 
     // A fresh element must recover the step from localStorage, not memory.
@@ -1651,19 +1654,20 @@ describe('s2s-deals-tab', () => {
 
     expect(rowRenderButton(rebuiltRoot, '0xOffer1')).not.toBeNull();
     expect(rebuiltRoot.textContent).toContain('Publish');
-    // An admitted offer cannot be admitted a second time.
-    expect(findRowButton(rebuiltRoot, 'button[data-action="accept"]')).toBeNull();
+    // The persisted list does not hide the offer's own controls.
+    expect(findRowButton(rebuiltRoot, 'button[data-action="accept"]')).not.toBeNull();
     expect(
       findRowButton(rebuiltRoot, 'button[data-action="reject"][data-status="offer"]'),
     ).not.toBeNull();
   });
 
-  it('keeps Remove page on a refused row rebuilt before the proposal executes', async () => {
+  it('does not persist a refused row', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [],
       offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
     });
     m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(false);
     seedRenderPrerequisites();
 
     const el = await mountTab();
@@ -1674,17 +1678,16 @@ describe('s2s-deals-tab', () => {
       findRowButton(root, 'button[data-action="reject"][data-status="offer"]')!.click();
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
-      expect(loadPendingRenders()).toEqual({ '0xOffer1': false });
+      // Nothing is written: the refusal lives in memory until the chain says so.
+      expect(loadUnpublished() ?? []).not.toContain('0xOffer1');
+      expect(root.textContent).toContain('Waiting for signers');
+
+      // Once the proposal executes the row keeps today's in-memory path.
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+      expect(root.textContent).toContain('Remove page');
+      expect(loadUnpublished() ?? []).not.toContain('0xOffer1');
     });
-
-    const rebuilt = await mountTab();
-    const rebuiltRoot = rebuilt.shadowRoot!;
-    await vi.waitFor(() => expect(rebuiltRoot.textContent).toContain('Pending Offers (1)'));
-    await flushUpdates(rebuilt);
-
-    expect(rowRenderButton(rebuiltRoot, '0xOffer1')).not.toBeNull();
-    expect(rebuiltRoot.textContent).toContain('Remove page');
-    expect(findRowButton(rebuiltRoot, 'button[data-action="accept"]')).toBeNull();
   });
 
   it('offers one per-row control, Preview, on deals and offers', async () => {

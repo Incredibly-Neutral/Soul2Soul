@@ -7,7 +7,7 @@ const ROOT_STORAGE_KEY = 'root';
 const OFFERS_STORAGE_KEY = 'offers';
 const PIECES_STORAGE_KEY = 'pieces';
 const PET_NAMES_STORAGE_KEY = 'pet-names';
-const PENDING_RENDERS_STORAGE_KEY = 'pending-renders';
+const UNPUBLISHED_STORAGE_KEY = 'unpublished';
 
 export function loadRootFromStorage(): string | null {
   try {
@@ -125,34 +125,33 @@ export function loadPetNamesFromStorage(): PetNameMap | null {
 }
 
 /**
- * Rows that still owe a render, as genesis -> expects (true = write the page,
- * false = remove it). Kept across remounts so a row that was admitted or
- * refused does not lose its Publish / Remove page control.
+ * Genesis ids whose page is still unpublished. Kept across remounts so an
+ * admitted offer does not lose its Publish control before the proposal runs.
  */
-export function loadPendingRenders(): Record<string, boolean> | null {
+export function loadUnpublished(): string[] | null {
   try {
-    const stored = localStorage.getItem(PENDING_RENDERS_STORAGE_KEY);
+    const stored = localStorage.getItem(UNPUBLISHED_STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed as Record<string, boolean>;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((id): id is string => typeof id === 'string');
       }
     }
   } catch (e) {
-    console.warn('Failed to load pending renders from localStorage:', e);
+    console.warn('Failed to load unpublished ids from localStorage:', e);
   }
   return null;
 }
 
-export function savePendingRenders(map: Record<string, boolean> | null): void {
+export function saveUnpublished(list: string[] | null): void {
   try {
-    if (map === null) {
-      localStorage.removeItem(PENDING_RENDERS_STORAGE_KEY);
+    if (list === null) {
+      localStorage.removeItem(UNPUBLISHED_STORAGE_KEY);
     } else {
-      localStorage.setItem(PENDING_RENDERS_STORAGE_KEY, JSON.stringify(map));
+      localStorage.setItem(UNPUBLISHED_STORAGE_KEY, JSON.stringify(list));
     }
   } catch (e) {
-    console.warn('Failed to save pending renders to localStorage:', e);
+    console.warn('Failed to save unpublished ids to localStorage:', e);
   }
 }
 

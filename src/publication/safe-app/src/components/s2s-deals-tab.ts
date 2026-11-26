@@ -13,7 +13,7 @@ import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { store } from '../state/index.js';
-import { loadPendingRenders, savePendingRenders } from '../state/storage.js';
+import { loadUnpublished, saveUnpublished } from '../state/storage.js';
 import { Deal } from '../types/index.js';
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
@@ -274,8 +274,8 @@ export class S2SDealsTab extends LitElement {
   // written), false from a Refuse (the page is removed). It also decides the
   // only thing the tab says differently about the two: the button label.
   private rowExpects: Record<string, boolean> = {};
-  /** The persisted copy of every row that still owes a render. */
-  private pendingRenders: Record<string, boolean> = {};
+  /** Genesis ids whose page is still unpublished, mirrored to storage. */
+  private unpublished: string[] = [];
   private waitingSince: Record<string, number> = {};
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -354,7 +354,7 @@ export class S2SDealsTab extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this.hydratePendingRenders();
+    this.hydrateUnpublished();
     this.unsubscriber = store.subscribeToDeals(() => this.requestUpdate());
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     // A row can be mid-wait when the element is reattached: its phase survived
@@ -447,7 +447,7 @@ export class S2SDealsTab extends LitElement {
           this.releaseRetained(row.genesis);
           this.setRowPhase(row.genesis, 'idle');
           this.forgetExpectation(row.genesis);
-          this.clearPending(row.genesis);
+          this.clearUnpublished(row.genesis);
         }
       }
     } catch (error) {
@@ -599,55 +599,57 @@ export class S2SDealsTab extends LitElement {
   /** Record what the proposal asks for and start watching the chain for it. */
   private beginWait(genesis: string, expectsAgreement: boolean) {
     this.rowExpects = { ...this.rowExpects, [genesis]: expectsAgreement };
-    this.persistPending(genesis, expectsAgreement);
+    // Only an admit leaves a page to write: a refusal keeps its row in memory
+    // until the chain reports it, and persists nothing.
+    if (expectsAgreement) this.markUnpublished(genesis);
     this.waitingSince = { ...this.waitingSince, [genesis]: Date.now() };
     this.setRowPhase(genesis, 'waiting');
     this.startPoll();
   }
 
   /**
-   * Read the rows that still owe a render back into the phase machine before
-   * the table paints. A remounted tab must offer the same Publish / Remove
-   * page control the row had before it was torn down.
+   * Read the unpublished ids back into the phase machine before the table
+   * paints. A remounted tab must offer the same Publish control the row had
+   * before it was torn down.
    */
-  private hydratePendingRenders() {
-    const stored = loadPendingRenders();
+  private hydrateUnpublished() {
+    const stored = loadUnpublished();
     if (stored === null) return;
     const phases = { ...this.rowPhase };
     const expects = { ...this.rowExpects };
-    const pending = { ...this.pendingRenders };
-    for (const [genesis, expectsAgreement] of Object.entries(stored)) {
-      pending[genesis] = expectsAgreement;
-      expects[genesis] = expectsAgreement;
-      // A reattached element keeps a live phase (waiting, rendering); only a
-      // fresh mount, or a row with nothing in flight, starts at render.
-      if (
-        phases[genesis] === undefined ||
-        phases[genesis] === 'idle' ||
-        phases[genesis] === 'done'
-      ) {
+    const unpublished: string[] = [];
+    for (const genesis of stored) {
+      if (unpublished.includes(genesis)) continue;
+      unpublished.push(genesis);
+      expects[genesis] = true;
+      // A reattached element keeps what is in flight (waiting, rendering);
+      // every other row starts at render.
+      if (phases[genesis] !== 'waiting' && phases[genesis] !== 'rendering') {
         phases[genesis] = 'render';
       }
     }
-    this.pendingRenders = pending;
+    this.unpublished = unpublished;
     this.rowExpects = expects;
     this.rowPhase = phases;
     this.rowRevision += 1;
   }
 
-  /** Record that a row owes a render, so a remount can offer it again. */
-  private persistPending(genesis: string, expectsAgreement: boolean) {
-    this.pendingRenders = { ...this.pendingRenders, [genesis]: expectsAgreement };
-    savePendingRenders(this.pendingRenders);
+  private isUnpublished(genesis: string): boolean {
+    return this.unpublished.includes(genesis);
   }
 
-  /** The row has no render left to owe. */
-  private clearPending(genesis: string) {
-    if (!(genesis in this.pendingRenders)) return;
-    const next = { ...this.pendingRenders };
-    delete next[genesis];
-    this.pendingRenders = next;
-    savePendingRenders(next);
+  /** Remember that a row still owes a page write, so a remount can offer it. */
+  private markUnpublished(genesis: string) {
+    if (this.isUnpublished(genesis)) return;
+    this.unpublished = [...this.unpublished, genesis];
+    saveUnpublished(this.unpublished);
+  }
+
+  /** The row has written its page and owes nothing more. */
+  private clearUnpublished(genesis: string) {
+    if (!this.isUnpublished(genesis)) return;
+    this.unpublished = this.unpublished.filter((id) => id !== genesis);
+    saveUnpublished(this.unpublished.length > 0 ? this.unpublished : null);
   }
 
   private clearWait(genesis: string) {
@@ -760,7 +762,6 @@ export class S2SDealsTab extends LitElement {
         if (hasAgreement === expects) {
           this.clearWait(genesis);
           this.setRowPhase(genesis, 'render');
-          this.persistPending(genesis, expects);
           continue;
         }
         if (expired) {
@@ -851,7 +852,7 @@ export class S2SDealsTab extends LitElement {
         }
       }
       this.setRowPhase(genesis, 'done');
-      this.clearPending(genesis);
+      this.clearUnpublished(genesis);
       this.releaseRetained(genesis);
       await this.loadDeals();
     } catch (error: any) {
@@ -860,10 +861,9 @@ export class S2SDealsTab extends LitElement {
     }
   }
 
-  /** Put a row back on its render step, keeping the map entry it owes. */
+  /** Put a row back on its render step. Storage is left alone: the id stays. */
   private returnToRender(genesis: string) {
     this.setRowPhase(genesis, 'render');
-    this.persistPending(genesis, this.rowExpects[genesis] ?? true);
   }
 
   // ---- per-row preview ----------------------------------------------------
@@ -1109,8 +1109,11 @@ export class S2SDealsTab extends LitElement {
     const phase = this.rowPhase[genesis] ?? 'idle';
     const expects = this.rowExpects[genesis] ?? true;
     const label = expects ? 'Publish' : 'Remove page';
+    // An id still in the unpublished list owes a page write even when nothing
+    // live holds it, so an idle row with that id reads as 'render'.
+    const effective = phase === 'idle' && this.isUnpublished(genesis) ? 'render' : phase;
 
-    switch (phase) {
+    switch (effective) {
       // A done row shows no action at all, like an idle one: the phase still
       // holds (and still releases what it was carrying), it just has nothing
       // left to offer. The notice for a finished removal is already sent by
@@ -1150,10 +1153,8 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell row-actions">
           ${this.isRetained(offer.genesis)
             ? nothing
-            : html`${offer.genesis in this.pendingRenders
-                ? nothing
-                : html`<s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
-                    @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>`}
+            : html`<s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
+                @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
               <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
                 @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>`}
           ${this.renderPreviewControl(offer.genesis)}
