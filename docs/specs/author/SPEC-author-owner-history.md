@@ -6,7 +6,7 @@
 > **Type:** branch — a part of the author side, not a domain in its own right.
 > **Status:** built. `OwnerHistoryModuleV1`, `OwnerHistoryGuard` and the package's one factory,
 > `AuthorFactory`, are in `src/author/contracts/src`, with `test/OwnerHistory.test.ts`,
-> `test/MockSafe.t.sol` and 44 passing tests in the package;
+> `test/MockSafe.t.sol` and 75 passing tests in the package;
 > `scripts/deploy-author-contracts.ts` is the deploy path and `src/author/contracts/README.md`
 > carries the guard's gas-headroom rule. The ABI under `generated/abis/` is the frozen
 > surface: a signature change there is a breaking change for every gate and reader. Deployed on

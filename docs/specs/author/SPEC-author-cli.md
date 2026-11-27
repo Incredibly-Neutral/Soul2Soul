@@ -544,8 +544,13 @@ at its own copy, and every implementation is whatever that factory reports.
 **The shipped default `0xC70e…` is a deployment of the previous factory, and it has no records
 role.** `pnpm deploy:authorcontracts` in `src/author/contracts` (needs `PROTOCOL_PRIVATE_KEY` and
 `PROTOCOL_SAFE_ADDRESS`) deploys `DraftsModuleV1`, `OwnerHistoryModuleV1`, `AuthorFactory`, then the
-records implementation from `@s2s/publication-contracts`, and calls `setRecordsImplementation`. The
-default and `.env` must be updated after that run.
+records implementation from `@s2s/publication-contracts`, and calls `setRecordsImplementation`. That
+is a new factory at a new address, and the factory address is part of the CREATE2 preimage, so every
+author's records module lands at a new address too. Nothing migrates: a Safe's existing records
+module and its `pen_name` and `bio` stay where they are. To use the new factory, point
+`contracts.authorFactory` (or `S2S_AUTHOR_CONTRACTS_FACTORY`) at it and run `s2s author init`, which
+installs a fresh records module and rewrites `pen_name`; `bio` starts empty. The default and `.env`
+must be updated after that run.
 
 Both commands run the same sequence, in order:
 
@@ -608,8 +613,9 @@ the step with `recordsNote` saying so and `records` null.
 `initialize(safe, "")` itself, because `S2SRecordsModuleV0_1` requires the factory as `msg.sender`.
 The create is permissionless on the contract, but the CLI still sends it as a Safe self-call, so the
 Safe is the sender. The fix for a zero implementation is upstream, not this command's:
-`pnpm deploy:authorcontracts` deploys a factory and sets a records implementation on it; `s2s author
-init` then installs the module and writes the pen name.
+`pnpm deploy:authorcontracts` deploys a new factory with a records implementation, and `s2s author
+init` against that factory installs a fresh module there
+([above](#installing-the-author-contracts)).
 
 **The install writes the pen name.** `pen_name` is `setRecord("pen_name", <pet name>)`, sent after
 the module is enabled, when the pet name (trimmed) differs from the record's current value. A re-run
