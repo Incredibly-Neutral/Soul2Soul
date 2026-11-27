@@ -14,10 +14,10 @@ import {
  * viem, same style as `AuthorFactory.test.ts`.
  *
  * The gate's allowlists are constructor arguments, so nothing here hard-codes a
- * Safe address or a Safe code hash. `deployWorld` deploys a `MockSafeProxy`
- * probe, reads `keccak256(eth_getCode(probe))`, and passes that hash in: the
- * gate accepts the fixture's own runtime code, which is the same shape it would
- * accept for Safe's proxy on Base.
+ * Safe address, a Safe code hash, a factory or a module proxy hash. `deployWorld`
+ * deploys probes, reads `keccak256(eth_getCode(probe))` for both the Safe proxy
+ * and the module proxy, and passes those values in: the gate accepts the
+ * fixture's own runtime code, which is the same mechanism it uses for Base.
  *
  * Successful registry writes go through `MockSafeProxy.execCall`, so `msg.sender`
  * at the registry is the Safe address — exactly the caller a real Safe would be.
@@ -81,18 +81,37 @@ async function assertErrorName(abi: readonly unknown[], call: Promise<unknown>, 
   );
 }
 
+function codehashOf(code: Hex | undefined, label: string): Hex {
+  assert.ok(code && code !== '0x', `${label} deployed with no code`);
+  return keccak256(code);
+}
+
 async function deployWorld() {
   const [deployer, alice, bob, stranger] = await viem.getWalletClients();
 
   const singleton = await viem.deployContract('MockSingleton');
   const probe = await viem.deployContract('MockSafeProxy', [singleton.address]);
-  const probeCode = await publicClient.getCode({ address: probe.address });
-  assert.ok(probeCode && probeCode !== '0x', 'the probe proxy deployed with no code');
-  const proxyCodehash = keccak256(probeCode);
+  const proxyCodehash = codehashOf(
+    await publicClient.getCode({ address: probe.address }),
+    'the Safe proxy probe',
+  );
+
+  // The module's factory allowlist and its proxy code hash are the other two
+  // constructor arguments. Both are read from deployed fixtures here; on Base
+  // they come from the env file, never from this test.
+  const factory = await viem.deployContract('MockAuthorFactory');
+  const moduleImpl = await viem.deployContract('MockRecordsImpl', [factory.address]);
+  const moduleProbe = await viem.deployContract('MockModuleProxy', [moduleImpl.address, '0x']);
+  const moduleProxyCodehash = codehashOf(
+    await publicClient.getCode({ address: moduleProbe.address }),
+    'the module proxy probe',
+  );
 
   const gate = await viem.deployContract('S2SAuthorGate', [
     [singleton.address],
     [proxyCodehash],
+    [factory.address],
+    moduleProxyCodehash,
   ]);
   const governance = await viem.deployContract('MockGovernance');
   const registry = await viem.deployContract('S2SRegistry', [
@@ -103,7 +122,12 @@ async function deployWorld() {
   return {
     singleton,
     probe,
+    factory,
+    factoryAddress: factory.address,
+    moduleImpl,
+    moduleProbe,
     proxyCodehash,
+    moduleProxyCodehash,
     gate,
     governance,
     registry,
@@ -117,10 +141,21 @@ async function deployWorld() {
 
 type World = Awaited<ReturnType<typeof deployWorld>>;
 
-/** A Safe fixture plus its own records module, enabled on it. */
-async function newAuthor(w: World) {
+/** A module proxy over `MockRecordsImpl`, bound to `safe` and `factory`. */
+async function deployModule(w: World, safe: string, factory: string = w.factoryAddress) {
+  const implementation = await viem.deployContract('MockRecordsImpl', [factory]);
+  const initData = encodeFunctionData({
+    abi: implementation.abi as never,
+    functionName: 'initialize',
+    args: [safe, '0x'],
+  });
+  return viem.deployContract('MockModuleProxy', [implementation.address, initData]);
+}
+
+/** A Safe fixture plus its own records module proxy, enabled on it. */
+async function newAuthor(w: World, factory?: string) {
   const safe = await viem.deployContract('MockSafeProxy', [w.singletonAddress]);
-  const module = await viem.deployContract('MockRecordsModule', [safe.address]);
+  const module = await deployModule(w, safe.address, factory);
   await safe.write.enableModule([module.address]);
   return { safe, module };
 }
@@ -164,7 +199,7 @@ describe('S2SAuthorGate', () => {
     w = await deployWorld();
   });
 
-  it('accepts a proxy with the allowed code hash and singleton, module enabled and bound to it', async () => {
+  it('accepts a Safe proxy with the allowed hashes, singleton and module factory, enabled and bound', async () => {
     const author = await newAuthor(w);
     assert.equal(
       await w.gate.read.isAuthor([author.safe.address, author.module.address]),
@@ -189,7 +224,7 @@ describe('S2SAuthorGate', () => {
   it('rejects a proxy onto a singleton outside the allowlist', async () => {
     const otherSingleton = await viem.deployContract('MockSingleton');
     const safe = await viem.deployContract('MockSafeProxy', [otherSingleton.address]);
-    const module = await viem.deployContract('MockRecordsModule', [safe.address]);
+    const module = await deployModule(w, safe.address);
     await safe.write.enableModule([module.address]);
 
     // Same proxy runtime code hash as the accepted fixture, different singleton.
@@ -198,7 +233,7 @@ describe('S2SAuthorGate', () => {
 
   it('rejects a Safe that has not enabled the module', async () => {
     const safe = await viem.deployContract('MockSafeProxy', [w.singletonAddress]);
-    const module = await viem.deployContract('MockRecordsModule', [safe.address]);
+    const module = await deployModule(w, safe.address);
     assert.equal(await w.gate.read.isAuthor([safe.address, module.address]), false);
   });
 
@@ -209,6 +244,24 @@ describe('S2SAuthorGate', () => {
     // it fails both the enabled check and the module's own `safe()` answer.
     await author.safe.write.enableModule([other.module.address]);
     assert.equal(await w.gate.read.isAuthor([author.safe.address, other.module.address]), false);
+  });
+
+  it('rejects a stub module that answers every read but is not module-proxy code', async () => {
+    const author = await newAuthor(w);
+    // A Safe can deploy and enable this itself; it names the Safe, the kind and
+    // the allowed factory correctly. Only the module proxy code hash stops it.
+    const stub = await viem.deployContract('MockRecordsStub', [
+      author.safe.address,
+      w.factoryAddress,
+    ]);
+    await author.safe.write.enableModule([stub.address]);
+    assert.equal(await w.gate.read.isAuthor([author.safe.address, stub.address]), false);
+  });
+
+  it('rejects a module proxy naming a factory outside the allowlist', async () => {
+    const unlisted = await viem.deployContract('MockAuthorFactory');
+    const author = await newAuthor(w, unlisted.address);
+    assert.equal(await w.gate.read.isAuthor([author.safe.address, author.module.address]), false);
   });
 
   it('rejects a module address with no code, and does not revert on it', async () => {
@@ -224,7 +277,9 @@ describe('S2SAuthorGate', () => {
     const functions = (w.gate.abi as any[])
       .filter((item) => item.type === 'function')
       .map((item) => item.name);
-    assert.deepEqual(functions, ['isAuthor']);
+    // `RECORDS_KIND` is a constant getter, not writable state; the only call is
+    // the question itself.
+    assert.deepEqual(functions, ['RECORDS_KIND', 'isAuthor']);
   });
 });
 
@@ -299,6 +354,16 @@ describe('S2SRegistry', () => {
     await assertError(w.registry.abi as any[], register(w, safeB, 'dwx'), 'SkeletonTaken');
   });
 
+  it('a hyphen cannot split a pair: cor-n folds with corn, not with c0rn', async () => {
+    assert.equal(await w.registry.read.skeletonOf(['cor-n']), 'com');
+    assert.equal(await w.registry.read.skeletonOf(['corn']), 'com');
+    assert.equal(await w.registry.read.skeletonOf(['c0rn']), 'com');
+
+    await register(w, safeA, 'corn');
+    await assertError(w.registry.abi as any[], register(w, safeB, 'cor-n'), 'SkeletonTaken');
+    await assertError(w.registry.abi as any[], register(w, safeB, 'c0rn'), 'SkeletonTaken');
+  });
+
   it('skeletonOf folds characters, hyphens and the two pairs', async () => {
     assert.equal(await w.registry.read.skeletonOf(['alice']), 'allce');
     assert.equal(await w.registry.read.skeletonOf(['a1ice']), 'allce');
@@ -309,8 +374,13 @@ describe('S2SRegistry', () => {
     assert.equal(await w.registry.read.skeletonOf(['dvvx']), 'dwx');
     assert.equal(await w.registry.read.skeletonOf(['silver']), 'sllver');
     assert.equal(await w.registry.read.skeletonOf(['s1lver']), 'sllver');
-    // One raw pass: the pair rules do not look across a hyphen.
-    assert.equal(await w.registry.read.skeletonOf(['r-n']), 'rn');
+    // Hyphens go before any pair rule: `r-n` is `rn`, and `rn` folds to `m`.
+    assert.equal(await w.registry.read.skeletonOf(['r-n']), 'm');
+    assert.equal(await w.registry.read.skeletonOf(['cor-n']), 'com');
+    // Public and canonical for input registration refuses: uppercase lowers
+    // before anything else.
+    assert.equal(await w.registry.read.skeletonOf(['ALICE']), 'allce');
+    assert.equal(await w.registry.read.skeletonOf(['A-1ICE']), 'allce');
   });
 
   // ── Reservation ────────────────────────────────────────────────
@@ -342,6 +412,8 @@ describe('S2SRegistry', () => {
     assert.equal(setLogs.length, 1);
     assert.equal(setLogs[0]!.args.reserved, true);
     assert.equal(setLogs[0]!.args.skeletonHash, keccak256(new TextEncoder().encode('gold')));
+    // The spelling travels with the skeleton, so an indexer can recover it.
+    assert.equal(setLogs[0]!.args.handle, 'gold');
 
     await unreserve(w, ['gold']);
     const all = await publicClient.getContractEvents({
@@ -352,6 +424,7 @@ describe('S2SRegistry', () => {
     });
     assert.equal(all.length, 2);
     assert.equal(all[1]!.args.reserved, false);
+    assert.equal(all[1]!.args.handle, 'gold');
   });
 
   it('assignReserved is governance-only, gate-checks the Safe, and keeps the name reserved', async () => {
@@ -386,6 +459,31 @@ describe('S2SRegistry', () => {
     // registration: governance can assign it again.
     await assignReserved(w, 'gold', safeB.safe.address, safeB.module.address);
     same(await w.registry.read.resolve(['gold']), safeB.safe.address);
+  });
+
+  it('reserve, unreserve and assignReserved refuse spellings register would refuse', async () => {
+    const invalid: Array<[string, string, bigint[]]> = [
+      ['', 'InvalidLength', []],
+      ['ab', 'InvalidLength', []],
+      ['Gold', 'InvalidChar', [0n]],
+      ['-gold', 'InvalidHyphen', []],
+      ['gold-', 'InvalidHyphen', []],
+      ['g--old', 'InvalidHyphen', []],
+    ];
+    for (const [handle, error, args] of invalid) {
+      await assertError(w.registry.abi as any[], reserve(w, [handle]), error, args);
+      await assertError(w.registry.abi as any[], unreserve(w, [handle]), error, args);
+      await assertError(
+        w.registry.abi as any[],
+        assignReserved(w, handle, safeA.safe.address, safeA.module.address),
+        error,
+        args,
+      );
+    }
+
+    // A refused batch reserved nothing: `gold` is still free to register.
+    assert.deepEqual([...(await w.registry.read.check(['gold']))], [true, 0]);
+    await register(w, safeA, 'gold');
   });
 
   it('assignReserved refuses a name that is not reserved', async () => {
@@ -437,6 +535,12 @@ describe('S2SRegistry', () => {
     });
     assert.equal(releasedLogs.length, 1);
     same(releasedLogs[0]!.args.safe!, safeA.safe.address);
+    // The event carries the skeleton, so a released name's freed spellings are
+    // readable without recomputing them offchain.
+    assert.equal(
+      releasedLogs[0]!.args.skeletonHash,
+      keccak256(new TextEncoder().encode('allce')),
+    );
 
     await assertErrorName(w.registry.abi as any[], register(w, safeB, 'alice'), 'CoolingDown');
     await networkHelpers.time.increase(COOLDOWN_SECONDS);
@@ -461,7 +565,7 @@ describe('S2SRegistry', () => {
 
   it('setRecordsLocation moves the pointer and emits the handle hash', async () => {
     await register(w, safeA, 'alice');
-    const newLocation = await viem.deployContract('MockRecordsModule', [safeA.safe.address]);
+    const newLocation = await deployModule(w, safeA.safe.address);
     await setLocation(w, safeA, newLocation.address);
 
     const entry = await w.registry.read.entry(['alice']);
@@ -490,7 +594,7 @@ describe('S2SRegistry', () => {
 
     // A Safe with the module not enabled.
     const bare = await viem.deployContract('MockSafeProxy', [w.singletonAddress]);
-    const module = await viem.deployContract('MockRecordsModule', [bare.address]);
+    const module = await deployModule(w, bare.address);
     await assertError(
       w.registry.abi as any[],
       bare.write.execCall([w.registry.address, registryCall(w, 'register', ['alice', module.address])]),
@@ -594,6 +698,8 @@ describe('S2SRegistry', () => {
     const secondGate = await viem.deployContract('S2SAuthorGate', [
       [w.singletonAddress],
       [w.proxyCodehash],
+      [w.factoryAddress],
+      w.moduleProxyCodehash,
     ]);
     await asGovernor(w, 'setAuthorGate', [secondGate.address]);
     same(await w.registry.read.authorGate(), secondGate.address);

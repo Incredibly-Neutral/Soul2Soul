@@ -10,7 +10,7 @@ One factory, `AuthorFactory`, deploys every per-author proxy: the drafts log, th
 | `DraftsModuleV1`         | the author's draft log                                                                                                                                                                                          |
 | `OwnerHistoryModuleV1`   | who was an owner of the author Safe, and from which block                                                                                                                                                       |
 | `OwnerHistoryGuard`      | a Safe transaction guard that keeps the owner history current; installed with `setGuard`, which checks ERC-165 first — a guard that does not answer `0xe6d7a83a` reverts `GS300` and cannot be installed at all |
-| `S2SAuthorGate`          | the author check the registry asks: is this address Safe's proxy, onto an allowed singleton, with this records module enabled and bound to it. Both allowlists are constructor arguments, with no admin |
+| `S2SAuthorGate`          | the author check the registry asks: is this address Safe's proxy, onto an allowed singleton, with a records module from an allowed factory enabled and bound to it. All four values are constructor arguments, with no admin |
 | `S2SRegistry`            | handles: one unique name per author Safe, one Safe per name. Non-upgradeable, 90-day cooldown after release, versions never reused |
 
 ## Deployed on Base
@@ -80,10 +80,12 @@ only (uppercase is refused, never folded), then no leading, trailing or doubled 
 reservation, then the skeleton claim, then the cooldown. `InvalidChar(index)` names the byte that
 was refused, so a two-byte character reports the index of its first byte.
 
-The skeleton is the handle with `-` removed, `0→o`, `1→l`, `i→l`, `5→s`, `rn→m`, `vv→w`, applied
-in one pass over the raw bytes. The skeleton is what the one-name-per-spelling rule keys on, so
-`alice`, `a1ice`, `al-ice` and `allce` claim the same name. `skeletonOf(handle)` is public and
-`pure`, and validation uses it, so `check` cannot disagree with `register` about what a name is.
+The skeleton is the handle lowercased, `-` removed, then `0→o`, `1→l`, `i→l`, `5→s`, `rn→m`,
+`vv→w`, applied in one pass over the hyphen-free bytes. The order matters: hyphens go before the
+pair rules, so `cor-n` and `corn` both fold to `com`. The skeleton is what the one-name-per-spelling
+rule keys on, so `alice`, `a1ice`, `al-ice` and `allce` claim the same name. `skeletonOf(handle)` is
+public, `pure`, and canonical even for input registration refuses: `skeletonOf('ALICE')` is
+`allce`. Validation uses the same function, so `check` cannot disagree with `register`.
 
 One handle per Safe and one Safe per handle. `register(handle, recordsLocation)` is called by the
 Safe itself and passes the records module the gate must find enabled on it and bound to it. It
@@ -93,7 +95,9 @@ a later registration gets version + 1 and a version is never reused. `setRecords
 ownering Safe's only other write.
 
 Governance can `reserve`/`unreserve` skeletons, `assignReserved(handle, safe, recordsLocation)` a
-free reserved name to a gate-checked Safe, `setAuthorGate` and `transferGovernance`. It has no
+free reserved name to a gate-checked Safe, `setAuthorGate` and `transferGovernance`. All three name
+writers run the same structure check `register` does, so a spelling an author could never register
+reverts instead of reserving an unmatchable skeleton. It has no
 function that changes a registered entry's `safe`, `version` or `recordsLocation`, and no way to
 release on another Safe's behalf. `assignReserved` leaves the reservation set: a released assigned
 name returns to the reserved pool, not to public registration.
@@ -115,32 +119,46 @@ that case.
 
 `S2SAuthorGate.isAuthor(safe, recordsModule)` answers in this order: `safe` has code; its
 `codehash` is one of the allowed Safe proxy runtime hashes; `safe.masterCopy()` is an allowed
-singleton; `recordsModule` has code; `safe.isModuleEnabled(recordsModule)`; and
-`recordsModule.safe() == safe`. The code hash is the anchor because any contract can answer
-`masterCopy()`, and the proxy answers `masterCopy()` from its own dispatcher, so a contract that
-passed the hash test cannot lie about its singleton. There is no try/catch: a proxy that passed the
-hash test cannot revert on `masterCopy()`, and a module whose `safe()` reverts fails the
-registration rather than being treated as a no.
+singleton; `recordsModule` has code; its `codehash` is the allowed module proxy hash; its
+`moduleKind()` is `keccak256("s2s.module.records")`; its `factory()` is in the allowed factory list;
+`safe.isModuleEnabled(recordsModule)`; and `recordsModule.safe() == safe`. There is no try/catch: a
+proxy that passed its hash test cannot revert on the reads above, and a call that does revert fails
+the registration rather than being treated as a no.
 
-Both allowlists are constructor arguments and there is no setter, so a wrong value is permanent in
+The Safe code hash proves the bytecode is Safe's proxy runtime code, not that the canonical tooling
+made the contract: anyone can deploy a Safe proxy with that code, and such a Safe is accepted
+because the registry registers author Safes, not provenance. The module's factory allowlist is where
+provenance is enforced: a Safe can deploy a stub module and enable it, and a stub can answer
+`safe()`, `moduleKind()` and `factory()` correctly, but it cannot have the module proxy's runtime
+code, and a proxy from an unlisted factory is refused after the code and kind match.
+
+All four values are constructor arguments and there is no setter, so a wrong value is permanent in
 that gate and needs a new gate plus `setAuthorGate`. `SAFE_SINGLETONS` is the singleton(s) Base
 proxies point at, read from `masterCopy()` of a Safe you trust or taken from Safe's Base
 deployment. `SAFE_PROXY_CODEHASHES` is `keccak256(eth_getCode(<known Safe proxy>))` on Base, not a
-creation code hash and not a hash from another chain. Re-verify both after any Safe release.
+creation code hash and not a hash from another chain. `AUTHOR_FACTORIES` is the `AuthorFactory`
+address(es) whose records modules are accepted. `MODULE_PROXY_CODEHASH` is
+`keccak256(eth_getCode(<a deployed records module>))`: every module kind shares `S2SModuleProxy`'s
+runtime code, and the publication factory's creation-code hash is a different value. Re-verify all
+four after any Safe or module release.
 
 ## Deploying the registry
 
-`pnpm deploy:registry` deploys `S2SAuthorGate(singletons, proxyCodehashes)` then
+`pnpm deploy:registry` deploys
+`S2SAuthorGate(singletons, proxyCodehashes, authorFactories, moduleProxyCodehash)` then
 `S2SRegistry(gate, governance)`, waits for both receipts, reads back `authorGate()` and
 `governance()`, and prints both addresses. It refuses to run when the RPC's chain id is not Base
-(8453), when either allowlist is empty, when any entry is malformed, when a singleton has no code,
-or when governance is zero or has no code. There is no default governance address.
+(8453), when a list or the module hash is missing, when any entry is malformed, when a singleton or
+factory has no code, or when governance is zero or has no code. There is no default governance
+address.
 
 | env var                 | required | meaning                                                    |
 | ----------------------- | -------- | ---------------------------------------------------------- |
 | `PROTOCOL_PRIVATE_KEY`  | yes      | deployer key, pays gas                                     |
 | `SAFE_SINGLETONS`       | yes      | comma-separated Safe singleton addresses                   |
 | `SAFE_PROXY_CODEHASHES` | yes      | comma-separated `bytes32` proxy runtime code hashes        |
+| `AUTHOR_FACTORIES`      | yes      | comma-separated factories allowed to have made the module  |
+| `MODULE_PROXY_CODEHASH` | yes      | `bytes32` runtime code hash of the module proxy            |
 | `GOVERNANCE_ADDRESS`    | yes      | registry governance; must have code, no default            |
 | `RESERVED_HANDLES`      | no       | seed names to reserve. Only governance can send `reserve`, so unless the deployer is governance the script prints the `to`/`data` to execute |
 | `VITE_DRPC_API_KEY`     | no       | falls back to `https://mainnet.base.org`                   |

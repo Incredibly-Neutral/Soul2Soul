@@ -177,6 +177,12 @@ export type Abi_S2SRegistry = [
         "internalType": "address",
         "name": "safe",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "skeletonHash",
+        "type": "bytes32"
       }
     ],
     "name": "Released",
@@ -196,6 +202,12 @@ export type Abi_S2SRegistry = [
         "internalType": "bool",
         "name": "reserved",
         "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "handle",
+        "type": "string"
       }
     ],
     "name": "ReservedSet",
@@ -783,6 +795,12 @@ export const Abi_S2SRegistry: Abi_S2SRegistry = [
         "internalType": "address",
         "name": "safe",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "skeletonHash",
+        "type": "bytes32"
       }
     ],
     "name": "Released",
@@ -802,6 +820,12 @@ export const Abi_S2SRegistry: Abi_S2SRegistry = [
         "internalType": "bool",
         "name": "reserved",
         "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "handle",
+        "type": "string"
       }
     ],
     "name": "ReservedSet",

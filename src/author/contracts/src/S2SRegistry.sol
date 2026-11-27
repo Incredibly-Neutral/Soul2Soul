@@ -17,12 +17,16 @@ import {IAuthorGate} from "./S2SAuthorGate.sol";
  *         Handle rules are byte rules on the raw UTF-8 bytes, checked in this
  *         order: length 3..32 bytes, then `a-z 0-9 -` only (uppercase is
  *         rejected, never folded), then no leading, trailing or doubled hyphen,
- *         then reservation, then the skeleton claim, then the cooldown.
+ *         then reservation, then the skeleton claim, then the cooldown. The
+ *         same structure check runs in `reserve`, `unreserve` and
+ *         `assignReserved`, so governance cannot reserve or assign a spelling
+ *         that `register` would refuse.
  *
- *         Skeleton: the handle with `-` removed, `0→o`, `1→l`, `i→l`, `5→s`,
- *         `rn→m`, `vv→w`, applied in one pass. The skeleton is what the
- *         one-name-per-spelling rule keys on, so `alice`, `a1ice`, `al-ice` and
- *         `allce` all claim the same name.
+ *         Skeleton: lowercased, `-` removed, then `0→o`, `1→l`, `i→l`, `5→s`,
+ *         `rn→m`, `vv→w`, applied in one pass over the hyphen-free bytes. The
+ *         skeleton is what the one-name-per-spelling rule keys on, so `alice`,
+ *         `a1ice`, `al-ice` and `allce` all claim the same name, and `cor-n`
+ *         folds with `corn`, not with `c0rn`.
  *
  *         Governance can reserve names and assign a reserved name to a Safe. It
  *         has no path to change a registered entry's owner, version or records
@@ -93,9 +97,11 @@ contract S2SRegistry {
         address indexed safe,
         uint32 version
     );
-    event Released(bytes32 indexed handleHash, address indexed safe);
+    event Released(bytes32 indexed handleHash, address indexed safe, bytes32 skeletonHash);
     event RecordsLocationSet(bytes32 indexed handleHash, address location);
-    event ReservedSet(bytes32 indexed skeletonHash, bool reserved);
+    /// @dev `handle` is carried so an indexer can recover the reserved spelling,
+    ///      not just the skeleton it folds to.
+    event ReservedSet(bytes32 indexed skeletonHash, bool reserved, string handle);
     event AuthorGateSet(address gate);
     event GovernanceTransferred(address governance);
 
@@ -145,11 +151,8 @@ contract S2SRegistry {
         if (handleOf[msg.sender] != bytes32(0)) revert AlreadyRegistered();
         if (!IAuthorGate(authorGate).isAuthor(msg.sender, recordsLocation)) revert NotAuthor();
 
+        bytes32 skeletonHash = _requireName(handle);
         bytes32 handleHash = keccak256(bytes(handle));
-        (uint8 reason, uint256 index, bytes32 skeletonHash) = _nameReason(handle);
-        if (reason == REASON_INVALID_LENGTH) revert InvalidLength();
-        if (reason == REASON_INVALID_CHAR) revert InvalidChar(index);
-        if (reason == REASON_INVALID_HYPHEN) revert InvalidHyphen();
         if (reserved[skeletonHash]) revert Reserved();
         if (skeletonOwner[skeletonHash] != bytes32(0)) revert SkeletonTaken();
         uint64 until = coolingUntil[skeletonHash];
@@ -174,7 +177,7 @@ contract S2SRegistry {
         delete skeletonOwner[skeletonHash];
         coolingUntil[skeletonHash] = uint64(block.timestamp) + COOLDOWN;
 
-        emit Released(handleHash, msg.sender);
+        emit Released(handleHash, msg.sender, skeletonHash);
     }
 
     /// @notice Move the owning Safe's records pointer, e.g. after the Safe
@@ -195,22 +198,25 @@ contract S2SRegistry {
     // give away an unclaimed reserved name but can never move one that exists.
 
     /// @notice Reserve the skeletons of `handles` so public registration refuses
-    ///         them. No structure rule is applied here: the reservations are
-    ///         whatever governance names, keyed by skeleton.
+    ///         them. Each handle must pass the same structure check `register`
+    ///         applies; a spelling no author could register is refused rather
+    ///         than reserved as an unmatchable skeleton.
     function reserve(string[] calldata handles) external onlyGovernance {
         for (uint256 i = 0; i < handles.length; i++) {
-            bytes32 skeletonHash = keccak256(bytes(_skeleton(handles[i])));
+            bytes32 skeletonHash = _requireName(handles[i]);
             reserved[skeletonHash] = true;
-            emit ReservedSet(skeletonHash, true);
+            emit ReservedSet(skeletonHash, true, handles[i]);
         }
     }
 
-    /// @notice Return `handles`' skeletons to public registration.
+    /// @notice Return `handles`' skeletons to public registration. Validated for
+    ///         the same reason `reserve` is: an invalid spelling names no
+    ///         skeleton an author could hold.
     function unreserve(string[] calldata handles) external onlyGovernance {
         for (uint256 i = 0; i < handles.length; i++) {
-            bytes32 skeletonHash = keccak256(bytes(_skeleton(handles[i])));
+            bytes32 skeletonHash = _requireName(handles[i]);
             reserved[skeletonHash] = false;
-            emit ReservedSet(skeletonHash, false);
+            emit ReservedSet(skeletonHash, false, handles[i]);
         }
     }
 
@@ -230,8 +236,8 @@ contract S2SRegistry {
         address safe,
         address recordsLocation
     ) external onlyGovernance {
+        bytes32 skeletonHash = _requireName(handle);
         bytes32 handleHash = keccak256(bytes(handle));
-        bytes32 skeletonHash = keccak256(bytes(_skeleton(handle)));
 
         if (!reserved[skeletonHash]) revert Reserved();
         if (entries[handleHash].safe != address(0)) revert SkeletonTaken();
@@ -307,10 +313,11 @@ contract S2SRegistry {
         return (true, REASON_FREE);
     }
 
-    /// @notice The skeleton of `handle`: `-` removed, `0→o`, `1→l`, `i→l`,
-    ///         `5→s`, `rn→m`, `vv→w`, one pass over the bytes.
-    /// @dev One pass, applied on the raw bytes: a pair rule looks at the next
-    ///      raw byte, so `r-n` becomes `rn`, not `m`. Validation uses the same
+    /// @notice The skeleton of `handle`: lowercased, `-` removed, then `0→o`,
+    ///         `1→l`, `i→l`, `5→s`, `rn→m`, `vv→w`, one pass over the
+    ///         hyphen-free bytes.
+    /// @dev Canonical even for input `register` would refuse, so callers can use
+    ///      it to compare spellings before validation. Validation uses the same
     ///      private function, so a rule change cannot make `check` disagree with
     ///      `register`.
     function skeletonOf(string calldata handle) external pure returns (string memory) {
@@ -369,21 +376,43 @@ contract S2SRegistry {
         return (REASON_FREE, 0, keccak256(bytes(_skeleton(handle))));
     }
 
-    /// @dev `-` is dropped; the pair rules run before the digit/letter map, on
-    ///      the next raw byte. The output is trimmed with `mstore` to the bytes
-    ///      actually written.
+    /// @dev Structure check for the three governance writers: `register`'s
+    ///      reason codes raise the same errors here, so a name governance can
+    ///      reserve or assign is exactly a name an author could register.
+    function _requireName(string calldata handle) private pure returns (bytes32 skeletonHash) {
+        (uint8 reason, uint256 index, bytes32 validSkeleton) = _nameReason(handle);
+        if (reason == REASON_INVALID_LENGTH) revert InvalidLength();
+        if (reason == REASON_INVALID_CHAR) revert InvalidChar(index);
+        if (reason == REASON_INVALID_HYPHEN) revert InvalidHyphen();
+        return validSkeleton;
+    }
+
+    /// @dev Lowercase first, then drop every `-`, then fold the remaining bytes:
+    ///      the pair rules see a hyphen-free buffer, so `cor-n` folds to `corn`
+    ///      and then `com`, the same as `corn`. The output is trimmed with
+    ///      `mstore` to the bytes actually written.
     function _skeleton(string memory handle) private pure returns (string memory) {
         bytes memory raw = bytes(handle);
-        bytes memory out = new bytes(raw.length);
-        uint256 length;
 
+        // Canonical case and hyphens out, in that order, before any pair rule.
+        bytes memory stripped = new bytes(raw.length);
+        uint256 strippedLength;
         for (uint256 i = 0; i < raw.length; i++) {
             bytes1 c = raw[i];
+            if (c >= 0x41 && c <= 0x5a) c = bytes1(uint8(c) + 32);
             if (c == 0x2d) continue;
-            if (c == 0x72 && i + 1 < raw.length && raw[i + 1] == 0x6e) {
+            stripped[strippedLength++] = c;
+        }
+
+        bytes memory out = new bytes(strippedLength);
+        uint256 length;
+
+        for (uint256 i = 0; i < strippedLength; i++) {
+            bytes1 c = stripped[i];
+            if (c == 0x72 && i + 1 < strippedLength && stripped[i + 1] == 0x6e) {
                 out[length++] = 0x6d; // rn -> m
                 i++;
-            } else if (c == 0x76 && i + 1 < raw.length && raw[i + 1] == 0x76) {
+            } else if (c == 0x76 && i + 1 < strippedLength && stripped[i + 1] == 0x76) {
                 out[length++] = 0x77; // vv -> w
                 i++;
             } else if (c == 0x30) {

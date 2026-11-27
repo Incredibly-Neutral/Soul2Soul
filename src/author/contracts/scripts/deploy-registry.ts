@@ -1,11 +1,12 @@
 /**
  * Deploy `S2SAuthorGate` and `S2SRegistry` on Base.
  *
- * The gate's two allowlists are constructor arguments and have no setter, so
- * this script refuses to run on an empty list and refuses any chain that is not
- * Base. The values must be verified against the Safe deployments on the chain
- * this registry is for — a wrong proxy code hash rejects every real Safe, and a
- * wrong singleton accepts a proxy pointed at a fake implementation.
+ * The gate's four constructor values have no setter, so this script refuses to
+ * run with an empty list or hash and refuses any chain that is not Base. The
+ * values must be verified against the deployments on the chain this registry is
+ * for — a wrong proxy code hash rejects every real Safe, a wrong singleton
+ * accepts a proxy pointed at a fake implementation, and a wrong module proxy
+ * hash rejects every real records module.
  *
  * Usage:
  *   cd src/author/contracts && pnpm deploy:registry
@@ -14,6 +15,8 @@
  *   PROTOCOL_PRIVATE_KEY    deployer key, pays gas
  *   SAFE_SINGLETONS         comma-separated Safe singleton addresses
  *   SAFE_PROXY_CODEHASHES   comma-separated keccak256 of Safe's proxy runtime code
+ *   AUTHOR_FACTORIES        comma-separated factories allowed to have made the module
+ *   MODULE_PROXY_CODEHASH   keccak256 of the module proxy's runtime code
  *   GOVERNANCE_ADDRESS      the registry's governance; must have code, no default
  *
  * Optional:
@@ -35,8 +38,18 @@
  * creation code, and do not copy a hash from another chain: Safe deploys
  * different proxy bytecode per chain and per release.
  *
- * Re-verify both after every Safe release. They are immutable in the gate; a
- * changed Safe proxy needs a new gate and `setAuthorGate` on the registry.
+ * `AUTHOR_FACTORIES`: the `AuthorFactory` address(es) whose records modules this
+ * gate accepts, plus any other factory the deployment uses for the records
+ * kind. A module naming a factory outside this list is refused even when its
+ * code and kind are correct.
+ *
+ * `MODULE_PROXY_CODEHASH`: `keccak256(eth_getCode(<a deployed records module>))`
+ * on Base. The module proxy is `S2SModuleProxy`; every module kind shares its
+ * runtime code, so any deployed module proxy answers the same hash. Do not use
+ * the publication factory's creation-code hash: that is a different value.
+ *
+ * Re-verify all four after every Safe or module release. They are immutable in
+ * the gate; a change needs a new gate and `setAuthorGate` on the registry.
  */
 
 import {
@@ -182,6 +195,25 @@ async function main() {
   }
   const codehashes = codehashInputs.map((value) => value.toLowerCase()) as `0x${string}`[];
 
+  const factoryInputs = listFromEnv('AUTHOR_FACTORIES');
+  if (factoryInputs.length === 0) {
+    console.error('❌ AUTHOR_FACTORIES is empty. The gate has no admin: list the allowed factories now.');
+    process.exit(1);
+  }
+  const invalidFactory = factoryInputs.find((value) => !isAddress(value));
+  if (invalidFactory) {
+    console.error(`❌ AUTHOR_FACTORIES contains a non-address: ${invalidFactory}`);
+    process.exit(1);
+  }
+  const authorFactories = factoryInputs.map((value) => getAddress(value)) as `0x${string}`[];
+
+  const moduleProxyInput = process.env.MODULE_PROXY_CODEHASH;
+  if (!moduleProxyInput || !/^0x[0-9a-fA-F]{64}$/.test(moduleProxyInput)) {
+    console.error('❌ MODULE_PROXY_CODEHASH not set or not a bytes32 (there is no default)');
+    process.exit(1);
+  }
+  const moduleProxyCodehash = moduleProxyInput.toLowerCase() as `0x${string}`;
+
   const governanceInput = process.env.GOVERNANCE_ADDRESS;
   if (!governanceInput || !isAddress(governanceInput)) {
     console.error('❌ GOVERNANCE_ADDRESS not set or not an address (there is no default)');
@@ -214,6 +246,14 @@ async function main() {
     const code = await publicClient.getCode({ address: singleton });
     if (!code || code === '0x') {
       console.error(`❌ SAFE_SINGLETONS entry ${singleton} has no code on Base`);
+      process.exit(1);
+    }
+  }
+
+  for (const factory of authorFactories) {
+    const code = await publicClient.getCode({ address: factory });
+    if (!code || code === '0x') {
+      console.error(`❌ AUTHOR_FACTORIES entry ${factory} has no code on Base`);
       process.exit(1);
     }
   }
@@ -292,8 +332,9 @@ async function main() {
   console.log(`  S2SAuthorGate   ${gate}`);
   console.log(`  S2SRegistry     ${registry}\n`);
   console.log('Nothing else is installed. The registry is non-upgradeable and has no owner.');
-  console.log('The gate allowlists are immutable: re-verify them after any Safe release and');
-  console.log('deploy a new gate plus setAuthorGate if Safe changes its proxy code or singleton.');
+  console.log('The gate values are immutable: re-verify them after any Safe or module release');
+  console.log('and deploy a new gate plus setAuthorGate if the Safe proxy, a singleton, an');
+  console.log('author factory or the module proxy code changes.');
 }
 
 main().catch((err) => {
