@@ -157,6 +157,29 @@ function loadArtifact(name: string): { abi: unknown; bytecode: `0x${string}` } {
   return JSON.parse(readFileSync(artifactPath(name), 'utf-8'));
 }
 
+/**
+ * The byte rules `register` and `reserve` apply, checked before anything is
+ * sent: `reserve` validates the whole batch, so one bad seed would revert every
+ * good one and leave nothing reserved.
+ */
+function handleProblem(handle: string): string | null {
+  const bytes = new TextEncoder().encode(handle);
+  if (bytes.length < 3 || bytes.length > 32) return `is ${bytes.length} bytes, not 3..32`;
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i]!;
+    const allowed =
+      (b >= 0x61 && b <= 0x7a) || (b >= 0x30 && b <= 0x39) || b === 0x2d;
+    if (!allowed) return `has byte 0x${b.toString(16).padStart(2, '0')} at index ${i}`;
+  }
+  if (bytes[0] === 0x2d || bytes[bytes.length - 1] === 0x2d) {
+    return 'starts or ends with a hyphen';
+  }
+  for (let i = 1; i < bytes.length; i++) {
+    if (bytes[i] === 0x2d && bytes[i - 1] === 0x2d) return 'has a doubled hyphen';
+  }
+  return null;
+}
+
 /** A comma-separated env value, trimmed, blanks dropped, duplicates removed. */
 function listFromEnv(name: string): string[] {
   const raw = process.env[name];
@@ -265,13 +288,13 @@ async function main() {
   console.log(`   Singletons: ${singletons.join(', ')}`);
   console.log(`   Proxy code hashes: ${codehashes.join(', ')}\n`);
 
-  console.log('1/2 Deploying S2SAuthorGate(singletons, proxyCodehashes)...');
+  console.log('1/2 Deploying S2SAuthorGate(singletons, proxyCodehashes, authorFactories, moduleProxyCodehash)...');
   const gate = await deployArtifact(
     client,
     account,
     'S2SAuthorGate',
     loadArtifact('S2SAuthorGate'),
-    [singletons, codehashes],
+    [singletons, codehashes, authorFactories, moduleProxyCodehash],
     rpcUrl,
   );
   console.log(`   ✅ S2SAuthorGate at ${gate}\n`);
@@ -307,6 +330,13 @@ async function main() {
   }
 
   const seeds = listFromEnv('RESERVED_HANDLES');
+  const badSeed = seeds
+    .map((seed) => [seed, handleProblem(seed)] as const)
+    .find(([, problem]) => problem);
+  if (badSeed) {
+    console.error(`❌ RESERVED_HANDLES entry "${badSeed[0]}" ${badSeed[1]}. Nothing was sent.`);
+    process.exit(1);
+  }
   if (seeds.length > 0) {
     const data = encodeFunctionData({ abi: REGISTRY_ABI, functionName: 'reserve', args: [seeds] });
     if (account.address === governance) {
@@ -319,7 +349,11 @@ async function main() {
         account,
         chain: base,
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== 'success') {
+        console.error(`❌ reserve reverted in ${hash}; nothing was reserved.`);
+        process.exit(1);
+      }
       console.log(`   ✅ Reserved in ${hash}\n`);
     } else {
       console.log(`Reserved seed list: ${seeds.length} name(s) from RESERVED_HANDLES.`);

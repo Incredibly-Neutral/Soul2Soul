@@ -141,19 +141,21 @@ async function deployWorld() {
 
 type World = Awaited<ReturnType<typeof deployWorld>>;
 
-/** A module proxy over `MockRecordsImpl`, bound to `safe` and `factory`. */
-async function deployModule(w: World, safe: string, factory: string = w.factoryAddress) {
-  const implementation = await viem.deployContract('MockRecordsImpl', [factory]);
+/** A module proxy over `MockRecordsImpl`, bound to `safe` and indexed by `factory`. */
+async function deployModule(w: World, safe: string, factory: any = w.factory) {
+  const implementation = await viem.deployContract('MockRecordsImpl', [factory.address]);
   const initData = encodeFunctionData({
     abi: implementation.abi as never,
     functionName: 'initialize',
     args: [safe, '0x'],
   });
-  return viem.deployContract('MockModuleProxy', [implementation.address, initData]);
+  const proxy = await viem.deployContract('MockModuleProxy', [implementation.address, initData]);
+  await factory.write.setRecordsModule([safe, proxy.address]);
+  return proxy;
 }
 
 /** A Safe fixture plus its own records module proxy, enabled on it. */
-async function newAuthor(w: World, factory?: string) {
+async function newAuthor(w: World, factory?: any) {
   const safe = await viem.deployContract('MockSafeProxy', [w.singletonAddress]);
   const module = await deployModule(w, safe.address, factory);
   await safe.write.enableModule([module.address]);
@@ -260,8 +262,23 @@ describe('S2SAuthorGate', () => {
 
   it('rejects a module proxy naming a factory outside the allowlist', async () => {
     const unlisted = await viem.deployContract('MockAuthorFactory');
-    const author = await newAuthor(w, unlisted.address);
+    const author = await newAuthor(w, unlisted);
     assert.equal(await w.gate.read.isAuthor([author.safe.address, author.module.address]), false);
+  });
+
+  it('rejects a module the named factory does not index for this Safe', async () => {
+    const author = await newAuthor(w);
+    // Correct proxy code, kind and allowlisted factory, bound to the right Safe
+    // and enabled — but the factory never created it, so its index says zero.
+    const implementation = await viem.deployContract('MockRecordsImpl', [w.factoryAddress]);
+    const initData = encodeFunctionData({
+      abi: implementation.abi as never,
+      functionName: 'initialize',
+      args: [author.safe.address, '0x'],
+    });
+    const rogue = await viem.deployContract('MockModuleProxy', [implementation.address, initData]);
+    await author.safe.write.enableModule([rogue.address]);
+    assert.equal(await w.gate.read.isAuthor([author.safe.address, rogue.address]), false);
   });
 
   it('rejects a module address with no code, and does not revert on it', async () => {
@@ -552,6 +569,23 @@ describe('S2SRegistry', () => {
     same(second.safe, safeB.safe.address);
     same(await w.registry.read.resolve(['alice']), safeB.safe.address);
     assert.equal(await w.registry.read.nameOf([safeB.safe.address]), 'alice');
+  });
+
+  it('a new spelling of the same skeleton continues the version sequence', async () => {
+    await register(w, safeA, 'alice');
+    await release(w, safeA);
+    // The version is keyed by skeleton, so every spelling sees it, before and
+    // after the cooldown.
+    assert.equal(await w.registry.read.versionOf(['alice']), 1);
+    assert.equal(await w.registry.read.versionOf(['al-ice']), 1);
+
+    await networkHelpers.time.increase(COOLDOWN_SECONDS + 1);
+    await register(w, safeB, 'al-ice');
+
+    const entry = await w.registry.read.entry(['al-ice']);
+    assert.equal(entry.version, 2);
+    assert.equal(await w.registry.read.versionOf(['alice']), 2);
+    assert.equal(await w.registry.read.versionOf(['al-ice']), 2);
   });
 
   it('release with no handle reverts NoHandle; setRecordsLocation too', async () => {

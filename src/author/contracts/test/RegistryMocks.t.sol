@@ -75,7 +75,8 @@ contract MockSafeProxy {
  * @notice An ERC-1967 proxy with the same runtime code for every deployment, so
  *         the gate's module code hash check can be exercised by reading one
  *         deployed fixture's code. The production value is the runtime code of
- *         `S2SModuleProxy` on Base, not this fixture's hash.
+ *         the OpenZeppelin `ERC1967Proxy` `AuthorFactory` deploys, not this
+ *         fixture's hash.
  */
 contract MockModuleProxy is ERC1967Proxy {
     constructor(address logic, bytes memory data) ERC1967Proxy(logic, data) {}
@@ -144,7 +145,13 @@ contract MockRecordsStub {
  */
 contract MockAuthorFactory {
 
-    uint256 public answer = 1;
+    /// @dev The index the gate trusts: `AuthorFactory.recordsModule` in
+    ///      miniature, written when a module is created for a Safe.
+    mapping(address => address) public recordsModule;
+
+    function setRecordsModule(address safe, address module) external {
+        recordsModule[safe] = module;
+    }
 }
 
 /**

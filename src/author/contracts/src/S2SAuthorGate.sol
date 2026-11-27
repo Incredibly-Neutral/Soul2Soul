@@ -28,6 +28,16 @@ interface IAuthorRecordsModule {
 }
 
 /**
+ * @dev The one fact `AuthorFactory` can prove and a module cannot: that factory
+ *      records the module it created for each Safe. `factory()` is answered by
+ *      the implementation behind the proxy, so it is a claim; this mapping is
+ *      written only by `createRecordsModule`.
+ */
+interface IAuthorFactory {
+    function recordsModule(address safe) external view returns (address);
+}
+
+/**
  * @title S2SAuthorGate
  * @notice Answers whether an address is an author Safe holding `recordsModule`
  *         as its records module.
@@ -52,10 +62,13 @@ interface IAuthorRecordsModule {
  *
  *         The module side. A Safe can enable any contract, including a stub it
  *         just deployed, and a stub can answer `safe()` with the Safe that made
- *         it. So the module is checked on four things the Safe cannot fake: its
- *         runtime code is the module proxy code, `moduleKind()` is the records
- *         kind, `factory()` is one of the allowed author factories, and only
- *         then is it accepted as enabled and bound to this Safe.
+ *         it. The runtime code must be the module proxy code and `moduleKind()`
+ *         the records kind, but `factory()` is answered by the implementation
+ *         behind the proxy, so anyone can deploy the same proxy runtime over an
+ *         implementation naming an allowlisted factory. The proof is the
+ *         factory's own index: `IAuthorFactory(factory).recordsModule(safe)`
+ *         must return this module, and only the factory writes that mapping.
+ *         Only then is the module accepted as enabled and bound to this Safe.
  *
  *         No try/catch. A contract that passed the Safe proxy hash test cannot
  *         revert on `masterCopy()`, and a module proxy whose implementation
@@ -81,7 +94,8 @@ contract S2SAuthorGate {
      *        for a Safe you trust, and re-verify after any Safe release.
      * @param authorFactories The factories allowed to have deployed the records
      *        module. `AuthorFactory` is one; a module naming any other factory is
-     *        refused even when its code and kind are right.
+     *        refused even when its code and kind are right. A listed factory must
+     *        also answer `recordsModule(safe)` with this module.
      * @param moduleProxyCodehash The keccak256 of the runtime code of the proxy
      *        `AuthorFactory` deploys for a records module — OpenZeppelin's
      *        `ERC1967Proxy`, not `S2SModuleProxy`. Every records module the
@@ -119,7 +133,9 @@ contract S2SAuthorGate {
         if (recordsModule.codehash != _moduleProxyCodehash) return false;
         IAuthorRecordsModule module = IAuthorRecordsModule(recordsModule);
         if (module.moduleKind() != RECORDS_KIND) return false;
-        if (!_authorFactory[module.factory()]) return false;
+        address factory = module.factory();
+        if (!_authorFactory[factory]) return false;
+        if (IAuthorFactory(factory).recordsModule(safe) != recordsModule) return false;
         if (!ISafeModuleManager(safe).isModuleEnabled(recordsModule)) return false;
         return module.safe() == safe;
     }

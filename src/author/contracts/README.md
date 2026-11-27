@@ -71,7 +71,7 @@ holds one live entry per handle:
 | ----------------- | -------------------------------------------------------------- |
 | `safe`            | the owning Safe; `resolve(handle)` returns it, or zero         |
 | `handle`          | the exact registered spelling, not the stripped one            |
-| `version`         | 1 for a first registration, +1 per registration of this handle |
+| `version`         | 1 for a first registration, +1 per registration of this skeleton |
 | `registeredAt`    | block timestamp of the live registration                        |
 | `recordsLocation` | the module named at registration; the Safe can move it          |
 
@@ -90,8 +90,9 @@ public, `pure`, and canonical even for input registration refuses: `skeletonOf('
 One handle per Safe and one Safe per handle. `register(handle, recordsLocation)` is called by the
 Safe itself and passes the records module the gate must find enabled on it and bound to it. It
 reverts `AlreadyRegistered` before it looks at the name. `release()` deletes the entry, frees every
-spelling of the skeleton and starts a **90-day cooldown**; the version survives in `versionOf`, so
-a later registration gets version + 1 and a version is never reused. `setRecordsLocation` is the
+spelling of the skeleton and starts a **90-day cooldown** during which the name is unavailable to
+everyone, including the Safe that released it. The version is keyed by the skeleton in
+`versionOf`, so any later spelling of it gets version + 1 and a version is never reused. `setRecordsLocation` is the
 ownering Safe's only other write.
 
 Governance can `reserve`/`unreserve` skeletons, `assignReserved(handle, safe, recordsLocation)` a
@@ -121,23 +122,27 @@ that case.
 `codehash` is one of the allowed Safe proxy runtime hashes; `safe.masterCopy()` is an allowed
 singleton; `recordsModule` has code; its `codehash` is the allowed module proxy hash; its
 `moduleKind()` is `keccak256("s2s.module.records")`; its `factory()` is in the allowed factory list;
-`safe.isModuleEnabled(recordsModule)`; and `recordsModule.safe() == safe`. There is no try/catch:
+that factory's `recordsModule(safe)` is this module; `safe.isModuleEnabled(recordsModule)`; and
+`recordsModule.safe() == safe`. There is no try/catch:
 the Safe proxy's own reads cannot revert after its hash check, and a module call that reverts fails
 the registration rather than being treated as a no.
 
 The Safe code hash proves the bytecode is Safe's proxy runtime code, not that the canonical tooling
 made the contract: anyone can deploy a Safe proxy with that code, and such a Safe is accepted
-because the registry registers author Safes, not provenance. The module's factory allowlist is where
-provenance is enforced: a Safe can deploy a stub module and enable it, and a stub can answer
-`safe()`, `moduleKind()` and `factory()` correctly, but it cannot have the module proxy's runtime
-code, and a proxy from an unlisted factory is refused after the code and kind match.
+because the registry registers author Safes, not provenance. On the module side, proxy code and
+`moduleKind()` prove the shape, not the origin: `factory()` is answered by the implementation behind
+the proxy, so anyone can deploy the same proxy runtime over an implementation that returns an
+allowlisted factory. What holds is the factory's own index. `AuthorFactory(factory).recordsModule(safe)`
+must return this exact module, and only the factory's `createRecordsModule` writes that mapping. A
+stub, a proxy from an unlisted factory, and a proxy over an implementation naming a listed factory
+the factory never used are all refused.
 
 All four values are constructor arguments and there is no setter, so a wrong value is permanent in
 that gate and needs a new gate plus `setAuthorGate`. `SAFE_SINGLETONS` is the singleton(s) Base
 proxies point at, read from `masterCopy()` of a Safe you trust or taken from Safe's Base
 deployment. `SAFE_PROXY_CODEHASHES` is `keccak256(eth_getCode(<known Safe proxy>))` on Base, not a
 creation code hash and not a hash from another chain. `AUTHOR_FACTORIES` is the `AuthorFactory`
-address(es) whose records modules are accepted. `MODULE_PROXY_CODEHASH` is
+address(es) whose `recordsModule(safe)` must name the module. `MODULE_PROXY_CODEHASH` is
 `keccak256(eth_getCode(<a records module AuthorFactory created>))`. The factory deploys
 OpenZeppelin's `ERC1967Proxy`, not `S2SModuleProxy`, and every records module it deploys shares that
 proxy runtime code. Re-verify all four after any Safe or module release.
@@ -150,14 +155,15 @@ proxy runtime code. Re-verify all four after any Safe or module release.
 `governance()`, and prints both addresses. It refuses to run when the RPC's chain id is not Base
 (8453), when a list or the module hash is missing, when any entry is malformed, when a singleton or
 factory has no code, or when governance is zero or has no code. There is no default governance
-address.
+address. `RESERVED_HANDLES` is checked against the handle byte rules before anything is sent, and a
+`reserve` receipt that is not a success aborts instead of printing `Reserved`.
 
 | env var                 | required | meaning                                                    |
 | ----------------------- | -------- | ---------------------------------------------------------- |
 | `PROTOCOL_PRIVATE_KEY`  | yes      | deployer key, pays gas                                     |
 | `SAFE_SINGLETONS`       | yes      | comma-separated Safe singleton addresses                   |
 | `SAFE_PROXY_CODEHASHES` | yes      | comma-separated `bytes32` proxy runtime code hashes        |
-| `AUTHOR_FACTORIES`      | yes      | comma-separated factories allowed to have made the module  |
+| `AUTHOR_FACTORIES`      | yes      | comma-separated factories that must index the module for the Safe |
 | `MODULE_PROXY_CODEHASH` | yes      | `bytes32` runtime code hash of the module proxy            |
 | `GOVERNANCE_ADDRESS`    | yes      | registry governance; must have code, no default            |
 | `RESERVED_HANDLES`      | no       | seed names to reserve. Only governance can send `reserve`, so unless the deployer is governance the script prints the `to`/`data` to execute |

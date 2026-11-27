@@ -35,9 +35,10 @@ import {IAuthorGate} from "./S2SAuthorGate.sol";
  *         `register` is the owning Safe (`setRecordsLocation`, `release`).
  *
  *         State transitions (see the functions): `register` writes an entry;
- *         `release` deletes it and starts the cooldown; a released handle keeps
- *         its version in `lastVersion`, so a re-registration after the cooldown
- *         gets version + 1 and a version is never reused.
+ *         `release` deletes it and starts the cooldown for every spelling; a
+ *         released skeleton keeps its version in `lastVersion`, so a
+ *         re-registration of any spelling after the cooldown gets version + 1
+ *         and a version is never reused.
  */
 contract S2SRegistry {
 
@@ -60,8 +61,8 @@ contract S2SRegistry {
     uint8 public constant REASON_COOLING = 6;
     uint8 public constant REASON_REGISTERED = 7;
 
-    /// @notice Release cooldown. Blocks a second Safe from taking a name the
-    ///         moment it is freed, not the previous owner from returning.
+    /// @notice Release cooldown. The name is unavailable to everyone, including
+    ///         the Safe that released it, for 90 days.
     uint64 public constant COOLDOWN = 90 days;
 
     /// @notice The gate asked about `msg.sender` at registration time.
@@ -163,9 +164,10 @@ contract S2SRegistry {
 
     /**
      * @notice Give up `msg.sender`'s handle. The entry is deleted, the skeleton
-     *         is freed, and the cooldown starts. The version stays in
-     *         `lastVersion`, so the next registration of this handle continues
-     *         the sequence instead of reusing one.
+     *         is freed, and the cooldown starts: for 90 days the name is
+     *         unavailable to everyone, including the releasing Safe. The version
+     *         stays in `lastVersion`, so the next registration of any spelling
+     *         continues the sequence instead of reusing one.
      */
     function release() external {
         bytes32 handleHash = handleOf[msg.sender];
@@ -285,11 +287,12 @@ contract S2SRegistry {
         return entries[keccak256(bytes(handle))];
     }
 
-    /// @notice The last version ever assigned to `handle`, 0 if never
-    ///         registered. Survives release on purpose: versions are never
-    ///         reused. For the live entry's version use `entry(handle).version`.
+    /// @notice The last version ever assigned to `handle`'s skeleton, 0 if never
+    ///         registered. Survives release on purpose, and is shared by every
+    ///         spelling: `versionOf('al-ice')` sees a released `alice`. For the
+    ///         live entry's version use `entry(handle).version`.
     function versionOf(string calldata handle) external view returns (uint32) {
-        return lastVersion[keccak256(bytes(handle))];
+        return lastVersion[keccak256(bytes(_skeleton(handle)))];
     }
 
     /**
@@ -334,8 +337,8 @@ contract S2SRegistry {
         address safe,
         address recordsLocation
     ) private {
-        uint32 version = lastVersion[handleHash] + 1;
-        lastVersion[handleHash] = version;
+        uint32 version = lastVersion[skeletonHash] + 1;
+        lastVersion[skeletonHash] = version;
         entries[handleHash] = Entry({
             safe: safe,
             handle: handle,
