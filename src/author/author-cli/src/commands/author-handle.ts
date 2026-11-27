@@ -40,6 +40,7 @@ import {
   defaultRegistryWriteSeam,
   handleReasonLabel,
   handleReasonSentence,
+  requireNoHandle,
   requireRegistryDeployed,
   sendRegister,
   sendRelease,
@@ -372,14 +373,8 @@ export async function runAuthorHandle(
   // A positional with no operation flag is a registration.
   if (handle !== undefined) {
     // `check()` answers for any caller, so it cannot see that THIS Safe already
-    // holds a name. `register` reverts AlreadyRegistered; read the Safe's own
-    // handle first and refuse by name instead of sending.
-    const held = await deps.nameOf({ ...read, safe: author.safe });
-    if (held !== null) {
-      throw new CliError(
-        `the Safe ${author.safe} already holds '${held}' — a Safe holds one handle; release it first with \`s2s author handle --release\`; nothing was sent`,
-      );
-    }
+    // holds a name. Read the Safe's own handle first and refuse by name.
+    await requireNoHandle({ ...read, safe: author.safe }, deps);
 
     const status = await deps.check({ ...read, handle });
     if (!status.available) {

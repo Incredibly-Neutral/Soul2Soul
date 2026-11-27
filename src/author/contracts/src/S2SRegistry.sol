@@ -25,8 +25,9 @@ import {IAuthorGate} from "./S2SAuthorGate.sol";
  *         Skeleton: lowercased, `-` removed, then `0→o`, `1→l`, `i→l`, `5→s`,
  *         `rn→m`, `vv→w`, applied in one pass over the hyphen-free bytes. The
  *         skeleton is what the one-name-per-spelling rule keys on, so `alice`,
- *         `a1ice`, `al-ice` and `allce` all claim the same name, and `cor-n`
- *         folds with `corn`, not with `c0rn`.
+ *         `a1ice`, `al-ice` and `allce` all claim the same name, and `cor-n`,
+ *         `corn` and `c0rn` all fold to `com` — a hyphen cannot stop the `rn`
+ *         pair from collapsing.
  *
  *         Governance can reserve names and assign a reserved name to a Safe. It
  *         has no path to change a registered entry's owner, version or records

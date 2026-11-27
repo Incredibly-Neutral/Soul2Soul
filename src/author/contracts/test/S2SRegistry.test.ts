@@ -371,7 +371,7 @@ describe('S2SRegistry', () => {
     await assertError(w.registry.abi as any[], register(w, safeB, 'dwx'), 'SkeletonTaken');
   });
 
-  it('a hyphen cannot split a pair: cor-n folds with corn, not with c0rn', async () => {
+  it('a hyphen cannot split a pair: cor-n, corn and c0rn all fold to com', async () => {
     assert.equal(await w.registry.read.skeletonOf(['cor-n']), 'com');
     assert.equal(await w.registry.read.skeletonOf(['corn']), 'com');
     assert.equal(await w.registry.read.skeletonOf(['c0rn']), 'com');

@@ -334,20 +334,41 @@ function sameAddress(a: Address | null, b: Address): boolean {
   return a !== null && a.toLowerCase() === b.toLowerCase();
 }
 
-/** `register(handle, recordsLocation)` — `onlySelf`, so the Safe is the target. */
-function registerSafeTx(safe: Address, handle: string, records: Address): SafeCall {
+/**
+ * `register(handle, recordsLocation)` executed BY the Safe: the target is the
+ * registry, and the Safe is `msg.sender` when it runs the call. A call to the
+ * Safe itself would carry a registry selector the Safe does not have.
+ */
+function registerSafeTx(registry: Address, handle: string, records: Address): SafeCall {
   return {
-    to: safe,
+    to: registry,
     data: encodeFunctionData({ abi: S2SRegistry, functionName: 'register', args: [handle, records] }),
   };
 }
 
-/** `release()` — `onlySelf`, so the Safe is the target. */
-function releaseSafeTx(safe: Address): SafeCall {
+/** `release()` executed by the Safe, so the registry is the target. */
+function releaseSafeTx(registry: Address): SafeCall {
   return {
-    to: safe,
+    to: registry,
     data: encodeFunctionData({ abi: S2SRegistry, functionName: 'release', args: [] }),
   };
+}
+
+/**
+ * A Safe holds one handle, and `register` reverts `AlreadyRegistered` without
+ * saying which. Read the Safe's own name first so the refusal names it; this
+ * is caller-dependent, which `check(handle)` is not.
+ */
+export async function requireNoHandle(
+  opts: { registry: Address; safe: Address; rpcUrl: string },
+  deps: RegistrySeam,
+): Promise<void> {
+  const held = await deps.nameOf(opts);
+  if (held !== null) {
+    throw new CliError(
+      `the Safe ${opts.safe} already holds '${held}' — a Safe holds one handle; release it first with \`s2s author handle --release\`; nothing was sent`,
+    );
+  }
 }
 
 /** The owner EOA of the key that would sign a self-call. */
@@ -383,7 +404,7 @@ export async function sendRegister(
       handle: null,
       version: null,
       records: opts.records,
-      safeTxs: [registerSafeTx(opts.safe, opts.handle, opts.records)],
+      safeTxs: [registerSafeTx(opts.registry, opts.handle, opts.records)],
       note: proposalNote(owners, 'register', opts.handle),
     };
   }
@@ -436,6 +457,10 @@ export async function registerHandle(
   opts: RegisterHandleOptions,
   deps: RegistryDeps,
 ): Promise<HandleSendResult> {
+  await requireNoHandle(
+    { registry: opts.registry, safe: opts.safe, rpcUrl: opts.rpcUrl },
+    deps,
+  );
   const status = await deps.check({
     registry: opts.registry,
     handle: opts.handle,
@@ -479,7 +504,7 @@ export async function sendRelease(
       handle: current,
       version: before.version,
       records: retained,
-      safeTxs: [releaseSafeTx(opts.safe)],
+      safeTxs: [releaseSafeTx(opts.registry)],
       note: proposalNote(owners, 'release', current),
     };
   }

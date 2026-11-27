@@ -129,6 +129,17 @@ describe('registerOnInstall', () => {
     expect(sent).toHaveLength(0);
   });
 
+  it('refuses a second name for a Safe that already holds one, naming it', async () => {
+    const { deps, sent } = fakeDeps({ name: 'alice' });
+
+    const report = await registerOnInstall(opts({ handle: 'bob' }), deps);
+
+    expect(report.handle).toBeNull();
+    expect(report.handleNote).toContain("already holds 'alice'");
+    expect(report.handleNote).toContain('nothing was sent');
+    expect(sent).toHaveLength(0);
+  });
+
   it('with no --handle reports what the Safe holds and registers nothing', async () => {
     const { deps, sent } = fakeDeps({ name: 'zomi' });
 
@@ -168,15 +179,15 @@ describe('registerOnInstall', () => {
     expect(sent).toHaveLength(0);
     expect(report.handle).toBeNull();
     expect(report.handleNote).toContain('needs owner signatures (2-of-2)');
-    expect(report.handleSafeTxs).toEqual([
-      {
-        to: SAFE,
-        data: encodeFunctionData({
-          abi: S2SRegistry,
-          functionName: 'register',
-          args: ['alice', RECORDS],
-        }),
-      },
-    ]);
+    const calls = report.handleSafeTxs ?? [];
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.to.toLowerCase()).toBe(REGISTRY.toLowerCase());
+    expect(calls[0]?.data).toBe(
+      encodeFunctionData({
+        abi: S2SRegistry,
+        functionName: 'register',
+        args: ['alice', RECORDS],
+      }),
+    );
   });
 });

@@ -442,16 +442,16 @@ describe('s2s author handle <name> (register)', () => {
       version: null,
       state: 'pending-safe',
     });
-    expect(sink.results[0]?.safeTxs).toEqual([
-      {
-        to: SAFE,
-        data: encodeFunctionData({
-          abi: S2SRegistry,
-          functionName: 'register',
-          args: ['alice', RECORDS],
-        }),
-      },
-    ]);
+    const calls = sink.results[0]?.safeTxs as { to: string; data: string }[];
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.to.toLowerCase()).toBe(REGISTRY.toLowerCase());
+    expect(calls[0]?.data).toBe(
+      encodeFunctionData({
+        abi: S2SRegistry,
+        functionName: 'register',
+        args: ['alice', RECORDS],
+      }),
+    );
     expect(sink.human[0]).toContain('needs owner signatures (2-of-2)');
     expect(sink.human[0]).toContain('(Safe call 1 of 1)');
   });
@@ -600,9 +600,12 @@ describe('s2s author handle --release', () => {
       version: 1,
       state: 'pending-safe',
     });
-    expect(sink.results[0]?.safeTxs).toEqual([
-      { to: SAFE, data: encodeFunctionData({ abi: S2SRegistry, functionName: 'release', args: [] }) },
-    ]);
+    const calls = sink.results[0]?.safeTxs as { to: string; data: string }[];
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.to.toLowerCase()).toBe(REGISTRY.toLowerCase());
+    expect(calls[0]?.data).toBe(
+      encodeFunctionData({ abi: S2SRegistry, functionName: 'release', args: [] }),
+    );
     expect(sink.human[0]).toContain('(Safe call 1 of 1)');
   });
 
