@@ -28,11 +28,12 @@
 //      means `createRecordsModule` has not run for this Safe, even when
 //      `recordsModuleAddress` predicts an address for it.
 //
-// `createRecordsModule(safe)` requires `msg.sender == safe`, so it goes out as a
-// Safe self-call: the runner is bound to the Safe, which makes the Safe
-// `msg.sender`. It is idempotent — a second call answers the module that
-// already exists — so the read before it only avoids a pointless userOp; the
-// read after it is the proof that it landed.
+// `createRecordsModule(safe)` is permissionless: the factory deploys for any
+// Safe and initializes the proxy itself, so the Safe need not be the sender.
+// The CLI still sends it as a Safe self-call, so the Safe pays for the deploy
+// and the whole install has one sender. It is idempotent — a second call
+// answers the module that already exists — so the read before it only avoids a
+// pointless userOp; the read after it is the proof that it landed.
 //
 // A records module is `onlySafe` for every write. The Safe is the sender of
 // every `setRecord` / `deleteRecord`, which is the same route `enableModule`
@@ -70,7 +71,7 @@ export const BIO_MAX_LENGTH = 1024;
 /** The zero address: "no implementation", "no prediction", "not deployed". */
 const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
 
-/** A Safe self-call the owners of a multisig must propose. */
+/** A call sent from the Safe; on a multisig the owners propose and co-sign it. */
 export interface RecordsCall {
   to: Address;
   data: Hex;
@@ -238,10 +239,13 @@ export async function resolveRecords(
 }
 
 // ===========================================================================
-// The Safe self-calls
+// The calls the install makes
 // ===========================================================================
 
-/** `createRecordsModule(safe)` — the Safe is the caller, the factory the target. */
+/**
+ * `createRecordsModule(safe)` — permissionless; the CLI sends it as a Safe
+ * self-call so the Safe pays and the install has one sender.
+ */
 export function createRecordsModuleCall(factory: Address, safe: Address): RecordsCall {
   return {
     to: factory,
@@ -406,8 +410,10 @@ export async function planRecords(
       : null;
   const penNameWrite = penName !== undefined && currentPenName !== penName;
 
-  // A Safe this key does not solely own cannot take a self-call: hand the
-  // owners only the calls still to do, in order, and send nothing.
+  // This key cannot send the Safe's self-calls, so hand the owners only the
+  // calls still to do, in order, and send nothing. The create goes in as a
+  // self-call like the rest even though it is permissionless, so one sender
+  // pays for the install.
   if (!opts.soleOwner) {
     const calls: RecordsCall[] = [];
     const described: string[] = [];
