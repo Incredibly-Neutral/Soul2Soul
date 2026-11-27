@@ -31,7 +31,7 @@ import { CliError, UsageError, describeError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { buildRpcEndpoints } from '../adapters/rpc';
 import type { SafeRunnerHandle } from '../adapters/tx-runner';
-import { authorContractsFactory, defaultAuthorContractsSeam } from '../core/author-contracts';
+import { authorContractsFactory, defaultAuthorContractsSeam, type SafeCall } from '../core/author-contracts';
 import { defaultRecordsSeam, resolveRecords, type RecordsResolution } from '../core/author-records';
 import {
   asRegistryAddress,
@@ -66,6 +66,11 @@ export interface AuthorHandleResult {
   records: Address | null;
   available: boolean | null;
   reason: number | null;
+  /** Present only when the write is a proposal the Safe's owners must sign. */
+  state?: 'pending-safe';
+  note?: string;
+  /** The self-call(s) to propose; present with `state: 'pending-safe'`. */
+  safeTxs?: SafeCall[];
 }
 
 /** The registry reads, the records resolution and the one runner seam. */
@@ -182,6 +187,19 @@ function lines(entries: readonly [string, string][]): string {
   return entries
     .map(([label, value]) => (label === '' ? `              ${value}` : `${label.padEnd(12)}: ${value}`))
     .join('\n');
+}
+
+/** The note and the self-calls a multisig report hands to the owners. */
+function proposalEntries(result: AuthorHandleResult): [string, string][] {
+  const entries: [string, string][] = [];
+  if (result.note) entries.push(['', `(${result.note})`]);
+  const calls = result.safeTxs ?? [];
+  calls.forEach((call, index) => {
+    entries.push(['', `(Safe call ${String(index + 1)} of ${String(calls.length)})`]);
+    entries.push(['  to', call.to]);
+    entries.push(['  data', call.data]);
+  });
+  return entries;
 }
 
 /** The status read, with the entry only when the Safe holds a handle. */
@@ -318,6 +336,7 @@ export async function runAuthorHandle(
       { registry, safe: author.safe, config, privateKey: author.privateKey, rpcUrl },
       deps,
     );
+    const pending = released?.state === 'pending-safe';
     const result: AuthorHandleResult = {
       action: 'author.handle.release',
       ...base,
@@ -326,6 +345,13 @@ export async function runAuthorHandle(
       records: released?.records ?? null,
       available: null,
       reason: null,
+      ...(pending && released
+        ? {
+            state: 'pending-safe' as const,
+            ...(released.note ? { note: released.note } : {}),
+            ...(released.safeTxs ? { safeTxs: released.safeTxs } : {}),
+          }
+        : {}),
     };
     out.result(
       result,
@@ -336,7 +362,8 @@ export async function runAuthorHandle(
         ['handle', displayHandle(result.handle)],
         ['version', result.version === null ? '(none)' : String(result.version)],
         ['records', result.records ?? '(none)'],
-        ['', '(handle released — the cooldown has started)'],
+        ...proposalEntries(result),
+        ...(pending ? [] : [['', '(handle released — the cooldown has started)'] as [string, string]]),
       ]),
     );
     return;
@@ -344,6 +371,16 @@ export async function runAuthorHandle(
 
   // A positional with no operation flag is a registration.
   if (handle !== undefined) {
+    // `check()` answers for any caller, so it cannot see that THIS Safe already
+    // holds a name. `register` reverts AlreadyRegistered; read the Safe's own
+    // handle first and refuse by name instead of sending.
+    const held = await deps.nameOf({ ...read, safe: author.safe });
+    if (held !== null) {
+      throw new CliError(
+        `the Safe ${author.safe} already holds '${held}' — a Safe holds one handle; release it first with \`s2s author handle --release\`; nothing was sent`,
+      );
+    }
+
     const status = await deps.check({ ...read, handle });
     if (!status.available) {
       throw new CliError(
@@ -366,6 +403,7 @@ export async function runAuthorHandle(
       },
       deps,
     );
+    const pending = registered.state === 'pending-safe';
     const result: AuthorHandleResult = {
       action: 'author.handle.register',
       ...base,
@@ -374,6 +412,13 @@ export async function runAuthorHandle(
       records: registered.records ?? records,
       available: null,
       reason: null,
+      ...(pending
+        ? {
+            state: 'pending-safe' as const,
+            ...(registered.note ? { note: registered.note } : {}),
+            ...(registered.safeTxs ? { safeTxs: registered.safeTxs } : {}),
+          }
+        : {}),
     };
     out.result(
       result,
@@ -382,9 +427,10 @@ export async function runAuthorHandle(
         ['safe', author.safe],
         ['registry', registry],
         ['handle', displayHandle(result.handle)],
-        ['version', String(result.version)],
+        ['version', result.version === null ? '(none)' : String(result.version)],
         ['records', result.records ?? '(none)'],
-        ['', '(handle registered)'],
+        ...proposalEntries(result),
+        ...(pending ? [] : [['', '(handle registered)'] as [string, string]]),
       ]),
     );
     return;

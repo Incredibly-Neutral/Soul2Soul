@@ -19,6 +19,7 @@
 // ============================================================================
 
 import type { Address } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -33,6 +34,8 @@ import {
   type RegistryEntry,
 } from '../src/core/author-registry';
 import type { RecordsResolution } from '../src/core/author-records';
+import { encodeFunctionData } from 'viem';
+import { S2SRegistry } from '@s2s/author-contracts';
 import type { AuthorsStore } from '../src/core/authors';
 import type { CliConfig } from '../src/core/config';
 import { CliError, UsageError } from '../src/lib/errors';
@@ -49,6 +52,7 @@ const FACTORY = '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E' as Address;
 const IMPLEMENTATION = '0x0000000000000000000000000000000000000d08' as Address;
 const PRIVATE_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
 const RPC = 'http://127.0.0.1:8545';
+const OWNER = privateKeyToAccount(PRIVATE_KEY).address;
 
 const BOOLEANS = { booleanFlags: ['check', 'release'] } as const;
 
@@ -117,6 +121,8 @@ interface FakeOptions {
   authors?: AuthorsStore;
   /** A write that lands as a revert: the read-back keeps the old state. */
   revertWrites?: boolean;
+  /** The Safe's owners; default is a 1-of-1 Safe holding the signing key. */
+  owners?: { owners: Address[]; threshold: number };
 }
 
 function fakeDeps(options: FakeOptions = {}) {
@@ -181,6 +187,7 @@ function fakeDeps(options: FakeOptions = {}) {
       enabledCalls.push(safe);
       return Promise.resolve(options.enabled ?? [SAFE, RECORDS]);
     },
+    readOwners: () => Promise.resolve(options.owners ?? { owners: [OWNER], threshold: 1 }),
     openRunner: () => {
       opened.push(1);
       return Promise.resolve({
@@ -401,11 +408,52 @@ describe('s2s author handle <name> (register)', () => {
     const sink = capture();
 
     await expect(runAuthorHandle(sink.out, parseArgs(['alice'], BOOLEANS), deps)).rejects.toThrow(
-      /cannot register 'alice'.*already registered.*nothing was sent/,
+      /already holds 'alice'.*nothing was sent/,
     );
     expect(sent).toHaveLength(0);
     expect(opened).toHaveLength(0);
     expect(resolveCalls).toHaveLength(0);
+  });
+
+  it('refuses a second name when this Safe already holds one', async () => {
+    const { deps, sent, resolveCalls } = fakeDeps({ name: 'alice' });
+    const sink = capture();
+
+    await expect(runAuthorHandle(sink.out, parseArgs(['bob'], BOOLEANS), deps)).rejects.toThrow(
+      /already holds 'alice'.*one handle.*release it first.*nothing was sent/,
+    );
+    expect(sent).toHaveLength(0);
+    expect(resolveCalls).toHaveLength(0);
+  });
+
+  it('proposes register instead of sending when the key is not the sole owner', async () => {
+    const { deps, sent, opened } = fakeDeps({
+      owners: { owners: [OWNER, OTHER], threshold: 2 },
+    });
+    const sink = capture();
+
+    await runAuthorHandle(sink.out, parseArgs(['alice'], BOOLEANS), deps);
+
+    expect(sent).toHaveLength(0);
+    expect(opened).toHaveLength(0);
+    expect(sink.results[0]).toMatchObject({
+      action: 'author.handle.register',
+      handle: null,
+      version: null,
+      state: 'pending-safe',
+    });
+    expect(sink.results[0]?.safeTxs).toEqual([
+      {
+        to: SAFE,
+        data: encodeFunctionData({
+          abi: S2SRegistry,
+          functionName: 'register',
+          args: ['alice', RECORDS],
+        }),
+      },
+    ]);
+    expect(sink.human[0]).toContain('needs owner signatures (2-of-2)');
+    expect(sink.human[0]).toContain('(Safe call 1 of 1)');
   });
 
   it('refuses an invalid name with the registry sentence', async () => {
@@ -533,6 +581,29 @@ describe('s2s author handle --release', () => {
       reason: null,
     });
     expect(sink.human[0]).toContain('(handle released');
+  });
+
+  it('proposes release instead of sending when the key is not the sole owner', async () => {
+    const { deps, sent, opened } = fakeDeps({
+      name: 'alice',
+      owners: { owners: [OWNER, OTHER], threshold: 2 },
+    });
+    const sink = capture();
+
+    await runAuthorHandle(sink.out, parseArgs(['--release'], BOOLEANS), deps);
+
+    expect(sent).toHaveLength(0);
+    expect(opened).toHaveLength(0);
+    expect(sink.results[0]).toMatchObject({
+      action: 'author.handle.release',
+      handle: 'alice',
+      version: 1,
+      state: 'pending-safe',
+    });
+    expect(sink.results[0]?.safeTxs).toEqual([
+      { to: SAFE, data: encodeFunctionData({ abi: S2SRegistry, functionName: 'release', args: [] }) },
+    ]);
+    expect(sink.human[0]).toContain('(Safe call 1 of 1)');
   });
 
   it('sends nothing when the Safe holds no handle', async () => {

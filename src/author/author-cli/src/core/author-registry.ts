@@ -31,12 +31,18 @@
 // ============================================================================
 
 import { base } from 'viem/chains';
-import { createPublicClient, getAddress, http, type Address, type Hex } from 'viem';
+import { createPublicClient, encodeFunctionData, getAddress, http, type Address, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { S2SRegistry } from '@s2s/author-contracts';
 
 import type { SafeRunnerHandle } from '../adapters/tx-runner';
 import { CliError, UsageError, describeError } from '../lib/errors';
-import { defaultAuthorContractsSeam } from './author-contracts';
+import {
+  defaultAuthorContractsSeam,
+  solelyOwned,
+  type SafeCall,
+  type SafeOwners,
+} from './author-contracts';
 import type { CliConfig } from './config';
 import { defaultForPath, textValue } from './configschema';
 
@@ -289,12 +295,15 @@ export interface RegistryWriteSeam {
     rpcUrl: string;
     safe: Address;
   }): Promise<Pick<SafeRunnerHandle, 'genericTx'>>;
+  /** The Safe's owners and threshold: decides send or propose. */
+  readOwners(opts: { safe: Address; rpcUrl: string }): Promise<SafeOwners>;
 }
 
 export interface RegistryDeps extends RegistrySeam, RegistryWriteSeam {}
 
 export const defaultRegistryWriteSeam: RegistryWriteSeam = {
   openRunner: (opts) => defaultAuthorContractsSeam.openRunner(opts),
+  readOwners: (opts) => defaultAuthorContractsSeam.readOwners(opts),
 };
 
 export interface RegisterHandleOptions {
@@ -309,14 +318,50 @@ export interface RegisterHandleOptions {
   recordsSource?: 'flag';
 }
 
-export interface HandleWriteResult {
-  handle: string;
-  version: number;
+export interface HandleSendResult {
+  /** `sent`: the write landed and was read back. `pending-safe`: a call to propose. */
+  state: 'sent' | 'pending-safe';
+  handle: string | null;
+  version: number | null;
   records: Address | null;
+  /** The Safe self-calls the owners must propose; only for `pending-safe`. */
+  safeTxs?: SafeCall[];
+  /** One human sentence for `pending-safe`. */
+  note?: string;
 }
 
 function sameAddress(a: Address | null, b: Address): boolean {
   return a !== null && a.toLowerCase() === b.toLowerCase();
+}
+
+/** `register(handle, recordsLocation)` — `onlySelf`, so the Safe is the target. */
+function registerSafeTx(safe: Address, handle: string, records: Address): SafeCall {
+  return {
+    to: safe,
+    data: encodeFunctionData({ abi: S2SRegistry, functionName: 'register', args: [handle, records] }),
+  };
+}
+
+/** `release()` — `onlySelf`, so the Safe is the target. */
+function releaseSafeTx(safe: Address): SafeCall {
+  return {
+    to: safe,
+    data: encodeFunctionData({ abi: S2SRegistry, functionName: 'release', args: [] }),
+  };
+}
+
+/** The owner EOA of the key that would sign a self-call. */
+function ownerOf(privateKey: string): Address {
+  return privateKeyToAccount(privateKey as Hex).address;
+}
+
+/** The one sentence a multisig report carries, in the install's spelling. */
+function proposalNote(
+  owners: SafeOwners,
+  what: string,
+  handle: string,
+): string {
+  return `the Safe needs owner signatures (${String(owners.threshold)}-of-${String(owners.owners.length)}) to ${what} '${handle}' — propose the Safe transaction in safeTxs`;
 }
 
 /**
@@ -327,7 +372,22 @@ function sameAddress(a: Address | null, b: Address): boolean {
 export async function sendRegister(
   opts: RegisterHandleOptions,
   deps: RegistryDeps,
-): Promise<HandleWriteResult> {
+): Promise<HandleSendResult> {
+  // A self-call from one signer only lands on a Safe this key solely owns. On
+  // an N-of-M Safe the call is a proposal, exactly as the install's enables and
+  // guard are: nothing is sent, and the owners get the call to propose.
+  const owners = await deps.readOwners({ safe: opts.safe, rpcUrl: opts.rpcUrl });
+  if (!solelyOwned(owners, ownerOf(opts.privateKey))) {
+    return {
+      state: 'pending-safe',
+      handle: null,
+      version: null,
+      records: opts.records,
+      safeTxs: [registerSafeTx(opts.safe, opts.handle, opts.records)],
+      note: proposalNote(owners, 'register', opts.handle),
+    };
+  }
+
   const runner = await deps.openRunner({
     config: opts.config,
     privateKey: opts.privateKey as Hex,
@@ -364,6 +424,7 @@ export async function sendRegister(
 
   const entry = await deps.entry({ ...read, handle: opts.handle });
   return {
+    state: 'sent',
     handle: opts.handle,
     version: entry.version,
     records: entry.recordsLocation === ZERO_ADDRESS ? null : entry.recordsLocation,
@@ -374,7 +435,7 @@ export async function sendRegister(
 export async function registerHandle(
   opts: RegisterHandleOptions,
   deps: RegistryDeps,
-): Promise<HandleWriteResult> {
+): Promise<HandleSendResult> {
   const status = await deps.check({
     registry: opts.registry,
     handle: opts.handle,
@@ -403,12 +464,26 @@ export interface ReleaseHandleOptions {
 export async function sendRelease(
   opts: ReleaseHandleOptions,
   deps: RegistryDeps,
-): Promise<HandleWriteResult | null> {
+): Promise<HandleSendResult | null> {
   const read = { registry: opts.registry, rpcUrl: opts.rpcUrl };
   const current = await deps.nameOf({ ...read, safe: opts.safe });
   if (current === null) return null;
 
   const before = await deps.entry({ ...read, handle: current });
+  const retained = before.recordsLocation === ZERO_ADDRESS ? null : before.recordsLocation;
+
+  const owners = await deps.readOwners({ safe: opts.safe, rpcUrl: opts.rpcUrl });
+  if (!solelyOwned(owners, ownerOf(opts.privateKey))) {
+    return {
+      state: 'pending-safe',
+      handle: current,
+      version: before.version,
+      records: retained,
+      safeTxs: [releaseSafeTx(opts.safe)],
+      note: proposalNote(owners, 'release', current),
+    };
+  }
+
   const runner = await deps.openRunner({
     config: opts.config,
     privateKey: opts.privateKey as Hex,
@@ -424,9 +499,10 @@ export async function sendRelease(
     );
   }
   return {
+    state: 'sent',
     handle: current,
     version: before.version,
-    records: before.recordsLocation === ZERO_ADDRESS ? null : before.recordsLocation,
+    records: retained,
   };
 }
 
@@ -447,6 +523,8 @@ export interface InstallHandleOptions {
 export interface InstallHandleReport {
   handle: string | null;
   handleNote?: string;
+  /** The Safe self-calls the owners must propose; only for a `pending-safe` handle. */
+  handleSafeTxs?: SafeCall[];
 }
 
 /**
@@ -518,6 +596,13 @@ export async function registerOnInstall(
       },
       deps,
     );
+    if (result.state === 'pending-safe') {
+      return {
+        handle: null,
+        ...(result.note ? { handleNote: result.note } : {}),
+        ...(result.safeTxs ? { handleSafeTxs: result.safeTxs } : {}),
+      };
+    }
     return { handle: result.handle };
   } catch (err) {
     return {

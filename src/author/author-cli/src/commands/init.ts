@@ -21,6 +21,7 @@ import type { CommandSpec } from '../lib/command';
 import { initAuthorSafe, type AuthorSafeInitResult } from '../core/author-safe';
 import { installAuthorContracts, type InstallState } from '../core/author-contracts';
 import { registerOnInstall } from '../core/author-registry';
+import { describeError } from '../lib/errors';
 import { rememberAuthorContracts, rememberAuthorSafe } from '../core/authors';
 import type { CliOut } from '../lib/out';
 
@@ -38,6 +39,8 @@ export interface ContractsReport {
   handle: string | null;
   /** Why `handle` is null or was not registered, when there is a reason. */
   handleNote?: string;
+  /** The Safe self-calls the owners must propose to register the handle. */
+  handleSafeTxs?: { to: string; data: string }[];
   state: InstallState;
   txs: string[];
   /** Why the install is `skipped` or `pending-safe`, as core reported it. */
@@ -77,6 +80,7 @@ async function installContracts(
       txs: [],
     };
   }
+  let report: ContractsReport;
   try {
     const result = await installAuthorContracts({
       config: ctx.config,
@@ -122,7 +126,7 @@ async function installContracts(
       out.log(calls > 0 ? `${note} — the calls to propose are below` : note);
     }
 
-    const report: ContractsReport = {
+    report = {
       factory: result.factory,
       drafts: result.drafts,
       ownerHistory: result.ownerHistory,
@@ -136,19 +140,6 @@ async function installContracts(
       ...(result.safeTx ? { safeTx: result.safeTx } : {}),
       ...(result.safeTxs ? { safeTxs: result.safeTxs } : {}),
     };
-
-    // The handle is an addition after the install, never a new way to fail:
-    // `registerOnInstall` answers with a note instead of throwing. With no
-    // `--handle` it only reports what the Safe already holds.
-    const handleReport = await registerOnInstall({
-      config: ctx.config,
-      safe,
-      records: result.records === null ? null : (result.records as Address),
-      privateKey: ctx.config.privateKey as string,
-      rpcUrl,
-      ...(handle !== undefined ? { handle } : {}),
-    });
-    return { ...report, ...handleReport };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     out.warn(`author contracts not installed: ${message} — re-run \`s2s author init\``);
@@ -167,6 +158,30 @@ async function installContracts(
       note: message,
     };
   }
+
+  // The handle is an addition after the install, never a new way to fail: its
+  // own try means nothing it throws can rewrite a successful install as
+  // skipped. With no `--handle` it only reports what the Safe already holds.
+  let handleReport: Awaited<ReturnType<typeof registerOnInstall>>;
+  try {
+    handleReport = await registerOnInstall({
+      config: ctx.config,
+      safe,
+      records: report.records === null ? null : (report.records as Address),
+      privateKey: ctx.config.privateKey as string,
+      rpcUrl,
+      ...(handle !== undefined ? { handle } : {}),
+    });
+  } catch (err) {
+    handleReport =
+      handle === undefined
+        ? { handle: null }
+        : {
+            handle: null,
+            handleNote: `the handle '${handle}' was not registered: ${describeError(err)}`,
+          };
+  }
+  return { ...report, ...handleReport };
 }
 
 /** Every call a multisig's owners must propose, in order. */
@@ -199,6 +214,11 @@ export function initContractsLines(report: ContractsReport): string[] {
   if (report.recordsNote) lines.push(`records note: ${report.recordsNote}`);
   lines.push(`handle      : ${report.handle ?? '(none)'}`);
   if (report.handleNote) lines.push(`handle note : ${report.handleNote}`);
+  for (const [index, call] of (report.handleSafeTxs ?? []).entries()) {
+    lines.push(`              propose Safe call ${String(index + 1)} for the handle:`);
+    lines.push(`              to   ${call.to}`);
+    lines.push(`              data ${call.data}`);
+  }
   if (report.txs.length > 0) lines.push(`contract txs: ${report.txs.join(', ')}`);
   const calls = proposedCalls(report);
   if (report.state === 'pending-safe' && calls.length > 0) {

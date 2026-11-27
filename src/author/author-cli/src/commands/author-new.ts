@@ -44,7 +44,7 @@ import { english, generateMnemonic, mnemonicToAccount } from 'viem/accounts';
 import type { ParsedArgs } from '../lib/args';
 import { flagString } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
-import { UsageError } from '../lib/errors';
+import { UsageError, describeError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import {
   addAuthor,
@@ -190,6 +190,8 @@ export interface ContractsReport {
   handle: string | null;
   /** Why `handle` is null or was not registered, when there is a reason. */
   handleNote?: string;
+  /** The Safe self-calls the owners must propose to register the handle. */
+  handleSafeTxs?: { to: string; data: string }[];
   state: InstallState;
   /** The userOps / txs the install sent. */
   txs: string[];
@@ -264,6 +266,7 @@ async function installContracts(
     return notInstalled(config, 'skipped', note, handle);
   }
 
+  let report: ContractsReport;
   try {
     const result = await installAuthorContracts({
       // The key just filed, not the active one: `author new` may have been run
@@ -309,7 +312,7 @@ async function installContracts(
       out.log(calls > 0 ? `${note} — the calls to propose are below` : note);
     }
 
-    const report: ContractsReport = {
+    report = {
       factory: result.factory,
       drafts: result.drafts,
       ownerHistory: result.ownerHistory,
@@ -323,24 +326,35 @@ async function installContracts(
       ...(result.safeTx ? { safeTx: result.safeTx } : {}),
       ...(result.safeTxs ? { safeTxs: result.safeTxs } : {}),
     };
-
-    // The handle is an addition after the install, never a new way to fail:
-    // `registerOnInstall` answers with a note instead of throwing. With no
-    // `--handle` it only reports what the Safe already holds.
-    const handleReport = await registerOnInstall({
-      config: { ...config, privateKey },
-      safe,
-      records: result.records === null ? null : (result.records as Address),
-      privateKey,
-      rpcUrl,
-      ...(handle !== undefined ? { handle } : {}),
-    });
-    return { ...report, ...handleReport };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     out.warn(`author contracts not installed: ${message} — run \`s2s author init\` to finish`);
     return notInstalled(config, 'skipped', message, handle);
   }
+
+  // The handle is an addition after the install, never a new way to fail: its
+  // own try means nothing it throws can rewrite a successful install as
+  // skipped. With no `--handle` it only reports what the Safe already holds.
+  let handleReport: Awaited<ReturnType<typeof registerOnInstall>>;
+  try {
+    handleReport = await registerOnInstall({
+      config: { ...config, privateKey },
+      safe,
+      records: report.records === null ? null : (report.records as Address),
+      privateKey,
+      rpcUrl,
+      ...(handle !== undefined ? { handle } : {}),
+    });
+  } catch (err) {
+    handleReport =
+      handle === undefined
+        ? { handle: null }
+        : {
+            handle: null,
+            handleNote: `the handle '${handle}' was not registered: ${describeError(err)}`,
+          };
+  }
+  return { ...report, ...handleReport };
 }
 
 /** Every call a multisig's owners must propose, in order. */
@@ -370,6 +384,11 @@ function contractsLines(report: ContractsReport): string[] {
   if (report.recordsNote) lines.push(`records note: ${report.recordsNote}`);
   lines.push(`handle      : ${report.handle ?? '(none)'}`);
   if (report.handleNote) lines.push(`handle note : ${report.handleNote}`);
+  for (const [index, call] of (report.handleSafeTxs ?? []).entries()) {
+    lines.push(`              propose Safe call ${String(index + 1)} for the handle:`);
+    lines.push(`              to   ${call.to}`);
+    lines.push(`              data ${call.data}`);
+  }
   if (report.txs.length > 0) lines.push(`contract txs: ${report.txs.join(', ')}`);
   const calls = proposedCalls(report);
   if (report.state === 'pending-safe' && calls.length > 0) {
