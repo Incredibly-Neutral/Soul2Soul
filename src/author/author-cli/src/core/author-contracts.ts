@@ -1,8 +1,8 @@
 // ============================================================================
 // The author contracts, installed per author Safe.
 //
-// `@s2s/author-contracts` deployed two implementations (the drafts module and
-// the owner-history module) and `AuthorContractsFactory` on Base. Nothing
+// `@s2s/author-contracts` deployed the drafts module, the owner-history module
+// and the records implementation, and `AuthorFactory` on Base. Nothing
 // installs them per author: this module does, for the Safe it is given.
 //
 // The install is four steps:
@@ -14,11 +14,12 @@
 //                     enableModule(ownerHistory) — `onlySelf`, so the Safe must
 //                     be both sender and target of those userOps
 //   4. the guard      the Safe's own setGuard(guard) — `onlySelf` too
-//   5. records        the protocol factory's createModule(safe, recordsKind), the
-//                     Safe's enableModule(records), then setRecord('pen_name')
-//                     through the Safe (see `author-records.ts`). Its own step,
-//                     its own report: a records failure never changes the state
-//                     the four steps above reached.
+//   5. records        the author records factory's createRecordsModule(safe),
+//                     the Safe's enableModule(records), then
+//                     setRecord('pen_name') through the Safe (see
+//                     `author-records.ts`). Its own step, its own report: a
+//                     records failure never changes the state the four steps
+//                     above reached.
 //
 // Why the modules are enabled: an enabled module is how a gate discovers a role.
 // The publication's `canPublish`/`hasAgreement` gates read the author Safe's enabled
@@ -84,7 +85,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 
 import {
-  AuthorContractsFactory,
+  AuthorFactory,
   DraftsModuleV1,
   OwnerHistoryGuard,
   OwnerHistoryModuleV1,
@@ -206,7 +207,7 @@ const SUPPORTS_INTERFACE_ABI = [
 ] as const;
 
 /**
- * The `AuthorContractsFactory` this CLI installs through: the address the deploy
+ * The `AuthorFactory` this CLI installs through: the address the deploy
  * transcript reported. It cannot be re-read from a chain here, so it ships as a
  * default and is overridable (`contracts.authorFactory` / `S2S_AUTHOR_CONTRACTS_FACTORY`).
  */
@@ -266,8 +267,8 @@ export interface InstallResult extends AuthorContracts {
    * proposed the create, and for a create that reverted; code at the address
    * and the Safe's enabled list are the proof, and `recordsNote` says when
    * either is missing. Null means the factory answers no prediction for this
-   * Safe (no implementation for the kind, an unreadable manifest, or a run that
-   * stopped before the kind could be resolved). Reported separately from the
+   * Safe (factory not deployed, no implementation set, or a run that stopped
+   * before the factory could be resolved). Reported separately from the
    * drafts/owner-history state: a records failure never changes `state`.
    */
   records: Address | null;
@@ -429,13 +430,13 @@ export async function readAuthorContracts(
   const [draftsList, historyList] = (await Promise.all([
     client.readContract({
       address: factory,
-      abi: AuthorContractsFactory,
+      abi: AuthorFactory,
       functionName: 'getDraftsModulesForSafe',
       args: [safe],
     }),
     client.readContract({
       address: factory,
-      abi: AuthorContractsFactory,
+      abi: AuthorFactory,
       functionName: 'getOwnerHistoryModulesForSafe',
       args: [safe],
     }),
@@ -645,7 +646,7 @@ export async function readDraftsModuleSafe(opts: ModuleReadOptions): Promise<Add
 export async function readGuardFor(opts: GuardForOptions): Promise<Address | null> {
   const guard = await clientFor(opts.rpcUrl).readContract({
     address: opts.factory,
-    abi: AuthorContractsFactory,
+    abi: AuthorFactory,
     functionName: 'guardFor',
     args: [opts.module],
   });
@@ -665,13 +666,13 @@ export async function readPredictedModules(opts: ReadAuthorContractsOptions): Pr
   const [drafts, ownerHistory] = await Promise.all([
     client.readContract({
       address: opts.factory,
-      abi: AuthorContractsFactory,
+      abi: AuthorFactory,
       functionName: 'draftsModuleAddress',
       args: [opts.safe],
     }),
     client.readContract({
       address: opts.factory,
-      abi: AuthorContractsFactory,
+      abi: AuthorFactory,
       functionName: 'ownerHistoryModuleAddress',
       args: [opts.safe],
     }),
@@ -1021,15 +1022,15 @@ const BUNDLER_NOTE =
   'no ERC-4337 bundler configured — set S2S_PIMLICO_KEY (or S2S_BUNDLER_URL) to deploy the Safe and install the author contracts';
 
 /**
- * A run that stopped before the records kind was resolved. `records` is the
- * factory's prediction, so it is unknown here; the note says so rather than
- * leaving the caller to read null as "the factory predicts nothing".
+ * A run that stopped before the records factory was resolved. `records` is the
+ * factory's answer, so it is unknown here; the note says so rather than leaving
+ * the caller to read null as "the factory knows no module".
  */
 function recordsNotReached(): { records: null; recordsNote: string } {
   return {
     records: null,
     recordsNote:
-      'the records module was not installed: the run stopped before the records kind could be resolved',
+      'the records module was not installed: the run stopped before the records factory could be read',
   };
 }
 
@@ -1243,7 +1244,7 @@ export async function installAuthorContracts(
     let draftsModule: Address | null = current.drafts;
     if (draftsModule === null) {
       out.log(`installing the drafts module for ${safe}…`);
-      await send(factory, JSON.stringify(AuthorContractsFactory), 'createDraftsModule', [safe]);
+      await send(factory, JSON.stringify(AuthorFactory), 'createDraftsModule', [safe]);
       current = await seam.readContracts({ factory, safe, rpcUrl });
       draftsModule = current.drafts;
       if (draftsModule === null) {
@@ -1259,7 +1260,7 @@ export async function installAuthorContracts(
 
     if (proof === null && current.ownerHistory === null) {
       out.log(`installing the owner-history module for ${safe}…`);
-      await send(factory, JSON.stringify(AuthorContractsFactory), 'createOwnerHistoryModule', [
+      await send(factory, JSON.stringify(AuthorFactory), 'createOwnerHistoryModule', [
         safe,
       ]);
       current = await seam.readContracts({ factory, safe, rpcUrl });
@@ -1318,11 +1319,12 @@ export async function installAuthorContracts(
      * 5. the records module. Planned before the exits below, so a Safe that is
      * otherwise finished still gets its records module; written after the
      * enables and the guard, so the Safe is usable first. Its report is its own:
-     * a factory with no records implementation, an unreadable manifest or a
+     * an undeployed factory, a factory with no records implementation or a
      * reverted write leaves the drafts/owner-history state as it was.
      */
     const recordsDeps = {
-      resolve: (o: { safe: Address; rpcUrl: string }) => resolveRecords(o, seam),
+      resolve: (o: { safe: Address; rpcUrl: string }) =>
+        resolveRecords({ ...o, factory }, seam),
       readRecord: (o: { module: Address; key: string; rpcUrl: string }) => seam.record(o),
       readEnabled: async (o: { safe: Address; rpcUrl: string }) =>
         (await seam.readEnabled(o)).modules,
@@ -1375,6 +1377,7 @@ export async function installAuthorContracts(
             module: recordsPlan.records,
             rpcUrl,
             penName: opts.penName,
+            create: recordsPlan.create === true,
           },
           recordsDeps,
         );
@@ -1535,7 +1538,7 @@ export async function installAuthorContracts(
     const stoppedNote =
       recordsNote ??
       (records === null
-        ? 'the records module was not installed: the run stopped before the records kind could be resolved'
+        ? 'the records module was not installed: the run stopped before the records factory could be read'
         : 'the records module was not confirmed: the run stopped before the records step finished');
     return {
       ...index,
@@ -1683,7 +1686,7 @@ export async function migrateAuthorContracts(
     ] as const) {
       if (await seam.readHasCode({ address, rpcUrl })) continue;
       out.log(`creating ${method} for ${safe}…`);
-      await send(factory, JSON.stringify(AuthorContractsFactory), method, [safe]);
+      await send(factory, JSON.stringify(AuthorFactory), method, [safe]);
       if (!(await seam.readHasCode({ address, rpcUrl }))) {
         return {
           ...nothing(),

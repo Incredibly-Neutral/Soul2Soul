@@ -1,37 +1,49 @@
 /**
  * Deploy the whole author-contracts surface: `DraftsModuleV1`,
- * `OwnerHistoryModuleV1`, then `AuthorContractsFactory` over both.
+ * `OwnerHistoryModuleV1`, then `AuthorFactory` over both, then the records
+ * implementation from the publication package and `setRecordsImplementation` on
+ * the factory.
  *
- * Three contracts, because the factory takes the two implementation addresses
- * as constructor arguments and records them as version 1 of two separate
- * histories. Nothing else is deployed here: a per-Safe module proxy (and, for
- * the history, its guard) comes from `createDraftsModule` / `createOwnerHistoryModule`
- * on the factory, one per author Safe.
+ * Four contracts. The factory takes the two author implementation addresses and
+ * the protocol Safe as constructor arguments and records the drafts and history
+ * implementations as version 1 of two separate histories. The records
+ * implementation is not compiled in this package: its artifact is the one
+ * `@s2s/publication-contracts` already exports, deployed with `(authorFactory,
+ * protocolSafe)` so its constructor can read `protocolSafe()` back. Nothing
+ * else is deployed here: a per-Safe module proxy (and, for the history, its
+ * guard) comes from `createDraftsModule` / `createOwnerHistoryModule` /
+ * `createRecordsModule` on the factory, one per author Safe.
  *
  * Usage:
  *   cd src/author/contracts && pnpm deploy:authorcontracts
+ *
+ * Requires in .env:
+ *   PROTOCOL_PRIVATE_KEY   deployer key, pays gas, is the factory's only admin
+ *   PROTOCOL_SAFE_ADDRESS  the Safe the records implementation compares and
+ *                          the third factory constructor argument
  *
  * Write the factory address into the two places the CLI reads, afterwards:
  *   src/author/author-cli/src/core/author-contracts.ts  DEFAULT_AUTHOR_CONTRACTS_FACTORY
  *   src/author/author-cli/src/core/configschema.ts      contracts.authorFactory (env + default)
  * or override per environment with S2S_AUTHOR_CONTRACTS_FACTORY, or
- * `contracts.authorFactory` in the config file. The two implementation
+ * `contracts.authorFactory` in the config file. The three implementation
  * addresses are read from the factory, not from the environment: nothing
  * carries them.
  *
  * ── What this script does not do ─────────────────────────────────────────────
  *
  * It does not install anything on a Safe. `createOwnerHistoryModule` deploys a
- * proxy and a guard but leaves the Safe's guard slot at zero; adoption is the
- * Safe's own transaction (`setGuard(guard)`, which is `onlySelf` and enforces
- * the guard's ERC-165 answer — a guard that does not answer `0xe6d7a83a`
- * reverts `GS300`).
+ * proxy and a guard but leaves the Safe's guard slot at zero; `createRecordsModule`
+ * deploys and initializes a records proxy and leaves it unenabled. Adoption is
+ * the Safe's own transaction (`setGuard(guard)` is `onlySelf` and enforces the
+ * guard's ERC-165 answer — a guard that does not answer `0xe6d7a83a` reverts
+ * `GS300`).
  *
- * Adoption is `s2s author init` / `s2s author migrate`, and it enables both
+ * Adoption is `s2s author init` / `s2s author migrate`, and it enables the
  * modules as well as setting the guard. Enabling is what makes the Safe's own
  * enabled-module list the role index a gate reads. It costs the Safe no
- * authority: neither module calls `execTransactionFromModule`, both write only
- * their own storage and answer views (ADR-004).
+ * authority: none of the modules calls `execTransactionFromModule`, each writes
+ * only its own storage and answers views (ADR-004).
  *
  * ── The operating rule for rotations on a guarded Safe ───────────────────────
  *
@@ -45,9 +57,19 @@
  * Anyone can repair a miss with a permissionless `sync()`.
  */
 
-import { createPublicClient, createWalletClient, getContractAddress, http, type Account } from 'viem';
+import {
+  createPublicClient,
+  createWalletClient,
+  getAddress,
+  getContractAddress,
+  http,
+  isAddress,
+  parseAbi,
+  type Account,
+} from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
+import { Artifact_S2SRecordsModuleV0_1 as RecordsArtifact } from '@s2s/publication-contracts/artifacts/S2SRecordsModuleV0_1';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -57,6 +79,13 @@ config({ path: resolve(process.cwd(), '../../../.env') });
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const artifactsRoot = resolve(__dirname, '../artifacts');
+
+/** The factory write this script makes, and the reads it verifies. */
+const FACTORY_ABI = parseAbi([
+  'function setRecordsImplementation(address implementation)',
+  'function recordsImplementation() view returns (address)',
+  'function protocolSafe() view returns (address)',
+]);
 
 /** Hardhat 3 writes `artifacts/src/<Name>.sol/<Name>.json`. */
 function artifactPath(name: string): string {
@@ -117,12 +146,38 @@ type DeployClient = ReturnType<
 >;
 
 /**
- * Deploy one contract and wait for its receipt.
+ * Deploy one contract from an artifact and wait for its receipt.
  *
  * No explicit `gas`: the node estimates. A hard-coded limit is how a deploy
  * lands under the cost of its own constructor one day — and the old drafts
  * script carried a `3_000_000n` that was already a guess.
  */
+async function deployArtifact(
+  client: DeployClient,
+  account: Account,
+  label: string,
+  artifact: { abi: unknown; bytecode: `0x${string}` },
+  args: any[],
+  rpcUrl: string,
+): Promise<string> {
+  if (!artifact.bytecode || artifact.bytecode === '0x') {
+    console.error(`❌ No bytecode for ${label} — is it abstract?`);
+    process.exit(1);
+  }
+
+  const hash = await client.deployContract({
+    abi: artifact.abi as any,
+    bytecode: artifact.bytecode,
+    account,
+    chain: base,
+    args,
+  });
+  console.log(`   Deploy tx: ${hash}`);
+
+  return waitForAddress(rpcUrl, hash);
+}
+
+/** Deploy one contract compiled in this package, from Hardhat's artifact. */
 async function deployContract(
   client: DeployClient,
   account: Account,
@@ -131,28 +186,13 @@ async function deployContract(
   rpcUrl: string,
 ): Promise<string> {
   const artifact = JSON.parse(readFileSync(artifactPath(name), 'utf-8'));
-  if (!artifact.bytecode || artifact.bytecode === '0x') {
-    console.error(`❌ No bytecode for ${name} — is it abstract?`);
-    process.exit(1);
-  }
-
-  const hash = await client.deployContract({
-    abi: artifact.abi,
-    bytecode: artifact.bytecode as `0x${string}`,
-    account,
-    chain: base,
-    args,
-  });
-  console.log(`   Deploy tx: ${hash}`);
-
-  const address = await waitForAddress(rpcUrl, hash);
-  return address;
+  return deployArtifact(client, account, name, artifact, args, rpcUrl);
 }
 
 /**
  * Refuse to start if any address this run would deploy to already has code.
  *
- * All three deploys are CREATE from the same account at consecutive nonces, so
+ * All four deploys are CREATE from the same account at consecutive nonces, so
  * every target address is known before the first transaction is sent. A
  * non-empty one means the plan is wrong (wrong chain, a stale nonce, an address
  * meant for reuse) — and a factory pointed at someone else's contract is a
@@ -183,6 +223,13 @@ async function main() {
     process.exit(1);
   }
 
+  const safeEnv = process.env.PROTOCOL_SAFE_ADDRESS;
+  if (!safeEnv || !isAddress(safeEnv)) {
+    console.error('❌ PROTOCOL_SAFE_ADDRESS not set or not an address');
+    process.exit(1);
+  }
+  const protocolSafe = getAddress(safeEnv);
+
   // The author contracts live on Base, next to the publication contracts.
   const rpcUrl = process.env.VITE_DRPC_API_KEY
     ? `https://lb.drpc.live/base/${process.env.VITE_DRPC_API_KEY}`
@@ -193,26 +240,100 @@ async function main() {
   const client = createWalletClient({ account, chain: base, transport });
   const publicClient = createPublicClient({ chain: base, transport });
 
-  console.log(`Deploying from ${account.address}\n   Network: ${rpcUrl}\n`);
+  console.log(`Deploying from ${account.address}`);
+  console.log(`   Network: ${rpcUrl}`);
+  console.log(`   Protocol safe: ${protocolSafe}\n`);
+
+  // Not an authority in the factory, but immutable in the records
+  // implementation and compared there on every deploy, so a no-code value is a
+  // silent mispoint worth refusing.
+  const safeCode = await rpc<string>(rpcUrl, 'eth_getCode', [protocolSafe, 'latest']);
+  if (safeCode === '0x') {
+    console.error(`❌ PROTOCOL_SAFE_ADDRESS ${protocolSafe} has no code`);
+    process.exit(1);
+  }
 
   const nonce = await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' });
   await assertDeployTargetsAreEmpty(rpcUrl, account.address, nonce, [
     'DraftsModuleV1',
     'OwnerHistoryModuleV1',
-    'AuthorContractsFactory',
+    'AuthorFactory',
+    'S2SRecordsModuleV0_1',
   ]);
 
-  console.log('1/3 Deploying DraftsModuleV1 (implementation)...');
+  console.log('1/4 Deploying DraftsModuleV1 (implementation)...');
   const draftsImplementation = await deployContract(client, account, 'DraftsModuleV1', [], rpcUrl);
   console.log(`   ✅ Implementation at ${draftsImplementation}\n`);
 
-  console.log('2/3 Deploying OwnerHistoryModuleV1 (implementation)...');
+  console.log('2/4 Deploying OwnerHistoryModuleV1 (implementation)...');
   const ownerHistoryImplementation = await deployContract(client, account, 'OwnerHistoryModuleV1', [], rpcUrl);
   console.log(`   ✅ Implementation at ${ownerHistoryImplementation}\n`);
+
+  console.log('3/4 Deploying AuthorFactory...');
+  const factory = await deployContract(
+    client,
+    account,
+    'AuthorFactory',
+    [draftsImplementation, ownerHistoryImplementation, protocolSafe],
+    rpcUrl,
+  );
+  console.log(`   ✅ Factory at ${factory}\n`);
+
+  const recordedSafe = await publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'protocolSafe',
+  });
+  if (getAddress(recordedSafe) !== protocolSafe) {
+    console.error(`❌ AuthorFactory ${factory} answers protocolSafe() ${recordedSafe}, not ${protocolSafe}`);
+    process.exit(1);
+  }
+
+  console.log('4/4 Deploying S2SRecordsModuleV0_1 (implementation)...');
+  console.log('   Artifact: @s2s/publication-contracts/artifacts/S2SRecordsModuleV0_1');
+  const recordsImplementation = await deployArtifact(
+    client,
+    account,
+    'S2SRecordsModuleV0_1',
+    RecordsArtifact,
+    [factory, protocolSafe],
+    rpcUrl,
+  );
+  console.log(`   ✅ Implementation at ${recordsImplementation}\n`);
+
+  console.log('   setRecordsImplementation(recordsImplementation) on the factory...');
+  const setHash = await client.writeContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'setRecordsImplementation',
+    args: [recordsImplementation],
+    account,
+    chain: base,
+  });
+  const setReceipt = await publicClient.waitForTransactionReceipt({ hash: setHash });
+  if (setReceipt.status !== 'success') {
+    console.error(`❌ setRecordsImplementation failed in ${setHash}`);
+    process.exit(1);
+  }
+
+  const recordedImplementation = await publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'recordsImplementation',
+  });
+  if (getAddress(recordedImplementation) !== getAddress(recordsImplementation)) {
+    console.error(
+      `❌ AuthorFactory answers recordsImplementation() ${recordedImplementation}, not ${recordsImplementation}`,
+    );
+    process.exit(1);
+  }
+  console.log(`   ✅ Records implementation set\n`);
 
   for (const [name, address] of [
     ['DraftsModuleV1', draftsImplementation],
     ['OwnerHistoryModuleV1', ownerHistoryImplementation],
+    ['AuthorFactory', factory],
+    ['S2SRecordsModuleV0_1', recordsImplementation],
   ] as const) {
     const code = await rpc<string>(rpcUrl, 'eth_getCode', [address, 'latest']);
     if (code === '0x') {
@@ -221,33 +342,18 @@ async function main() {
     }
   }
 
-  console.log('3/3 Deploying AuthorContractsFactory...');
-  const factory = await deployContract(
-    client,
-    account,
-    'AuthorContractsFactory',
-    [draftsImplementation, ownerHistoryImplementation],
-    rpcUrl,
-  );
-
-  const factoryCode = await rpc<string>(rpcUrl, 'eth_getCode', [factory, 'latest']);
-  if (factoryCode === '0x') {
-    console.error(`❌ AuthorContractsFactory deployed to ${factory} but has no code`);
-    process.exit(1);
-  }
-  console.log(`   ✅ Factory at ${factory}\n`);
-
   console.log('Deployed:\n');
-  console.log(`  AuthorContractsFactory          ${factory}`);
-  console.log(`  DraftsModuleV1 (implementation) ${draftsImplementation}`);
-  console.log(`  OwnerHistoryModuleV1 (implementation) ${ownerHistoryImplementation}\n`);
+  console.log(`  AuthorFactory                        ${factory}`);
+  console.log(`  DraftsModuleV1 (implementation)      ${draftsImplementation}`);
+  console.log(`  OwnerHistoryModuleV1 (implementation) ${ownerHistoryImplementation}`);
+  console.log(`  S2SRecordsModuleV0_1 (implementation) ${recordsImplementation}\n`);
   console.log('The CLI reads two things: the factory address, and nothing else.');
   console.log('  DEFAULT_AUTHOR_CONTRACTS_FACTORY  src/author/author-cli/src/core/author-contracts.ts');
   console.log('  contracts.authorFactory          src/author/author-cli/src/core/configschema.ts');
   console.log('  or S2S_AUTHOR_CONTRACTS_FACTORY in the environment (overrides both)\n');
   console.log('Next, per author Safe (nothing is installed by the deploys above):');
-  console.log('  s2s author init                   → drafts proxy, history proxy + guard,');
-  console.log('                                      enableModule for both, setGuard');
+  console.log('  s2s author init                   → drafts proxy, history proxy + guard, records');
+  console.log('                                      proxy, enableModule for all, setGuard');
   console.log('  s2s author migrate                → same set on new modules, keeping the Safe');
 }
 

@@ -107,10 +107,9 @@ export interface FileConfig {
   ens?: { registry?: string };
   github?: { token?: string };
   /**
-   * Protocol contracts this CLI installs through, per environment. Only the
-   * `AuthorContractsFactory` for now: the two implementations and the factory
-   * are deployed once and shared, and every author Safe is installed through
-   * the same factory.
+   * Protocol contracts this CLI installs through, per environment. The
+   * `AuthorFactory` deployed once and shared: every author Safe is installed
+   * through it.
    */
   contracts?: { authorFactory?: string };
 }
@@ -198,9 +197,9 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   { path: 'lit.decryptActionCid', env: ['LIT_DECRYPT_ACTION_CID'] },
   { path: 'ens.registry', env: ['S2S_ENS_REGISTRY'] },
   { path: 'github.token', env: ['GITHUB_TOKEN', 'S2S_GITHUB_TOKEN'], secret: true },
-  // The deployed `AuthorContractsFactory` on Base. A protocol constant with a
-  // shipped default, not a preference — overridable so a dev deployment (or a
-  // redeploy) does not need a new CLI build.
+  // The deployed `AuthorFactory` on Base. A protocol constant with a shipped
+  // default, not a preference — overridable so a dev deployment (or a redeploy)
+  // does not need a new CLI build.
   {
     path: 'contracts.authorFactory',
     env: ['S2S_AUTHOR_CONTRACTS_FACTORY'],
@@ -254,7 +253,7 @@ export const BUILTIN_FILE_CONFIG: FileConfig = {
   // field registry: a missing or replaced defaults file must not leave the
   // signer commands without a transport.
   safeTx: { url: 'https://safe-transaction-base.safe.global' },
-  // The deployed `AuthorContractsFactory` (Base). Typed here as well as in
+  // The deployed `AuthorFactory` (Base). Typed here as well as in
   // `defaults.json` and the field registry, exactly as the gateway and the
   // Filecoin RPC are: a missing or replaced defaults file must not leave the
   // author contracts uninstallable.

@@ -26,7 +26,7 @@ A Safe can also send ERC-4337 user operations, so a paymaster can pay the gas. A
 
 What it costs: an author's account is a contract on one chain, and its owners are public.
 
-A pen name and a bio sit on the Safe as two strings, in a records module the protocol's module factory deploys for it. The pen name is the pet name the author is filed under; the bio is free text of up to 1024 characters. The author sets and clears the bio with `s2s author bio`, which reads both. Neither is a document on IPFS: each is a string the Safe writes itself, and only the Safe's owners can write it.
+A pen name and a bio sit on the Safe as two strings, in a records module the author factory deploys for it. The pen name is the pet name the author is filed under; the bio is free text of up to 1024 characters. The author sets and clears the bio with `s2s author bio`, which reads both. Neither is a document on IPFS: each is a string the Safe writes itself, and only the Safe's owners can write it.
 
 ## Writing tools: Neovim and Obsidian
 

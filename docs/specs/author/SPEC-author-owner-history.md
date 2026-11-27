@@ -5,13 +5,14 @@
 > [`SPEC-author-drafts.md`](SPEC-author-drafts.md)
 > **Type:** branch — a part of the author side, not a domain in its own right.
 > **Status:** built. `OwnerHistoryModuleV1`, `OwnerHistoryGuard` and the package's one factory,
-> `AuthorContractsFactory`, are in `src/author/contracts/src`, with `test/OwnerHistory.test.ts`,
-> `test/MockSafe.t.sol` and 44 passing tests in the package;
+> `AuthorFactory`, are in `src/author/contracts/src`, with `test/OwnerHistory.test.ts`,
+> `test/MockSafe.t.sol` and 75 passing tests in the package;
 > `scripts/deploy-author-contracts.ts` is the deploy path and `src/author/contracts/README.md`
 > carries the guard's gas-headroom rule. The ABI under `generated/abis/` is the frozen
 > surface: a signature change there is a breaking change for every gate and reader. Deployed on
 > Base: `OwnerHistoryModuleV1` implementation `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` behind
-> `AuthorContractsFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`; the per-Safe proxy and
+> `AuthorFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`, a deployment of the previous factory
+> that carries no records role; the per-Safe proxy and
 > guard are installed by `s2s author new` / `s2s author init` (see *The install*).
 
 ## Responsibility
@@ -22,7 +23,7 @@ the raw history that answer is computed from, so a reader can check it rather th
 it.
 
 - `OwnerHistoryModuleV1` (UUPS; one proxy per author Safe, made by
-  `AuthorContractsFactory.createOwnerHistoryModule`). It mirrors the Safe's owner set and records a new *era*
+  `AuthorFactory.createOwnerHistoryModule`). It mirrors the Safe's owner set and records a new *era*
   every time that set changes. It is the store and the read surface.
 - `OwnerHistoryGuard` (non-upgradeable, storage-free, ERC-165-answering, installed with
   `setGuard`). It is a **best-effort** tap that calls the module's `sync()` inside the Safe's
@@ -492,7 +493,7 @@ which run no drafts log. The
 write gates keep the live read, because a write is admitted now: `canPublish` and `canReset` ask
 who owns the Safe today, which is why an old version is readable but not rewritable.
 
-**The trust anchor is the Safe's enabled-module list, not the factory.** `createModule` is
+**The trust anchor is the Safe's enabled-module list, not the factory.** `createOwnerHistoryModule` is
 permissionless: anyone can create a history proxy *claiming* any Safe, and `NAME()` (“S2S Owner
 History Module V1”) is a string anyone can copy. `history.safe()` alone therefore proves only that
 whoever made the proxy named that Safe. The rules:

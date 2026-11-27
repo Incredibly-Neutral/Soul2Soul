@@ -110,8 +110,8 @@ export interface CliConfig {
   /** GitHub token for the `new` command's assets/config build. */
   github: { token: string | undefined };
   /**
-   * Protocol contracts this CLI installs through. Only the author contracts
-   * factory for now: deployed once, shared by every author Safe.
+   * Protocol contracts this CLI installs through: the author factory, deployed
+   * once and shared by every author Safe.
    */
   contracts: { authorFactory: string | undefined };
   /** Pinning providers, in the order they were added (custom labels first). */

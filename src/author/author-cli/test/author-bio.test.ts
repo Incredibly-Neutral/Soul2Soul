@@ -9,7 +9,7 @@
 // that `author init` has not installed).
 // ============================================================================
 
-import type { Address, Hex } from 'viem';
+import type { Address } from 'viem';
 import { describe, expect, it, vi } from 'vitest';
 
 import { authorBio, runAuthorBio, type AuthorBioDeps } from '../src/commands/author-bio';
@@ -97,9 +97,10 @@ function fakeDeps(options: {
       Promise.resolve(
         state.resolution ?? {
           factory: FACTORY,
-          kind: '0x00' as Hex,
+          deployed: true,
           implementation: IMPLEMENTATION,
           address: RECORDS,
+          recorded: RECORDS,
         },
       ),
     readRecord: ({ key }) => Promise.resolve(state.records[key] ?? null),
@@ -281,15 +282,50 @@ describe('s2s author bio (refusals)', () => {
     const { deps } = fakeDeps({
       resolution: {
         factory: FACTORY,
-        kind: '0x00' as Hex,
+        deployed: true,
         implementation: null,
         address: null,
+        recorded: null,
       },
     });
     const sink = capture();
 
     await expect(runAuthorBio(sink.out, parseArgs([], BIO_ARGS), deps)).rejects.toThrow(
       /s2s author init/,
+    );
+  });
+
+  it('sends an undeployed records factory to `s2s author init`', async () => {
+    const { deps } = fakeDeps({
+      resolution: {
+        factory: FACTORY,
+        deployed: false,
+        implementation: null,
+        address: null,
+        recorded: null,
+      },
+    });
+    const sink = capture();
+
+    await expect(runAuthorBio(sink.out, parseArgs([], BIO_ARGS), deps)).rejects.toThrow(
+      /not deployed.*s2s author init/s,
+    );
+  });
+
+  it('sends a factory that names no module for the Safe to `s2s author init`', async () => {
+    const { deps } = fakeDeps({
+      resolution: {
+        factory: FACTORY,
+        deployed: true,
+        implementation: IMPLEMENTATION,
+        address: null,
+        recorded: null,
+      },
+    });
+    const sink = capture();
+
+    await expect(runAuthorBio(sink.out, parseArgs([], BIO_ARGS), deps)).rejects.toThrow(
+      /has no records module.*s2s author init/s,
     );
   });
 

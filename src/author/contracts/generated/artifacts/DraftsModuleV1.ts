@@ -771,7 +771,7 @@ export const Artifact_DraftsModuleV1: {
         "type": "t_array(t_uint256)50_storage"
       },
       {
-        "astId": 2630,
+        "astId": 3243,
         "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
         "label": "safe",
         "offset": 0,
@@ -779,15 +779,15 @@ export const Artifact_DraftsModuleV1: {
         "type": "t_address"
       },
       {
-        "astId": 2656,
+        "astId": 3269,
         "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
         "label": "versions",
         "offset": 0,
         "slot": "102",
-        "type": "t_mapping(t_bytes32,t_array(t_struct(Version)2638_storage)dyn_storage)"
+        "type": "t_mapping(t_bytes32,t_array(t_struct(Version)3251_storage)dyn_storage)"
       },
       {
-        "astId": 2660,
+        "astId": 3273,
         "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
         "label": "genesisAuthor",
         "offset": 0,
@@ -795,7 +795,7 @@ export const Artifact_DraftsModuleV1: {
         "type": "t_mapping(t_bytes32,t_address)"
       },
       {
-        "astId": 2663,
+        "astId": 3276,
         "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
         "label": "genesisList",
         "offset": 0,
@@ -815,8 +815,8 @@ export const Artifact_DraftsModuleV1: {
         "label": "bytes32[]",
         "numberOfBytes": "32"
       },
-      "t_array(t_struct(Version)2638_storage)dyn_storage": {
-        "base": "t_struct(Version)2638_storage",
+      "t_array(t_struct(Version)3251_storage)dyn_storage": {
+        "base": "t_struct(Version)3251_storage",
         "encoding": "dynamic_array",
         "label": "struct DraftsModuleV1.Version[]",
         "numberOfBytes": "32"
@@ -844,24 +844,24 @@ export const Artifact_DraftsModuleV1: {
         "numberOfBytes": "32",
         "value": "t_address"
       },
-      "t_mapping(t_bytes32,t_array(t_struct(Version)2638_storage)dyn_storage)": {
+      "t_mapping(t_bytes32,t_array(t_struct(Version)3251_storage)dyn_storage)": {
         "encoding": "mapping",
         "key": "t_bytes32",
         "label": "mapping(bytes32 => struct DraftsModuleV1.Version[])",
         "numberOfBytes": "32",
-        "value": "t_array(t_struct(Version)2638_storage)dyn_storage"
+        "value": "t_array(t_struct(Version)3251_storage)dyn_storage"
       },
       "t_string_storage": {
         "encoding": "bytes",
         "label": "string",
         "numberOfBytes": "32"
       },
-      "t_struct(Version)2638_storage": {
+      "t_struct(Version)3251_storage": {
         "encoding": "inplace",
         "label": "struct DraftsModuleV1.Version",
         "members": [
           {
-            "astId": 2633,
+            "astId": 3246,
             "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
             "label": "cid",
             "offset": 0,
@@ -869,7 +869,7 @@ export const Artifact_DraftsModuleV1: {
             "type": "t_string_storage"
           },
           {
-            "astId": 2635,
+            "astId": 3248,
             "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
             "label": "timestamp",
             "offset": 0,
@@ -877,7 +877,7 @@ export const Artifact_DraftsModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2637,
+            "astId": 3250,
             "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
             "label": "blockNumber",
             "offset": 8,
@@ -1688,7 +1688,7 @@ export const Artifact_DraftsModuleV1: {
         "type": "t_array(t_uint256)50_storage"
       },
       {
-        "astId": 2630,
+        "astId": 3243,
         "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
         "label": "safe",
         "offset": 0,
@@ -1696,15 +1696,15 @@ export const Artifact_DraftsModuleV1: {
         "type": "t_address"
       },
       {
-        "astId": 2656,
+        "astId": 3269,
         "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
         "label": "versions",
         "offset": 0,
         "slot": "102",
-        "type": "t_mapping(t_bytes32,t_array(t_struct(Version)2638_storage)dyn_storage)"
+        "type": "t_mapping(t_bytes32,t_array(t_struct(Version)3251_storage)dyn_storage)"
       },
       {
-        "astId": 2660,
+        "astId": 3273,
         "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
         "label": "genesisAuthor",
         "offset": 0,
@@ -1712,7 +1712,7 @@ export const Artifact_DraftsModuleV1: {
         "type": "t_mapping(t_bytes32,t_address)"
       },
       {
-        "astId": 2663,
+        "astId": 3276,
         "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
         "label": "genesisList",
         "offset": 0,
@@ -1732,8 +1732,8 @@ export const Artifact_DraftsModuleV1: {
         "label": "bytes32[]",
         "numberOfBytes": "32"
       },
-      "t_array(t_struct(Version)2638_storage)dyn_storage": {
-        "base": "t_struct(Version)2638_storage",
+      "t_array(t_struct(Version)3251_storage)dyn_storage": {
+        "base": "t_struct(Version)3251_storage",
         "encoding": "dynamic_array",
         "label": "struct DraftsModuleV1.Version[]",
         "numberOfBytes": "32"
@@ -1761,24 +1761,24 @@ export const Artifact_DraftsModuleV1: {
         "numberOfBytes": "32",
         "value": "t_address"
       },
-      "t_mapping(t_bytes32,t_array(t_struct(Version)2638_storage)dyn_storage)": {
+      "t_mapping(t_bytes32,t_array(t_struct(Version)3251_storage)dyn_storage)": {
         "encoding": "mapping",
         "key": "t_bytes32",
         "label": "mapping(bytes32 => struct DraftsModuleV1.Version[])",
         "numberOfBytes": "32",
-        "value": "t_array(t_struct(Version)2638_storage)dyn_storage"
+        "value": "t_array(t_struct(Version)3251_storage)dyn_storage"
       },
       "t_string_storage": {
         "encoding": "bytes",
         "label": "string",
         "numberOfBytes": "32"
       },
-      "t_struct(Version)2638_storage": {
+      "t_struct(Version)3251_storage": {
         "encoding": "inplace",
         "label": "struct DraftsModuleV1.Version",
         "members": [
           {
-            "astId": 2633,
+            "astId": 3246,
             "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
             "label": "cid",
             "offset": 0,
@@ -1786,7 +1786,7 @@ export const Artifact_DraftsModuleV1: {
             "type": "t_string_storage"
           },
           {
-            "astId": 2635,
+            "astId": 3248,
             "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
             "label": "timestamp",
             "offset": 0,
@@ -1794,7 +1794,7 @@ export const Artifact_DraftsModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2637,
+            "astId": 3250,
             "contract": "project/src/DraftsModuleV1.sol:DraftsModuleV1",
             "label": "blockNumber",
             "offset": 8,

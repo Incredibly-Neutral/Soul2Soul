@@ -8,11 +8,12 @@
 > from.
 >
 > **Type:** component spec. It owns the drafts half of one package — `src/author/contracts`,
-> `DraftsModuleV1` and its side of `AuthorContractsFactory` — and the meaning of the log it keeps.
+> `DraftsModuleV1` and its side of `AuthorFactory` — and the meaning of the log it keeps.
 >
 > **Status:** the package is written and tested (`src/author/contracts`, 15 node-test cases for this
 > module) and deployed on Base — implementation `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C`, via
-> `AuthorContractsFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`. The **per-Safe proxy is
+> `AuthorFactory`. The shipped default `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` is a deployment
+> of the previous factory and has no records role. The **per-Safe proxy is
 > installed by the CLI** (`s2s author new`, or `s2s author init` for an author that already exists),
 > which calls `createDraftsModule(safe)`, and the Safe enables the proxy in the same transaction that
 > installs the owner-history guard — see [SPEC-author-cli](SPEC-author-cli.md#installing-the-author-contracts). The interface below is
@@ -166,8 +167,12 @@ adopts the new modules.
 
 ## The factory
 
-One factory for the whole package — `AuthorContractsFactory(draftsImplementation, ownerHistoryImplementation)`,
-shared with [owner history](SPEC-author-owner-history.md). The drafts half:
+One factory for the whole package — `AuthorFactory(draftsImplementation, ownerHistoryImplementation,
+protocolSafe)`, shared with [owner history](SPEC-author-owner-history.md). It also carries the
+records role: `recordsImplementation`, `RECORDS_KIND`, `createRecordsModule(safe)`,
+`recordsModuleAddress(safe)`, `setRecordsImplementation`, `latestImplementation(kind)` and
+`isApproved(kind, implementation)`, described in
+[SPEC-author-cli](SPEC-author-cli.md#installing-the-author-contracts). The drafts half:
 
 | member | behaviour |
 |---|---|
@@ -177,7 +182,8 @@ shared with [owner history](SPEC-author-owner-history.md). The drafts half:
 | `getDraftsModulesForSafe(address) -> address[]` | every proxy anyone told this factory about for that Safe |
 | `draftsImplementationCount() -> uint256` | history length |
 | `getDraftsImplementationByVersion(uint256) -> address` | 1-based; reverts `InvalidVersion()` outside `1..count` |
-| `deployer() -> address` | `immutable`, set to `msg.sender` at construction; the only address either `set*Implementation` admits (`OnlyDeployer()`) |
+| `deployer() -> address` | `immutable`, set to `msg.sender` at construction; the only address any `set*Implementation` admits (`OnlyDeployer()`) |
+| `protocolSafe() -> address` | `immutable`, the protocol Safe the records implementation compares its own constructor argument against; not an authority here |
 
 **`setDraftsImplementation` is gated because the ungated version is a takeover.** Whoever moves
 `draftsImplementation()` decides what the next `createDraftsModule` deploys, and a proxy over an

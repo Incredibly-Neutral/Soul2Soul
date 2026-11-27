@@ -2,11 +2,11 @@
 
 The author-side Safe contracts for Polyphony, on Base.
 
-One factory, `AuthorContractsFactory`, deploys every per-author proxy in this package:
+One factory, `AuthorFactory`, deploys every per-author proxy: the drafts log, the owner history, and the records module.
 
 | contract                 | what it is                                                                                                                                                                                                      |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AuthorContractsFactory` | the deploy path: one UUPS proxy per author Safe for the drafts log, one for the owner history **plus the guard wired to it**, and the two implementation pointers everything proxies onto                       |
+| `AuthorFactory`          | the deploy path: one UUPS proxy per author Safe for the drafts log, one for the owner history **plus the guard wired to it**, one for the records module, and the implementation pointers everything proxies onto |
 | `DraftsModuleV1`         | the author's draft log                                                                                                                                                                                          |
 | `OwnerHistoryModuleV1`   | who was an owner of the author Safe, and from which block                                                                                                                                                       |
 | `OwnerHistoryGuard`      | a Safe transaction guard that keeps the owner history current; installed with `setGuard`, which checks ERC-165 first — a guard that does not answer `0xe6d7a83a` reverts `GS300` and cannot be installed at all |
@@ -17,31 +17,46 @@ One factory, `AuthorContractsFactory`, deploys every per-author proxy in this pa
 | --------------------------------------- | -------------------------------------------- |
 | `DraftsModuleV1` (implementation)       | `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C` |
 | `OwnerHistoryModuleV1` (implementation) | `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` |
-| `AuthorContractsFactory`                | `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` |
 
-These are the `prod` defaults the CLI carries. `contracts.authorFactory`
-(`S2S_AUTHOR_CONTRACTS_FACTORY`) overrides the factory per environment, and the two
-implementations are whatever that factory reports.
+`AuthorFactory` has no address in this table: use the one `pnpm deploy:authorcontracts`
+printed. `contracts.authorFactory` (`S2S_AUTHOR_CONTRACTS_FACTORY`) overrides it per
+environment, and the three implementations are whatever that factory reports.
 
-`createDraftsModule(safe)` and `createOwnerHistoryModule(safe)` are **permissionless**, and
-neither installs anything: deploying a proxy (and, for the history, a guard) spends the
-caller's gas and writes nothing to any Safe. Adoption is the Safe's own transaction —
+A factory deployed before this change has no records role: two implementations, no
+`recordsImplementation`, no `createRecordsModule`. Deploy a new `AuthorFactory` with the same
+script, which then deploys the records implementation against that new factory. The records
+implementation is not compiled in this package: `S2SRecordsModuleV0_1` comes from the artifact
+`@s2s/publication-contracts` exports, with `(authorFactory, protocolSafe)` as its constructor
+arguments, and the script calls `setRecordsImplementation` on the factory.
+
+`createDraftsModule(safe)`, `createOwnerHistoryModule(safe)` and `createRecordsModule(safe)` are
+**permissionless**, and none installs anything: deploying a proxy (and, for the history, a guard)
+spends the caller's gas and writes nothing to any Safe. Adoption is the Safe's own transaction —
 `setGuard(guard)`, one transaction, `onlySelf`. The factory cannot do it and does not try.
 
-Adoption is three things, not one: the two proxies exist, the guard is in the slot, and both
-modules are enabled. A gate finds a role by asking `supportsInterface(roleId)` of each address on
+`createRecordsModule(safe)` differs from the other two in one way: the records module's
+`initialize` must arrive from the factory, so the proxy is deployed with an empty initializer and
+the factory calls `initialize(safe, "")` itself, immediately after. One module per Safe, at
+`recordsModuleAddress(safe)`: the salt carries no nonce, the recorded module is returned on every
+retry, and the address is zero when no records implementation is set. The factory approves exactly
+one records upgrade target at a time (`isApproved(RECORDS_KIND, current)`), which is what the
+module's upgrade gate reads.
+
+Adoption is three things, not one: the proxies exist, the guard is in the slot, and the modules
+are enabled. A gate finds a role by asking `supportsInterface(roleId)` of each address on
 the Safe's `getModulesPaginated` list — `0xefb74036` for drafts, `0xee855023` for owner history —
-so an unenabled module has no role to find. Enabling costs the Safe no authority: neither module
-calls `execTransactionFromModule`, both write only their own storage and answer views. The guard
+so an unenabled module has no role to find. Enabling costs the Safe no authority: the modules
+never call `execTransactionFromModule`, write only their own storage and answer views. The guard
 still matters separately, because a guard is what sees writes. The factory's
 `getDraftsModulesForSafe`, `getOwnerHistoryModulesForSafe` and `guardFor` are **indexes, not
 proof** — creation is open, so anyone can append an entry for any Safe — and so are the CREATE2
-prediction views `draftsModuleAddress` / `ownerHistoryModuleAddress`, which order the probes and
-prove nothing.
+prediction views `draftsModuleAddress` / `ownerHistoryModuleAddress` / `recordsModuleAddress`,
+which order the probes and prove nothing. `recordsModule` is a mapping rather than a list, but it
+is still not proof of installation: a proxy exists before any Safe enables it.
 
 Source in `src/`, tests in `test/`, deploy script in `scripts/`.
-`pnpm compile && pnpm test`; `pnpm deploy:authorcontracts` deploys both implementations then
-the factory and prints the three addresses.
+`pnpm compile && pnpm test`; `pnpm deploy:authorcontracts` deploys both author implementations,
+the factory, and the records implementation, sets it, and prints the four addresses.
 
 ## Per author Safe — the CLI does this
 

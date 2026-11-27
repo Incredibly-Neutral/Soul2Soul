@@ -32,9 +32,13 @@ async function deployPair() {
 
   const implementation = await viem.deployContract('DraftsModuleV1');
   const historyImplementation = await viem.deployContract('OwnerHistoryModuleV1');
-  const factory = await viem.deployContract('AuthorContractsFactory', [
+  // The third argument is the protocol Safe the records implementation would
+  // compare itself against. Nothing here deploys a records module, and the
+  // factory never treats it as an authority, so any address is enough.
+  const factory = await viem.deployContract('AuthorFactory', [
     implementation.address,
     historyImplementation.address,
+    safe.account.address,
   ]);
 
   await factory.write.createDraftsModule([safe.account.address]);

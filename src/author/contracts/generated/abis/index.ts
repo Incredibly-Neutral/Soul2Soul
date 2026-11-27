@@ -1,4 +1,7 @@
-export {Abi_AuthorContractsFactory as AuthorContractsFactory} from "./AuthorContractsFactory.js"
+export {Abi_AuthorFactory as AuthorFactory} from "./AuthorFactory.js"
+export {Abi_IAuthorRecordsModuleInit as IAuthorRecordsModuleInit} from "./IAuthorRecordsModuleInit.js"
+export {Abi_IAuthorRecordsModuleKind as IAuthorRecordsModuleKind} from "./IAuthorRecordsModuleKind.js"
+export {Abi_IAuthorRecordsUUPS as IAuthorRecordsUUPS} from "./IAuthorRecordsUUPS.js"
 export {Abi_DraftsModuleV1 as DraftsModuleV1} from "./DraftsModuleV1.js"
 export {Abi_IDraftsModule as IDraftsModule} from "./IDraftsModule.js"
 export {Abi_OwnerHistoryGuard as OwnerHistoryGuard} from "./OwnerHistoryGuard.js"
