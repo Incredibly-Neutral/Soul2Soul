@@ -55,11 +55,11 @@ const config: HardhatUserConfig = {
 	},
 	// The typed-artifact hook has no include/exclude option: it publishes whatever
 	// `paths.sources` compiles, minus `.t.sol` fixtures. That is deliberate here —
-	// the package's ABI surface is exactly the four contracts in `src/`
+	// the package's ABI surface is exactly the contracts in `src/`
 	// (`AuthorFactory`, `DraftsModuleV1`, `OwnerHistoryModuleV1`,
-	// `OwnerHistoryGuard`), so adding a deployable contract adds a published ABI,
-	// and removing one removes it. Keep fixtures in a `.t.sol` file under `test/`,
-	// which is skipped.
+	// `OwnerHistoryGuard`, `S2SAuthorGate`, `S2SRegistry`), so adding a deployable
+	// contract adds a published ABI, and removing one removes it. Keep fixtures in
+	// a `.t.sol` file under `test/`, which is skipped.
 	generateTypedArtifacts: {
 		destinations: [
 			{
