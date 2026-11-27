@@ -1,7 +1,7 @@
 {
   "name": "@s2s/author-cli",
-  "version": "0.1.3",
-  "description": "Headless author CLI for soul2soul \u2014 upload / preview / publish / revoke / new. Powers the Neovim plugin (machine-friendly output).",
+  "version": "0.1.4",
+  "description": "Headless author CLI for soul2soul — upload / preview / publish / revoke / new. Powers the Neovim plugin (machine-friendly output).",
   "type": "module",
   "license": "Apache-2.0",
   "private": true,
