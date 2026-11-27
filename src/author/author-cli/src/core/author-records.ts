@@ -403,7 +403,9 @@ export async function planRecords(
       factory: resolved.factory,
       calls,
       needed: true,
-      note: `the records module is pending owner signatures — propose ${described.join(', ')} in safeTxs`,
+      // The caller appends this to its own "propose the Safe transactions"
+      // sentence, so this names only what is still pending.
+      note: `the records module is pending owner signatures: ${described.join(', ')}`,
     };
   }
 
