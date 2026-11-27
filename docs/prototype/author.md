@@ -26,6 +26,8 @@ A Safe can also send ERC-4337 user operations, so a paymaster can pay the gas. A
 
 What it costs: an author's account is a contract on one chain, and its owners are public.
 
+A pen name and a bio sit on the Safe as two strings, in a records module the protocol's module factory deploys for it. The pen name is the pet name the author is filed under; the bio is free text of up to 1024 characters. The author sets and clears the bio with `s2s author bio`, which reads both. Neither is a document on IPFS: each is a string the Safe writes itself, and only the Safe's owners can write it.
+
 ## Writing tools: Neovim and Obsidian
 
 An author writes in Neovim or in Obsidian, each with its own plugin. Neovim is open source end to end; Obsidian gives writers an interface many already know. From a note, an author can upload a manuscript to storage, preview its page, offer it to a publication, publish it and revoke it. The preview command keeps its name, because that is what the author gets, and it never writes on chain: signed page proof is left out, and nothing is appended to a log or a ledger. It renders the version the publication records, not the file just uploaded, so what opens is what a reader would get. A plaintext version previews on a local runner, which holds no key and has nothing to open. An encrypted one previews on Lit instead, which holds the key, so the body comes back readable; the page carries its colophon and no signature. Lit opens it only while the manuscript is under an offer or an agreement that admits the signer, and only when the publication's manifest is new enough to render without a signature. A preview that cannot open still renders on the runner, and the command says why: no version recorded yet for an encrypted note, a read that did not answer, a gate that refused, or a pinned render action too old to render without a signature. One case is silent, a plaintext note the publication does not hold yet, because nothing of it is there to decrypt.
@@ -44,5 +46,5 @@ A manuscript goes to the prototype's own Kubo node for immediate retrieval, to P
 
 - **Owner history.** A module on the author's Safe that records which keys owned it and when, so a gate can check that a key was an owner at the moment it signed.
 - **Portable byline.** A list of the author's manuscripts and agreements, with when each was published and for how long, kept in a module on the author's own Safe. Only the author writes it, and anyone can read it with a single call. If a publication ceases to exist, the author keeps the record of their bylines, and any frontend can show all of an author's work next to one of their pieces.
-- **A name on the ledger.** A name the author records for their byline, so a page can show a name instead of the Safe's address.
+- **The pen name in the byline.** The name is recorded on the author's Safe; pages still show the Safe's address, and reading the name into a page's byline is not built.
 

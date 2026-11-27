@@ -2,7 +2,8 @@
 // s2s author init — deploy the author Safe and install the author contracts.
 //
 // 0xobsidian's `newAuthor` deploys the author Safe on Base on first use, then
-// installs the modules the author needs (drafts, owner history, guard).
+// installs the modules the author needs (drafts, owner history, guard, and the
+// protocol's records module with the author's pet name as `pen_name`).
 // Headless, that is an explicit step: predict (author address), initialize,
 // install. Idempotent — running it again on a live Safe with the contracts
 // already on it reports and exits.
@@ -22,11 +23,15 @@ import { rememberAuthorContracts, rememberAuthorSafe } from '../core/authors';
 import type { CliOut } from '../lib/out';
 
 /** What the result says about the author contracts. */
-interface ContractsReport {
+export interface ContractsReport {
   factory: string | null;
   drafts: string | null;
   ownerHistory: string | null;
   guard: string | null;
+  /** The generic records module on the Safe, or null when it has none. */
+  records: string | null;
+  /** Why `records` is null or not yet enabled, when there is a reason. */
+  recordsNote?: string;
   state: InstallState;
   txs: string[];
   /** Why the install is `skipped` or `pending-safe`, as core reported it. */
@@ -56,6 +61,7 @@ async function installContracts(
       drafts: null,
       ownerHistory: null,
       guard: null,
+      records: null,
       state: 'skipped',
       txs: [],
     };
@@ -67,14 +73,22 @@ async function installContracts(
       rpcUrl,
       privateKey: ctx.config.privateKey as `0x${string}`,
       out,
+      // The active author's pet name, when the key came from the store; without
+      // one the records module is still installed and `pen_name` stays unwritten.
+      penName: ctx.config.author?.name,
     });
 
     if (result.state === 'installed' || result.state === 'already') {
       const name = ctx.config.author?.name ?? null;
       if (name) {
         try {
-          // `author list` / `switch` report the contracts offline.
-          rememberAuthorContracts(name, result);
+          // `author list` / `switch` report the contracts offline. Only the three
+          // addresses: the records module is read from the chain, never cached.
+          rememberAuthorContracts(name, {
+            drafts: result.drafts,
+            ownerHistory: result.ownerHistory,
+            guard: result.guard,
+          });
         } catch (err) {
           out.warn(
             `could not record the author contracts in the authors file: ${
@@ -102,6 +116,8 @@ async function installContracts(
       drafts: result.drafts,
       ownerHistory: result.ownerHistory,
       guard: result.guard,
+      records: result.records,
+      ...(result.recordsNote ? { recordsNote: result.recordsNote } : {}),
       state: result.state,
       txs: result.txs,
       ...(result.note ? { note: result.note } : {}),
@@ -116,6 +132,7 @@ async function installContracts(
       drafts: null,
       ownerHistory: null,
       guard: null,
+      records: null,
       state: 'skipped',
       txs: [],
       note: message,
@@ -129,8 +146,11 @@ function proposedCalls(report: ContractsReport): { to: string; data: string }[] 
   return report.safeTx ? [report.safeTx] : [];
 }
 
-/** The human block for `contracts` — the state, then what it installed. */
-function contractsLines(report: ContractsReport): string[] {
+/**
+ * The human block for `contracts` — the state, then what it installed.
+ * Exported so the records line and its note have a test.
+ */
+export function initContractsLines(report: ContractsReport): string[] {
   const state =
     report.state === 'installed'
       ? 'installed'
@@ -146,6 +166,8 @@ function contractsLines(report: ContractsReport): string[] {
   lines.push(`drafts      : ${report.drafts ?? '(none)'}`);
   lines.push(`ownerHistory: ${report.ownerHistory ?? '(none)'}`);
   lines.push(`guard       : ${report.guard ?? '(none)'}`);
+  lines.push(`records     : ${report.records ?? '(none)'}`);
+  if (report.recordsNote) lines.push(`records note: ${report.recordsNote}`);
   if (report.txs.length > 0) lines.push(`contract txs: ${report.txs.join(', ')}`);
   const calls = proposedCalls(report);
   if (report.state === 'pending-safe' && calls.length > 0) {
@@ -212,7 +234,7 @@ export const authorInit: CommandSpec = {
             ? '(none — a given Safe is deployed by its owners, not here)'
             : '(none — already deployed)')
         }`,
-        ...contractsLines(contracts),
+        ...initContractsLines(contracts),
       ].join('\n'),
     );
   },

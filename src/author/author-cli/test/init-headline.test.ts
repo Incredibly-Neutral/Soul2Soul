@@ -11,7 +11,7 @@ import type { Address } from 'viem';
 import { describe, expect, it } from 'vitest';
 
 import type { AuthorSafeInitResult } from '../src/core/author-safe';
-import { initHeadline } from '../src/commands/init';
+import { initContractsLines, initHeadline, type ContractsReport } from '../src/commands/init';
 
 const ADDRESS: Address = '0x1111111111111111111111111111111111111111';
 const EOA: Address = '0x2222222222222222222222222222222222222222';
@@ -28,6 +28,36 @@ function result(overrides: Partial<AuthorSafeInitResult>): AuthorSafeInitResult 
     ...overrides,
   };
 }
+
+function report(overrides: Partial<ContractsReport> = {}): ContractsReport {
+  return {
+    factory: '0xf1',
+    drafts: '0xd1',
+    ownerHistory: '0xd2',
+    guard: '0xd3',
+    records: null,
+    state: 'installed',
+    txs: [],
+    ...overrides,
+  };
+}
+
+describe('initContractsLines', () => {
+  it('reports the records module next to the other modules', () => {
+    const lines = initContractsLines(report({ records: '0xd4' }));
+    expect(lines).toContain('records     : 0xd4');
+  });
+
+  it('prints the records note when there is one', () => {
+    const lines = initContractsLines(
+      report({ recordsNote: 'the module factory has no approved records implementation' }),
+    );
+    expect(lines).toContain('records     : (none)');
+    expect(lines).toContain(
+      'records note: the module factory has no approved records implementation',
+    );
+  });
+});
 
 describe('initHeadline', () => {
   it('reports a derived Safe this run deployed', () => {

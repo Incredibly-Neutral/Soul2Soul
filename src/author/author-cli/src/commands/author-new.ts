@@ -23,7 +23,8 @@
 // again at any time by `author address`.
 //
 // A new author is not usable until the author contracts sit on its Safe, so the
-// last step deploys the Safe and installs them (drafts/ownerHistory/guard). It
+// last step deploys the Safe and installs them (drafts/ownerHistory/guard, then
+// the protocol's records module with the pet name as its `pen_name` record). It
 // runs strictly AFTER the key is filed: the store order is unchanged, and every
 // failure here is a warning naming the recovery (`s2s author init`). A Safe this
 // run cannot install on — its owners are not solely the filed key, or it already
@@ -180,6 +181,10 @@ export interface ContractsReport {
   drafts: string | null;
   ownerHistory: string | null;
   guard: string | null;
+  /** The generic records module on the Safe, or null when it has none. */
+  records: string | null;
+  /** Why `records` is null or not yet enabled, when there is a reason. */
+  recordsNote?: string;
   state: InstallState;
   /** The userOps / txs the install sent. */
   txs: string[];
@@ -206,6 +211,7 @@ function notInstalled(config: CliConfig, state: InstallState, note?: string): Co
     drafts: null,
     ownerHistory: null,
     guard: null,
+    records: null,
     state,
     txs: [],
     ...(note ? { note } : {}),
@@ -250,12 +256,20 @@ async function installContracts(
       rpcUrl,
       privateKey: privateKey as `0x${string}`,
       out,
+      // The pet name this command just filed, written as the `pen_name` record.
+      penName: name,
     });
 
     if (result.state === 'installed' || result.state === 'already') {
       try {
-        // Only a proven install is worth recording; the guard slot, not this row, is the truth.
-        rememberAuthorContracts(name, result);
+        // Only a proven install is worth recording; the guard slot, not this row,
+        // is the truth. Only the three addresses: the records module is read
+        // from the chain (`s2s author bio`), never cached here.
+        rememberAuthorContracts(name, {
+          drafts: result.drafts,
+          ownerHistory: result.ownerHistory,
+          guard: result.guard,
+        });
       } catch (err) {
         out.warn(
           `could not record the author contracts in the authors file: ${
@@ -283,6 +297,8 @@ async function installContracts(
       drafts: result.drafts,
       ownerHistory: result.ownerHistory,
       guard: result.guard,
+      records: result.records,
+      ...(result.recordsNote ? { recordsNote: result.recordsNote } : {}),
       state: result.state,
       txs: result.txs,
       ...(result.note ? { note: result.note } : {}),
@@ -319,6 +335,8 @@ function contractsLines(report: ContractsReport): string[] {
   lines.push(`drafts      : ${report.drafts ?? '(none)'}`);
   lines.push(`ownerHistory: ${report.ownerHistory ?? '(none)'}`);
   lines.push(`guard       : ${report.guard ?? '(none)'}`);
+  lines.push(`records     : ${report.records ?? '(none)'}`);
+  if (report.recordsNote) lines.push(`records note: ${report.recordsNote}`);
   if (report.txs.length > 0) lines.push(`contract txs: ${report.txs.join(', ')}`);
   const calls = proposedCalls(report);
   if (report.state === 'pending-safe' && calls.length > 0) {

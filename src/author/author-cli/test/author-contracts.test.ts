@@ -19,7 +19,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Address } from 'viem';
+import { decodeFunctionData } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import {
+  S2SPublicationModulesFactoryV0_1,
+  S2SRecordsModuleV0_1,
+} from '@s2s/publication-contracts';
+import { safeAbi } from '@s2s/soul2soul-shared';
+import { RECORDS_KIND } from '../src/core/author-records';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -49,6 +56,10 @@ const FOREIGN_MODULE = '0x0000000000000000000000000000000000000d05' as Address;
 const NEW_DRAFTS = '0x0000000000000000000000000000000000000d11' as Address;
 const NEW_HISTORY = '0x0000000000000000000000000000000000000d12' as Address;
 const NEW_GUARD = '0x0000000000000000000000000000000000000d13' as Address;
+/** The records module the protocol manifest's factory predicts for SAFE. */
+const RECORDS = '0x0000000000000000000000000000000000000d06' as Address;
+/** An implementation the protocol Safe has approved for the records kind. */
+const RECORDS_IMPL = '0x0000000000000000000000000000000000000d07' as Address;
 
 const PRIVATE_KEY =
   '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as `0x${string}`;
@@ -99,6 +110,10 @@ interface FakeChainOptions {
   guardReadFails?: boolean;
   /** Make every read fail, as a dead RPC does. */
   unreachable?: boolean;
+  /** Make `readOwners` fail, as a flaky RPC does: the settled result must stand. */
+  ownersReadFails?: boolean;
+  /** UserOps that reject instead of landing, as a refused bundler does. */
+  sendFails?: string[];
   /** The CREATE2 addresses this factory predicts; DRAFTS/HISTORY by default. */
   predicted?: { drafts: Address; ownerHistory: Address };
   /** The guard minted with the owner-history module; GUARD by default. */
@@ -107,6 +122,17 @@ interface FakeChainOptions {
   noPrediction?: boolean;
   /** Genesis logs each drafts module holds (`count()`). */
   draftsCounts?: Record<string, number>;
+  /**
+   * The records implementation the factory has approved; null (the default)
+   * means `latestImplementation(records)` is zero and the kind is not deployable.
+   */
+  recordsImplementation?: Address | null;
+  /** The records module `moduleAddress(safe, records)` predicts; RECORDS by default. */
+  recordsModule?: Address;
+  /** Whether the records module already carries code (else `createModule` deploys it). */
+  recordsDeployed?: boolean;
+  /** Records already written into the module (key → value). */
+  records?: Record<string, string>;
 }
 
 /**
@@ -123,6 +149,8 @@ interface FakeChainOptions {
 function fakeChain(options: FakeChainOptions = {}) {
   const predicted = options.predicted ?? { drafts: DRAFTS, ownerHistory: HISTORY };
   const mintedGuard = options.mintedGuard ?? GUARD;
+  const recordsModule = options.recordsModule ?? RECORDS;
+  const recordsImplementation = options.recordsImplementation ?? null;
   const state = {
     drafts: [...(options.drafts ?? [])],
     history: [...(options.history ?? [])],
@@ -131,6 +159,8 @@ function fakeChain(options: FakeChainOptions = {}) {
     owners: options.owners ?? [PRIVATE_KEY_ADDRESS],
     threshold: options.threshold ?? 1,
     deployed: options.deployed ?? true,
+    /** The records module's contents: absent key = no record. */
+    records: { ...(options.records ?? {}) } as Record<string, string>,
   };
 
   /** Addresses that carry bytecode. */
@@ -138,6 +168,12 @@ function fakeChain(options: FakeChainOptions = {}) {
     ...state.drafts.map((entry) => entry.toLowerCase()),
     ...state.history.map((entry) => entry.toLowerCase()),
   ]);
+  // The records module exists only when this factory can deploy it and either
+  // it was already deployed or a `createModule` lands below. `moduleAddress`
+  // answers the prediction either way.
+  if (recordsImplementation !== null && (options.recordsDeployed ?? false)) {
+    code.add(recordsModule.toLowerCase());
+  }
   /**
    * module → the guard the factory minted for it (`guardFor`).
    *
@@ -241,6 +277,9 @@ function fakeChain(options: FakeChainOptions = {}) {
     },
     readOwners: () => {
       seen.readOwners += 1;
+      if (options.ownersReadFails === true) {
+        return Promise.reject(new Error('fetch failed: ECONNRESET'));
+      }
       return Promise.resolve({ owners: state.owners, threshold: state.threshold });
     },
     readGuardFor: ({ module }) => {
@@ -253,6 +292,25 @@ function fakeChain(options: FakeChainOptions = {}) {
       return Promise.resolve({ drafts: predicted.drafts, ownerHistory: predicted.ownerHistory });
     },
     readHasCode: ({ address }) => Promise.resolve(code.has(address.toLowerCase())),
+    // The protocol manifest names this factory; the bootstrap read needs no
+    // publication, so the fake answers it directly.
+    modulesFactory: () => {
+      if (options.unreachable) return Promise.reject(new Error('fetch failed'));
+      return Promise.resolve(FACTORY);
+    },
+    latestImplementation: () => {
+      if (options.unreachable) return Promise.reject(new Error('fetch failed'));
+      return Promise.resolve(recordsImplementation);
+    },
+    // A prediction, whether or not the proxy exists — as the contract answers.
+    moduleAddress: () => {
+      if (options.unreachable) return Promise.reject(new Error('fetch failed'));
+      return Promise.resolve(recordsModule);
+    },
+    record: ({ key }) => {
+      if (options.unreachable) return Promise.reject(new Error('fetch failed'));
+      return Promise.resolve(state.records[key] ?? null);
+    },
     readDraftsCount: ({ module }) => Promise.resolve(BigInt(counts.get(module.toLowerCase()) ?? 0)),
     ensureSafe: () => {
       seen.ensureSafe += 1;
@@ -274,6 +332,9 @@ function fakeChain(options: FakeChainOptions = {}) {
           args: unknown[],
         ): Promise<string> => {
           calls.push({ to, functionName, args });
+          if ((options.sendFails ?? []).includes(functionName)) {
+            return Promise.reject(new Error('userOp rejected: AA23 reverted'));
+          }
           if (reverts.has(functionName)) return Promise.resolve(hashFor(calls.length));
 
           if (functionName === 'createDraftsModule') {
@@ -290,6 +351,15 @@ function fakeChain(options: FakeChainOptions = {}) {
             guardSafes.set(mintedGuard.toLowerCase(), SAFE);
           }
           if (functionName === 'setGuard') state.slotGuard = args[0] as Address;
+          if (functionName === 'createModule') code.add(recordsModule.toLowerCase());
+          if (functionName === 'setRecord') {
+            const [key, value] = args as [string, string];
+            state.records[key] = value;
+          }
+          if (functionName === 'deleteRecord') {
+            const [key] = args as [string];
+            delete state.records[key];
+          }
           if (functionName === 'enableModule') state.enabled.push(args[0] as Address);
           if (functionName === 'disableModule') {
             const target = (args[1] as Address).toLowerCase();
@@ -351,6 +421,216 @@ describe('installAuthorContracts', () => {
     expect(result.ownerHistory).toBe(HISTORY);
     expect(result.guard).toBe(GUARD);
     expect(result.safeTx).toBeUndefined();
+  });
+
+  it('skips the records module when the factory approves no implementation', async () => {
+    // `latestImplementation(records)` is zero, so `createModule` would revert
+    // `NoImplementation(records)`. The drafts/owner-history install must still
+    // report `installed`; the records note is the ops instruction, not a failure.
+    const { seam, calls } = fakeChain();
+
+    const result = await installAuthorContracts(installArgs(), seam);
+
+    expect(result.state).toBe('installed');
+    expect(result.records).toBeNull();
+    expect(result.recordsNote).toContain('deploy:impl -- --kind records');
+    expect(result.recordsNote).toContain('setImplementation');
+    expect(calls.some((call) => call.functionName === 'createModule')).toBe(false);
+    expect(calls.some((call) => call.functionName === 'setRecord')).toBe(false);
+  });
+
+  it('creates, enables and writes pen_name on a solely-owned Safe, in order', async () => {
+    const { seam, calls, state } = fakeChain({ recordsImplementation: RECORDS_IMPL });
+
+    const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    expect(result.state).toBe('installed');
+    expect(result.records).toBe(RECORDS);
+    expect(calls.map((call) => call.functionName)).toEqual([
+      'createDraftsModule',
+      'createOwnerHistoryModule',
+      'enableModule',
+      'enableModule',
+      'setGuard',
+      'createModule',
+      'enableModule',
+      'setRecord',
+    ]);
+    const createModule = calls[5];
+    expect(createModule?.to).toBe(FACTORY);
+    expect(createModule?.args).toEqual([SAFE, RECORDS_KIND, '0x']);
+    const enableRecords = calls[6];
+    expect(enableRecords?.to).toBe(SAFE);
+    expect(enableRecords?.args).toEqual([RECORDS]);
+    const setRecord = calls[7];
+    expect(setRecord?.to).toBe(RECORDS);
+    expect(setRecord?.args).toEqual(['pen_name', 'zomi']);
+    expect(state.enabled).toContain(RECORDS);
+    expect(state.records['pen_name']).toBe('zomi');
+  });
+
+  it('hands a multisig the three records calls, in order, and sends none', async () => {
+    const { seam, calls, state } = fakeChain({
+      owners: [PRIVATE_KEY_ADDRESS, OTHER_SAFE],
+      threshold: 2,
+      recordsImplementation: RECORDS_IMPL,
+    });
+
+    const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    expect(result.state).toBe('pending-safe');
+    // Only the permissionless creates are sent; every Safe self-call is proposed.
+    expect(calls.map((call) => call.functionName)).toEqual([
+      'createDraftsModule',
+      'createOwnerHistoryModule',
+    ]);
+    // The two permissionless creates are userOps the EOA sends; every Safe
+    // self-call (enables, guard, records) is only proposed.
+    expect(result.txs).toHaveLength(2);
+    expect(state.enabled).toEqual([]);
+    expect(result.safeTxs?.map((call) => call.to)).toEqual([
+      SAFE,
+      SAFE,
+      SAFE,
+      FACTORY,
+      SAFE,
+      RECORDS,
+    ]);
+
+    const [createCall, enableCall, recordCall] = (result.safeTxs ?? []).slice(-3);
+    const create = decodeFunctionData({
+      abi: S2SPublicationModulesFactoryV0_1,
+      data: createCall!.data,
+    });
+    expect(create.functionName).toBe('createModule');
+    expect(create.args).toEqual([SAFE, RECORDS_KIND, '0x']);
+    const enable = decodeFunctionData({ abi: safeAbi, data: enableCall!.data });
+    expect(enable.functionName).toBe('enableModule');
+    expect(enable.args).toEqual([RECORDS]);
+    const record = decodeFunctionData({ abi: S2SRecordsModuleV0_1, data: recordCall!.data });
+    expect(record.functionName).toBe('setRecord');
+    expect(record.args).toEqual(['pen_name', 'zomi']);
+  });
+
+  it('proposes nothing for records on a multisig that already carries them', async () => {
+    const { seam, calls } = fakeChain({
+      owners: [PRIVATE_KEY_ADDRESS, OTHER_SAFE],
+      threshold: 2,
+      drafts: [DRAFTS],
+      history: [HISTORY],
+      enabled: [DRAFTS, HISTORY, RECORDS],
+      slotGuard: GUARD,
+      recordsImplementation: RECORDS_IMPL,
+      recordsDeployed: true,
+      records: { pen_name: 'zomi' },
+    });
+
+    const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    expect(result.state).toBe('already');
+    expect(result.safeTxs).toBeUndefined();
+    expect(result.safeTx).toBeUndefined();
+    expect(result.records).toBe(RECORDS);
+    expect(result.recordsNote).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('enables a records module that already has code instead of creating it again', async () => {
+    // `moduleAddress` is only a prediction; code at the address is what proves a
+    // create once landed. The Safe's own list is what proves it is installed.
+    const { seam, calls } = fakeChain({
+      drafts: [DRAFTS],
+      history: [HISTORY],
+      enabled: [DRAFTS, HISTORY],
+      slotGuard: GUARD,
+      recordsImplementation: RECORDS_IMPL,
+      recordsDeployed: true,
+    });
+
+    const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    // The drafts/owner-history install was already settled; the records write
+    // does not upgrade that. The write itself is what `txs` reports.
+    expect(result.state).toBe('already');
+    expect(result.records).toBe(RECORDS);
+    expect(result.txs).toHaveLength(2);
+    expect(calls.map((call) => call.functionName)).toEqual(['enableModule', 'setRecord']);
+    expect(calls[0]?.args).toEqual([RECORDS]);
+  });
+
+  it('keeps a settled Safe at `already` when its owners cannot be read', async () => {
+    // The ownership read only decides whether the records step may send. A
+    // failure there must not demote a finished drafts/owner-history install.
+    const { seam, calls } = fakeChain({
+      drafts: [DRAFTS],
+      history: [HISTORY],
+      enabled: [DRAFTS, HISTORY],
+      slotGuard: GUARD,
+      recordsImplementation: RECORDS_IMPL,
+      ownersReadFails: true,
+    });
+
+    const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    expect(result.state).toBe('already');
+    expect(result.records).toBeNull();
+    expect(result.recordsNote).toContain("the Safe's owners could not be read");
+    expect(calls).toHaveLength(0);
+  });
+
+  it('proposes no pen_name write when the pet name is blank', async () => {
+    const sole = fakeChain({ recordsImplementation: RECORDS_IMPL });
+    const result = await installAuthorContracts({ ...installArgs(), penName: '   ' }, sole.seam);
+
+    expect(result.state).toBe('installed');
+    expect(sole.state.records['pen_name']).toBeUndefined();
+    expect(sole.calls.some((call) => call.functionName === 'setRecord')).toBe(false);
+
+    const multisig = fakeChain({
+      owners: [PRIVATE_KEY_ADDRESS, OTHER_SAFE],
+      threshold: 2,
+      recordsImplementation: RECORDS_IMPL,
+    });
+    const proposed = await installAuthorContracts(
+      { ...installArgs(), penName: '' },
+      multisig.seam,
+    );
+
+    expect(proposed.safeTxs?.map((call) => call.to)).toEqual([SAFE, SAFE, SAFE, FACTORY, SAFE]);
+    const last = decodeFunctionData({
+      abi: safeAbi,
+      data: proposed.safeTxs![proposed.safeTxs!.length - 1]!.data,
+    });
+    expect(last.functionName).toBe('enableModule');
+  });
+
+  it('keeps the resolved records address when the run stops after the plan', async () => {
+    // The records kind was resolved before the enable loop; a refused userOp
+    // there must not erase it. The outer catch reports what it had found.
+    const { seam } = fakeChain({
+      recordsImplementation: RECORDS_IMPL,
+      sendFails: ['enableModule'],
+    });
+
+    const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    expect(result.state).toBe('pending-safe');
+    expect(result.records).toBe(RECORDS);
+    expect(result.recordsNote).toContain('the records module was not confirmed');
+  });
+
+  it('sends nothing for records on a second run — pen_name already matches', async () => {
+    const { seam, calls } = fakeChain({ recordsImplementation: RECORDS_IMPL });
+
+    const first = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+    const sent = calls.length;
+    const second = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    expect(first.state).toBe('installed');
+    expect(second.state).toBe('already');
+    expect(second.txs).toEqual([]);
+    expect(second.records).toBe(RECORDS);
+    expect(calls).toHaveLength(sent);
   });
 
   it('enables neither module twice and sends nothing on a second run', async () => {
