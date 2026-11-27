@@ -110,10 +110,10 @@ export interface CliConfig {
   /** GitHub token for the `new` command's assets/config build. */
   github: { token: string | undefined };
   /**
-   * Protocol contracts this CLI installs through: the author contracts factory
-   * and the records factory, each deployed once and shared by every author Safe.
+   * Protocol contracts this CLI installs through: the author factory, deployed
+   * once and shared by every author Safe.
    */
-  contracts: { authorFactory: string | undefined; recordsFactory: string | undefined };
+  contracts: { authorFactory: string | undefined };
   /** Pinning providers, in the order they were added (custom labels first). */
   pinning: PinningEntry[];
   /** IPFS endpoints, primary first. */
@@ -635,10 +635,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
     },
     ens: { registry: file.ens?.registry },
     github: { token: file.github?.token },
-    contracts: {
-      authorFactory: file.contracts?.authorFactory,
-      recordsFactory: file.contracts?.recordsFactory,
-    },
+    contracts: { authorFactory: file.contracts?.authorFactory },
     pinning,
     ipfs: { entries, primary: entries[0] },
     rpc: resolveRpcs(env, file),

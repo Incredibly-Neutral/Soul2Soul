@@ -108,10 +108,10 @@ export interface FileConfig {
   github?: { token?: string };
   /**
    * Protocol contracts this CLI installs through, per environment. The
-   * `AuthorContractsFactory` and the `AuthorRecordsFactory`, both deployed once
-   * and shared: every author Safe is installed through them.
+   * `AuthorFactory` deployed once and shared: every author Safe is installed
+   * through it.
    */
-  contracts?: { authorFactory?: string; recordsFactory?: string };
+  contracts?: { authorFactory?: string };
 }
 
 /** One settable leaf. `path` uses `*` for "one map label" (e.g. `pinning.*.key`). */
@@ -197,20 +197,13 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   { path: 'lit.decryptActionCid', env: ['LIT_DECRYPT_ACTION_CID'] },
   { path: 'ens.registry', env: ['S2S_ENS_REGISTRY'] },
   { path: 'github.token', env: ['GITHUB_TOKEN', 'S2S_GITHUB_TOKEN'], secret: true },
-  // The deployed `AuthorContractsFactory` on Base. A protocol constant with a
-  // shipped default, not a preference — overridable so a dev deployment (or a
-  // redeploy) does not need a new CLI build.
+  // The deployed `AuthorFactory` on Base. A protocol constant with a shipped
+  // default, not a preference — overridable so a dev deployment (or a redeploy)
+  // does not need a new CLI build.
   {
     path: 'contracts.authorFactory',
     env: ['S2S_AUTHOR_CONTRACTS_FACTORY'],
     default: '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E',
-  },
-  // The deployed `AuthorRecordsFactory` on Base. Zero until it is deployed: a
-  // zero (or codeless) address is reported as "not deployed", never dialed.
-  {
-    path: 'contracts.recordsFactory',
-    env: ['S2S_AUTHOR_RECORDS_FACTORY'],
-    default: '0x0000000000000000000000000000000000000000',
   },
 ];
 
@@ -260,15 +253,11 @@ export const BUILTIN_FILE_CONFIG: FileConfig = {
   // field registry: a missing or replaced defaults file must not leave the
   // signer commands without a transport.
   safeTx: { url: 'https://safe-transaction-base.safe.global' },
-  // The deployed `AuthorContractsFactory` and `AuthorRecordsFactory` (Base).
-  // Typed here as well as in `defaults.json` and the field registry, exactly as
-  // the gateway and the Filecoin RPC are: a missing or replaced defaults file
-  // must not leave the author contracts uninstallable. The records factory is
-  // zero until it is deployed.
-  contracts: {
-    authorFactory: '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E',
-    recordsFactory: '0x0000000000000000000000000000000000000000',
-  },
+  // The deployed `AuthorFactory` (Base). Typed here as well as in
+  // `defaults.json` and the field registry, exactly as the gateway and the
+  // Filecoin RPC are: a missing or replaced defaults file must not leave the
+  // author contracts uninstallable.
+  contracts: { authorFactory: '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E' },
 };
 
 // ===========================================================================
@@ -531,10 +520,7 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
   const github = compact({ token: textValue(objectValue(raw.github)?.token) });
   if (github) out.github = github;
 
-  const contracts = compact({
-    authorFactory: textValue(objectValue(raw.contracts)?.authorFactory),
-    recordsFactory: textValue(objectValue(raw.contracts)?.recordsFactory),
-  });
+  const contracts = compact({ authorFactory: textValue(objectValue(raw.contracts)?.authorFactory) });
   if (contracts) out.contracts = contracts;
 
   return out;

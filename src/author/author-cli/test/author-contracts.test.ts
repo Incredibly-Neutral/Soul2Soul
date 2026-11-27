@@ -21,9 +21,9 @@ import { join } from 'node:path';
 import type { Address } from 'viem';
 import { decodeFunctionData } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { AuthorFactory } from '@s2s/author-contracts';
 import { S2SRecordsModuleV0_1 } from '@s2s/publication-contracts';
 import { safeAbi } from '@s2s/soul2soul-shared';
-import { authorRecordsFactoryAbi } from '../src/core/author-records';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -53,12 +53,10 @@ const FOREIGN_MODULE = '0x0000000000000000000000000000000000000d05' as Address;
 const NEW_DRAFTS = '0x0000000000000000000000000000000000000d11' as Address;
 const NEW_HISTORY = '0x0000000000000000000000000000000000000d12' as Address;
 const NEW_GUARD = '0x0000000000000000000000000000000000000d13' as Address;
-/** The records module the author records factory names for SAFE. */
+/** The records module the author factory names for SAFE. */
 const RECORDS = '0x0000000000000000000000000000000000000d06' as Address;
-/** An implementation the records factory's deployer has set. */
+/** An implementation the author factory's deployer has set. */
 const RECORDS_IMPL = '0x0000000000000000000000000000000000000d07' as Address;
-/** The records factory the config names. */
-const RECORDS_FACTORY = '0x0000000000000000000000000000000000000D08' as Address;
 
 const PRIVATE_KEY =
   '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as `0x${string}`;
@@ -79,7 +77,7 @@ function configWith(overrides: Record<string, unknown> = {}): CliConfig {
   return {
     bundler: { url: 'http://127.0.0.1:4337' },
     paymaster: {},
-    contracts: { authorFactory: FACTORY, recordsFactory: RECORDS_FACTORY },
+    contracts: { authorFactory: FACTORY },
     ...overrides,
   } as unknown as CliConfig;
 }
@@ -126,11 +124,11 @@ interface FakeChainOptions {
    * default) means `recordsImplementation()` is zero and nothing is deployable.
    */
   recordsImplementation?: Address | null;
-  /** The records module `moduleAddress(safe)` names; RECORDS by default. */
+  /** The records module `recordsModuleAddress(safe)` names; RECORDS by default. */
   recordsModule?: Address;
   /** Whether the records module already carries code (else `createRecordsModule` deploys it). */
   recordsDeployed?: boolean;
-  /** Whether the records factory itself carries code (false = not deployed). */
+  /** Whether the author factory itself carries code (false = not deployed). */
   factoryDeployed?: boolean;
   /** Records already written into the module (key → value). */
   records?: Record<string, string>;
@@ -170,10 +168,10 @@ function fakeChain(options: FakeChainOptions = {}) {
     ...state.drafts.map((entry) => entry.toLowerCase()),
     ...state.history.map((entry) => entry.toLowerCase()),
   ]);
-  if (factoryDeployed) code.add(RECORDS_FACTORY.toLowerCase());
+  if (factoryDeployed) code.add(FACTORY.toLowerCase());
   // The records module exists only when this factory can deploy it and either
   // it was already deployed or a `createRecordsModule` lands below. The factory
-  // records the module only once the create has run, so `moduleAddress` answers
+  // records the module only once the create has run, so `recordsModuleAddress` answers
   // the prediction while `recordsModule` answers zero.
   if (recordsImplementation !== null && (options.recordsDeployed ?? false)) {
     code.add(recordsModule.toLowerCase());
@@ -302,7 +300,7 @@ function fakeChain(options: FakeChainOptions = {}) {
     },
     // The prediction, whether or not the proxy exists — as the contract answers;
     // zero when there is no implementation to create from.
-    moduleAddress: () => {
+    recordsModuleAddress: () => {
       if (options.unreachable) return Promise.reject(new Error('fetch failed'));
       return Promise.resolve(recordsImplementation === null ? null : recordsModule);
     },
@@ -447,8 +445,8 @@ describe('installAuthorContracts', () => {
     expect(calls.some((call) => call.functionName === 'setRecord')).toBe(false);
   });
 
-  it('skips the records module when the records factory is not deployed', async () => {
-    // A zero or codeless factory cannot create anything. The drafts/owner-history
+  it('skips the records module when the author factory is not deployed', async () => {
+    // A codeless factory cannot create anything. The drafts/owner-history
     // install must still report `installed`, with the records step noted.
     const { seam, calls } = fakeChain({ factoryDeployed: false });
 
@@ -478,7 +476,7 @@ describe('installAuthorContracts', () => {
       'setRecord',
     ]);
     const createRecords = calls[5];
-    expect(createRecords?.to).toBe(RECORDS_FACTORY);
+    expect(createRecords?.to).toBe(FACTORY);
     expect(createRecords?.args).toEqual([SAFE]);
     const enableRecords = calls[6];
     expect(enableRecords?.to).toBe(SAFE);
@@ -513,14 +511,14 @@ describe('installAuthorContracts', () => {
       SAFE,
       SAFE,
       SAFE,
-      RECORDS_FACTORY,
+      FACTORY,
       SAFE,
       RECORDS,
     ]);
 
     const [createCall, enableCall, recordCall] = (result.safeTxs ?? []).slice(-3);
     const create = decodeFunctionData({
-      abi: authorRecordsFactoryAbi,
+      abi: AuthorFactory,
       data: createCall!.data,
     });
     expect(create.functionName).toBe('createRecordsModule');
@@ -557,7 +555,7 @@ describe('installAuthorContracts', () => {
   });
 
   it('enables a records module that already has code instead of creating it again', async () => {
-    // `moduleAddress` is only a prediction; code at the address is what proves a
+    // `recordsModuleAddress` is only a prediction; code at the address is what proves a
     // create once landed. The Safe's own list is what proves it is installed.
     const { seam, calls } = fakeChain({
       drafts: [DRAFTS],
@@ -617,13 +615,7 @@ describe('installAuthorContracts', () => {
       multisig.seam,
     );
 
-    expect(proposed.safeTxs?.map((call) => call.to)).toEqual([
-      SAFE,
-      SAFE,
-      SAFE,
-      RECORDS_FACTORY,
-      SAFE,
-    ]);
+    expect(proposed.safeTxs?.map((call) => call.to)).toEqual([SAFE, SAFE, SAFE, FACTORY, SAFE]);
     const last = decodeFunctionData({
       abi: safeAbi,
       data: proposed.safeTxs![proposed.safeTxs!.length - 1]!.data,
@@ -938,7 +930,7 @@ describe('installAuthorContracts', () => {
     const config = {
       bundler: {},
       paymaster: {},
-      contracts: { authorFactory: FACTORY, recordsFactory: RECORDS_FACTORY },
+      contracts: { authorFactory: FACTORY },
     } as unknown as CliConfig;
 
     const result = await installAuthorContracts(installArgs(config), seam);
@@ -1191,7 +1183,7 @@ describe('migrateAuthorContracts', () => {
     const config = {
       bundler: {},
       paymaster: {},
-      contracts: { authorFactory: FACTORY, recordsFactory: RECORDS_FACTORY },
+      contracts: { authorFactory: FACTORY },
     } as unknown as CliConfig;
 
     const result = await migrateAuthorContracts(installArgs(config), seam);

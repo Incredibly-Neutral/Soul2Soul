@@ -1,7 +1,7 @@
 // ============================================================================
 // The author records module, per author Safe.
 //
-// One module per author Safe, deployed by `AuthorRecordsFactory` from the
+// One module per author Safe, deployed by `AuthorFactory` from the records
 // implementation its deployer set. Its contents are plain string-to-string
 // records — no CID, no JSON document, no IPFS. The author writes two of them:
 //
@@ -11,22 +11,22 @@
 //
 // Where the addresses come from, and in what order:
 //
-//   1. the factory address comes from config, not from the chain:
-//      `contracts.recordsFactory`, then `S2S_AUTHOR_RECORDS_FACTORY`, then the
-//      shipped `DEFAULT_AUTHOR_RECORDS_FACTORY` (zero until the factory is
-//      deployed). A factory with no code is reported as not deployed.
+//   1. the factory is the author factory the CLI already installs through:
+//      `contracts.authorFactory`, then `S2S_AUTHOR_CONTRACTS_FACTORY`, then the
+//      shipped `DEFAULT_AUTHOR_CONTRACTS_FACTORY`. A factory with no code is
+//      reported as not deployed.
 //   2. `recordsImplementation()` — the implementation the factory's deployer
 //      set. Zero means no module can be created: `createRecordsModule` would
 //      revert `NoImplementation()`.
-//   3. `moduleAddress(safe)` — the recorded module, else a CREATE2 prediction,
-//      else zero. It answers whether or not the proxy exists, so it is what a
-//      create is aimed at and what an `enableModule`/`setRecord` would name. It
-//      is NOT proof: the proof that a module is installed is code at the
-//      address, and the proof that a Safe carries it is the Safe's own
+//   3. `recordsModuleAddress(safe)` — the recorded module, else a CREATE2
+//      prediction, else zero. It answers whether or not the proxy exists, so it
+//      is what a create is aimed at and what an `enableModule`/`setRecord` would
+//      name. It is NOT proof: the proof that a module is installed is code at
+//      the address, and the proof that a Safe carries it is the Safe's own
 //      enabled-module list.
 //   4. `recordsModule(safe)` — only the module the factory has recorded. Zero
 //      means `createRecordsModule` has not run for this Safe, even when
-//      `moduleAddress` predicts an address for it.
+//      `recordsModuleAddress` predicts an address for it.
 //
 // `createRecordsModule(safe)` requires `msg.sender == safe`, so it goes out as a
 // Safe self-call: the runner is bound to the Safe, which makes the Safe
@@ -49,15 +49,14 @@ import {
   encodeFunctionData,
   getAddress,
   http,
-  parseAbi,
   type Address,
   type Hex,
 } from 'viem';
+import { AuthorFactory } from '@s2s/author-contracts';
 import { S2SRecordsModuleV0_1 } from '@s2s/publication-contracts';
 import { safeAbi } from '@s2s/soul2soul-shared';
 
-import { describeError, UsageError } from '../lib/errors';
-import { defaultForPath, textValue } from './configschema';
+import { describeError } from '../lib/errors';
 
 /** The record holding the author's pet name. */
 export const PEN_NAME_KEY = 'pen_name';
@@ -70,26 +69,6 @@ export const BIO_MAX_LENGTH = 1024;
 
 /** The zero address: "no implementation", "no prediction", "not deployed". */
 const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
-
-/**
- * The factory the CLI creates records modules through. It ships as zero until
- * the factory is deployed; `contracts.recordsFactory` / `S2S_AUTHOR_RECORDS_FACTORY`
- * point at a deployment without a new CLI build.
- */
-export const DEFAULT_AUTHOR_RECORDS_FACTORY: Address = ZERO_ADDRESS;
-
-/**
- * The `AuthorRecordsFactory` surface this file calls. Spelled here rather than
- * imported because the generated ABI shipped by `@s2s/author-contracts` predates
- * the contract; the selectors are the contract's, so the calls are the same once
- * the ABI catches up.
- */
-export const authorRecordsFactoryAbi = parseAbi([
-  'function recordsImplementation() view returns (address)',
-  'function moduleAddress(address safe) view returns (address)',
-  'function recordsModule(address safe) view returns (address)',
-  'function createRecordsModule(address safe) returns (address module, bool created)',
-]);
 
 /** A Safe self-call the owners of a multisig must propose. */
 export interface RecordsCall {
@@ -105,7 +84,7 @@ export interface RecordsResolution {
   deployed: boolean;
   /** `recordsImplementation()`; null for the zero address (nothing deployable). */
   implementation: Address | null;
-  /** `moduleAddress(safe)`; null for zero (no recorded module and no prediction). */
+  /** `recordsModuleAddress(safe)`; null for zero (no record and no prediction). */
   address: Address | null;
   /** `recordsModule(safe)`; null for zero (the factory has recorded no module). */
   recorded: Address | null;
@@ -121,8 +100,12 @@ export interface RecordsSeam {
   readHasCode(opts: { address: Address; rpcUrl: string }): Promise<boolean>;
   /** `recordsImplementation()`, null for the zero address. */
   recordsImplementation(opts: { factory: Address; rpcUrl: string }): Promise<Address | null>;
-  /** `moduleAddress(safe)`, null for the zero address. */
-  moduleAddress(opts: { factory: Address; safe: Address; rpcUrl: string }): Promise<Address | null>;
+  /** `recordsModuleAddress(safe)`, null for the zero address. */
+  recordsModuleAddress(opts: {
+    factory: Address;
+    safe: Address;
+    rpcUrl: string;
+  }): Promise<Address | null>;
   /** `recordsModule(safe)`, null for the zero address. */
   recordsModule(opts: { factory: Address; safe: Address; rpcUrl: string }): Promise<Address | null>;
   /** `getRecord(key)`, null when absent (`KeyNotFound`) or empty. */
@@ -159,22 +142,22 @@ export async function readRecordsImplementation(opts: {
 }): Promise<Address | null> {
   const implementation = await clientFor(opts.rpcUrl).readContract({
     address: opts.factory,
-    abi: authorRecordsFactoryAbi,
+    abi: AuthorFactory,
     functionName: 'recordsImplementation',
   });
   return implementation === ZERO_ADDRESS ? null : getAddress(implementation.toLowerCase());
 }
 
-/** `moduleAddress(safe)`; the zero address is reported as null. */
-export async function readModuleAddress(opts: {
+/** `recordsModuleAddress(safe)`; the zero address is reported as null. */
+export async function readRecordsModuleAddress(opts: {
   factory: Address;
   safe: Address;
   rpcUrl: string;
 }): Promise<Address | null> {
   const module = await clientFor(opts.rpcUrl).readContract({
     address: opts.factory,
-    abi: authorRecordsFactoryAbi,
-    functionName: 'moduleAddress',
+    abi: AuthorFactory,
+    functionName: 'recordsModuleAddress',
     args: [opts.safe],
   });
   return module === ZERO_ADDRESS ? null : getAddress(module.toLowerCase());
@@ -188,7 +171,7 @@ export async function readRecordsModule(opts: {
 }): Promise<Address | null> {
   const module = await clientFor(opts.rpcUrl).readContract({
     address: opts.factory,
-    abi: authorRecordsFactoryAbi,
+    abi: AuthorFactory,
     functionName: 'recordsModule',
     args: [opts.safe],
   });
@@ -218,49 +201,10 @@ export async function readRecord(opts: {
 export const defaultRecordsSeam: RecordsSeam = {
   readHasCode,
   recordsImplementation: readRecordsImplementation,
-  moduleAddress: readModuleAddress,
+  recordsModuleAddress: readRecordsModuleAddress,
   recordsModule: readRecordsModule,
   record: readRecord,
 };
-
-// ===========================================================================
-// The factory address in effect
-// ===========================================================================
-
-/**
- * `CliConfig` carries the resolved `contracts` section when the loader supplies
- * one (env already merged in). The member is optional so a `CliConfig` built
- * before this feature still type-checks; `authorRecordsFactory` falls back to
- * the env var and the shipped default in that case.
- */
-export type AuthorRecordsConfig = { contracts?: { recordsFactory?: string } };
-
-/** A 20-byte hex address, checksummed; throws `UsageError` for anything else. */
-function asAddress(value: string, source: string): Address {
-  const trimmed = value.trim();
-  if (!/^0x[0-9a-fA-F]{40}$/.test(trimmed)) {
-    throw new UsageError(`${source} is not an address: '${value}'`);
-  }
-  return getAddress(trimmed.toLowerCase());
-}
-
-/**
- * The factory address in effect: config `contracts.recordsFactory` (env
- * `S2S_AUTHOR_RECORDS_FACTORY`), else the shipped default — zero until the
- * factory is deployed.
- */
-export function authorRecordsFactory(config: AuthorRecordsConfig): Address {
-  const fromConfig = textValue(config.contracts?.recordsFactory);
-  if (fromConfig !== undefined) return asAddress(fromConfig, 'contracts.recordsFactory');
-
-  const fromEnv = textValue(process.env.S2S_AUTHOR_RECORDS_FACTORY);
-  if (fromEnv !== undefined) return asAddress(fromEnv, 'S2S_AUTHOR_RECORDS_FACTORY');
-
-  return asAddress(
-    defaultForPath('contracts.recordsFactory') ?? DEFAULT_AUTHOR_RECORDS_FACTORY,
-    'contracts.recordsFactory',
-  );
-}
 
 // ===========================================================================
 // Resolution
@@ -268,8 +212,8 @@ export function authorRecordsFactory(config: AuthorRecordsConfig): Address {
 
 /**
  * Factory → implementation → recorded module → predicted address. A read-only
- * resolution; a factory with no code, no implementation for the kind or no
- * address for this Safe answers nulls, and the caller says why.
+ * resolution; a factory with no code, no records implementation or no address
+ * for this Safe answers nulls, and the caller says why.
  */
 export async function resolveRecords(
   opts: { safe: Address; rpcUrl: string; factory: Address },
@@ -287,7 +231,7 @@ export async function resolveRecords(
     return { factory, deployed: true, implementation: null, address: null, recorded: null };
   }
   const [address, recorded] = await Promise.all([
-    seam.moduleAddress({ factory, safe: opts.safe, rpcUrl: opts.rpcUrl }),
+    seam.recordsModuleAddress({ factory, safe: opts.safe, rpcUrl: opts.rpcUrl }),
     seam.recordsModule({ factory, safe: opts.safe, rpcUrl: opts.rpcUrl }),
   ]);
   return { factory, deployed: true, implementation, address, recorded };
@@ -302,7 +246,7 @@ export function createRecordsModuleCall(factory: Address, safe: Address): Record
   return {
     to: factory,
     data: encodeFunctionData({
-      abi: authorRecordsFactoryAbi,
+      abi: AuthorFactory,
       functionName: 'createRecordsModule',
       args: [safe],
     }),
@@ -385,10 +329,10 @@ export interface RecordsPlan {
 
 /**
  * Why the factory cannot create anything: it carries no code. The drafts and
- * owner-history install is untouched; the address is a config value.
+ * owner-history install is untouched.
  */
-export function recordsFactoryNotDeployedNote(factory: Address): string {
-  return `the records factory ${factory} has no code — set contracts.recordsFactory (or S2S_AUTHOR_RECORDS_FACTORY) to a deployed factory; the drafts and owner-history install is unchanged`;
+export function factoryNotDeployedNote(factory: Address): string {
+  return `the author factory ${factory} has no code — the factory is not deployed; the drafts and owner-history install is unchanged`;
 }
 
 /**
@@ -397,7 +341,7 @@ export function recordsFactoryNotDeployedNote(factory: Address): string {
  * rather than pretending it can repair this.
  */
 export function recordsUnavailableNote(factory: Address): string {
-  return `the records factory ${factory} has no implementation set — run \`pnpm deploy:impl -- --kind records --factory ${factory}\`, then the factory deployer's \`setRecordsImplementation\`; the drafts and owner-history install is unchanged`;
+  return `the author factory ${factory} has no records implementation set — run \`pnpm deploy:impl -- --kind records --factory ${factory}\`, then the factory deployer's \`setRecordsImplementation\`; the drafts and owner-history install is unchanged`;
 }
 
 function includesAddress(list: readonly Address[], address: Address): boolean {
@@ -441,7 +385,7 @@ export async function planRecords(
     return {
       records: null,
       factory: resolved.factory,
-      note: recordsFactoryNotDeployedNote(resolved.factory),
+      note: factoryNotDeployedNote(resolved.factory),
     };
   }
   if (resolved.implementation === null || resolved.address === null) {
@@ -536,7 +480,7 @@ export async function writeRecords(
     opts.create ?? !(await deps.readHasCode({ address: opts.module, ...readOpts }));
   if (create) {
     deps.log(`creating the records module for ${opts.safe}…`);
-    await deps.send(opts.factory, JSON.stringify(authorRecordsFactoryAbi), 'createRecordsModule', [
+    await deps.send(opts.factory, JSON.stringify(AuthorFactory), 'createRecordsModule', [
       opts.safe,
     ]);
     sent = true;

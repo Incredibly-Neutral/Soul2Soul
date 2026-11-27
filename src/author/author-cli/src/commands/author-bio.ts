@@ -34,12 +34,11 @@ import { CliError, UsageError, describeError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { buildRpcEndpoints } from '../adapters/rpc';
 import type { SafeRunnerHandle } from '../adapters/tx-runner';
-import { defaultAuthorContractsSeam } from '../core/author-contracts';
+import { authorContractsFactory, defaultAuthorContractsSeam } from '../core/author-contracts';
 import {
   BIO_KEY,
   BIO_MAX_LENGTH,
   PEN_NAME_KEY,
-  authorRecordsFactory,
   defaultRecordsSeam,
   resolveRecords,
   type RecordsResolution,
@@ -87,7 +86,7 @@ export function authorBioDeps(overrides: Partial<AuthorBioDeps> = {}): AuthorBio
       overrides.resolve ??
       ((opts) =>
         resolveRecords(
-          { ...opts, factory: authorRecordsFactory(config()) },
+          { ...opts, factory: authorContractsFactory(config()) },
           defaultRecordsSeam,
         )),
     readRecord:
@@ -139,12 +138,12 @@ async function requireRecords(
   }
   if (!resolved.deployed) {
     throw new CliError(
-      `the records factory ${resolved.factory} is not deployed — run \`s2s author init\` once contracts.recordsFactory names a deployed factory`,
+      `the author factory ${resolved.factory} is not deployed — run \`s2s author init\` once contracts.authorFactory names a deployed factory`,
     );
   }
   if (resolved.implementation === null) {
     throw new CliError(
-      `the records factory ${resolved.factory} has no implementation set — run \`s2s author init\` once its deployer has set one`,
+      `the author factory ${resolved.factory} has no records implementation set — run \`s2s author init\` once its deployer has set one`,
     );
   }
   if (resolved.address === null) {

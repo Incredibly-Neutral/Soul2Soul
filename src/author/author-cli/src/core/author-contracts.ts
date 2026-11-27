@@ -1,8 +1,8 @@
 // ============================================================================
 // The author contracts, installed per author Safe.
 //
-// `@s2s/author-contracts` deployed two implementations (the drafts module and
-// the owner-history module) and `AuthorContractsFactory` on Base. Nothing
+// `@s2s/author-contracts` deployed the drafts module, the owner-history module
+// and the records implementation, and `AuthorFactory` on Base. Nothing
 // installs them per author: this module does, for the Safe it is given.
 //
 // The install is four steps:
@@ -85,7 +85,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 
 import {
-  AuthorContractsFactory,
+  AuthorFactory,
   DraftsModuleV1,
   OwnerHistoryGuard,
   OwnerHistoryModuleV1,
@@ -94,7 +94,6 @@ import { safeAbi } from '@s2s/soul2soul-shared';
 
 import type { SafeRunnerHandle } from '../adapters/tx-runner';
 import {
-  authorRecordsFactory,
   planRecords,
   writeRecords,
   resolveRecords,
@@ -208,7 +207,7 @@ const SUPPORTS_INTERFACE_ABI = [
 ] as const;
 
 /**
- * The `AuthorContractsFactory` this CLI installs through: the address the deploy
+ * The `AuthorFactory` this CLI installs through: the address the deploy
  * transcript reported. It cannot be re-read from a chain here, so it ships as a
  * default and is overridable (`contracts.authorFactory` / `S2S_AUTHOR_CONTRACTS_FACTORY`).
  */
@@ -431,13 +430,13 @@ export async function readAuthorContracts(
   const [draftsList, historyList] = (await Promise.all([
     client.readContract({
       address: factory,
-      abi: AuthorContractsFactory,
+      abi: AuthorFactory,
       functionName: 'getDraftsModulesForSafe',
       args: [safe],
     }),
     client.readContract({
       address: factory,
-      abi: AuthorContractsFactory,
+      abi: AuthorFactory,
       functionName: 'getOwnerHistoryModulesForSafe',
       args: [safe],
     }),
@@ -647,7 +646,7 @@ export async function readDraftsModuleSafe(opts: ModuleReadOptions): Promise<Add
 export async function readGuardFor(opts: GuardForOptions): Promise<Address | null> {
   const guard = await clientFor(opts.rpcUrl).readContract({
     address: opts.factory,
-    abi: AuthorContractsFactory,
+    abi: AuthorFactory,
     functionName: 'guardFor',
     args: [opts.module],
   });
@@ -667,13 +666,13 @@ export async function readPredictedModules(opts: ReadAuthorContractsOptions): Pr
   const [drafts, ownerHistory] = await Promise.all([
     client.readContract({
       address: opts.factory,
-      abi: AuthorContractsFactory,
+      abi: AuthorFactory,
       functionName: 'draftsModuleAddress',
       args: [opts.safe],
     }),
     client.readContract({
       address: opts.factory,
-      abi: AuthorContractsFactory,
+      abi: AuthorFactory,
       functionName: 'ownerHistoryModuleAddress',
       args: [opts.safe],
     }),
@@ -1245,7 +1244,7 @@ export async function installAuthorContracts(
     let draftsModule: Address | null = current.drafts;
     if (draftsModule === null) {
       out.log(`installing the drafts module for ${safe}…`);
-      await send(factory, JSON.stringify(AuthorContractsFactory), 'createDraftsModule', [safe]);
+      await send(factory, JSON.stringify(AuthorFactory), 'createDraftsModule', [safe]);
       current = await seam.readContracts({ factory, safe, rpcUrl });
       draftsModule = current.drafts;
       if (draftsModule === null) {
@@ -1261,7 +1260,7 @@ export async function installAuthorContracts(
 
     if (proof === null && current.ownerHistory === null) {
       out.log(`installing the owner-history module for ${safe}…`);
-      await send(factory, JSON.stringify(AuthorContractsFactory), 'createOwnerHistoryModule', [
+      await send(factory, JSON.stringify(AuthorFactory), 'createOwnerHistoryModule', [
         safe,
       ]);
       current = await seam.readContracts({ factory, safe, rpcUrl });
@@ -1325,7 +1324,7 @@ export async function installAuthorContracts(
      */
     const recordsDeps = {
       resolve: (o: { safe: Address; rpcUrl: string }) =>
-        resolveRecords({ ...o, factory: authorRecordsFactory(config) }, seam),
+        resolveRecords({ ...o, factory }, seam),
       readRecord: (o: { module: Address; key: string; rpcUrl: string }) => seam.record(o),
       readEnabled: async (o: { safe: Address; rpcUrl: string }) =>
         (await seam.readEnabled(o)).modules,
@@ -1687,7 +1686,7 @@ export async function migrateAuthorContracts(
     ] as const) {
       if (await seam.readHasCode({ address, rpcUrl })) continue;
       out.log(`creating ${method} for ${safe}…`);
-      await send(factory, JSON.stringify(AuthorContractsFactory), method, [safe]);
+      await send(factory, JSON.stringify(AuthorFactory), method, [safe]);
       if (!(await seam.readHasCode({ address, rpcUrl }))) {
         return {
           ...nothing(),
