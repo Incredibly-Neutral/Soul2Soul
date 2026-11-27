@@ -11,8 +11,8 @@
 // uses; this command opens a runner only when it is writing.
 //
 // The records module is resolved the way `author init` resolves it, every run:
-// the protocol manifest names the factory, the factory predicts the Safe's
-// module, and the Safe's own enabled-module list proves it is installed. Nothing
+// the config names the factory, the factory names the Safe's module, and the
+// Safe's own enabled-module list proves it is installed. Nothing
 // is cached in `authors.json` — a removed module would leave a stale address
 // there, and the store records what the Safe was, not what it is.
 //
@@ -39,6 +39,7 @@ import {
   BIO_KEY,
   BIO_MAX_LENGTH,
   PEN_NAME_KEY,
+  authorRecordsFactory,
   defaultRecordsSeam,
   resolveRecords,
   type RecordsResolution,
@@ -64,7 +65,7 @@ export interface AuthorBioResult {
 export interface AuthorBioDeps {
   store(): AuthorsStore;
   config(): CliConfig;
-  /** Manifest → factory → implementation → the Safe's predicted module. */
+  /** Config → factory → implementation → the Safe's module. */
   resolve(opts: { safe: Address; rpcUrl: string }): Promise<RecordsResolution>;
   readRecord(opts: { module: Address; key: string; rpcUrl: string }): Promise<string | null>;
   /** The Safe's enabled-module list — the proof the module is installed. */
@@ -78,12 +79,17 @@ export interface AuthorBioDeps {
 }
 
 export function authorBioDeps(overrides: Partial<AuthorBioDeps> = {}): AuthorBioDeps {
+  const config = overrides.config ?? (() => loadConfig());
   return {
     store: overrides.store ?? (() => readAuthors()),
-    config: overrides.config ?? (() => loadConfig()),
+    config,
     resolve:
       overrides.resolve ??
-      ((opts) => resolveRecords(opts, defaultRecordsSeam)),
+      ((opts) =>
+        resolveRecords(
+          { ...opts, factory: authorRecordsFactory(config()) },
+          defaultRecordsSeam,
+        )),
     readRecord:
       overrides.readRecord ??
       ((opts) => defaultRecordsSeam.record(opts)),
@@ -131,7 +137,17 @@ async function requireRecords(
   } catch (err) {
     throw new CliError(`could not read the records module for ${safe}: ${describeError(err)}`);
   }
-  if (resolved.implementation === null || resolved.address === null) {
+  if (!resolved.deployed) {
+    throw new CliError(
+      `the records factory ${resolved.factory} is not deployed — run \`s2s author init\` once contracts.recordsFactory names a deployed factory`,
+    );
+  }
+  if (resolved.implementation === null) {
+    throw new CliError(
+      `the records factory ${resolved.factory} has no implementation set — run \`s2s author init\` once its deployer has set one`,
+    );
+  }
+  if (resolved.address === null) {
     throw new CliError(
       `the Safe ${safe} has no records module — run \`s2s author init\` to install it`,
     );

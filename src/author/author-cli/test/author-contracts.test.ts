@@ -21,12 +21,9 @@ import { join } from 'node:path';
 import type { Address } from 'viem';
 import { decodeFunctionData } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import {
-  S2SPublicationModulesFactoryV0_1,
-  S2SRecordsModuleV0_1,
-} from '@s2s/publication-contracts';
+import { S2SRecordsModuleV0_1 } from '@s2s/publication-contracts';
 import { safeAbi } from '@s2s/soul2soul-shared';
-import { RECORDS_KIND } from '../src/core/author-records';
+import { authorRecordsFactoryAbi } from '../src/core/author-records';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -56,10 +53,12 @@ const FOREIGN_MODULE = '0x0000000000000000000000000000000000000d05' as Address;
 const NEW_DRAFTS = '0x0000000000000000000000000000000000000d11' as Address;
 const NEW_HISTORY = '0x0000000000000000000000000000000000000d12' as Address;
 const NEW_GUARD = '0x0000000000000000000000000000000000000d13' as Address;
-/** The records module the protocol manifest's factory predicts for SAFE. */
+/** The records module the author records factory names for SAFE. */
 const RECORDS = '0x0000000000000000000000000000000000000d06' as Address;
-/** An implementation the protocol Safe has approved for the records kind. */
+/** An implementation the records factory's deployer has set. */
 const RECORDS_IMPL = '0x0000000000000000000000000000000000000d07' as Address;
+/** The records factory the config names. */
+const RECORDS_FACTORY = '0x0000000000000000000000000000000000000D08' as Address;
 
 const PRIVATE_KEY =
   '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as `0x${string}`;
@@ -80,7 +79,7 @@ function configWith(overrides: Record<string, unknown> = {}): CliConfig {
   return {
     bundler: { url: 'http://127.0.0.1:4337' },
     paymaster: {},
-    contracts: { authorFactory: FACTORY },
+    contracts: { authorFactory: FACTORY, recordsFactory: RECORDS_FACTORY },
     ...overrides,
   } as unknown as CliConfig;
 }
@@ -123,14 +122,16 @@ interface FakeChainOptions {
   /** Genesis logs each drafts module holds (`count()`). */
   draftsCounts?: Record<string, number>;
   /**
-   * The records implementation the factory has approved; null (the default)
-   * means `latestImplementation(records)` is zero and the kind is not deployable.
+   * The records implementation the factory's deployer has set; null (the
+   * default) means `recordsImplementation()` is zero and nothing is deployable.
    */
   recordsImplementation?: Address | null;
-  /** The records module `moduleAddress(safe, records)` predicts; RECORDS by default. */
+  /** The records module `moduleAddress(safe)` names; RECORDS by default. */
   recordsModule?: Address;
-  /** Whether the records module already carries code (else `createModule` deploys it). */
+  /** Whether the records module already carries code (else `createRecordsModule` deploys it). */
   recordsDeployed?: boolean;
+  /** Whether the records factory itself carries code (false = not deployed). */
+  factoryDeployed?: boolean;
   /** Records already written into the module (key → value). */
   records?: Record<string, string>;
 }
@@ -151,6 +152,7 @@ function fakeChain(options: FakeChainOptions = {}) {
   const mintedGuard = options.mintedGuard ?? GUARD;
   const recordsModule = options.recordsModule ?? RECORDS;
   const recordsImplementation = options.recordsImplementation ?? null;
+  const factoryDeployed = options.factoryDeployed ?? true;
   const state = {
     drafts: [...(options.drafts ?? [])],
     history: [...(options.history ?? [])],
@@ -168,9 +170,11 @@ function fakeChain(options: FakeChainOptions = {}) {
     ...state.drafts.map((entry) => entry.toLowerCase()),
     ...state.history.map((entry) => entry.toLowerCase()),
   ]);
+  if (factoryDeployed) code.add(RECORDS_FACTORY.toLowerCase());
   // The records module exists only when this factory can deploy it and either
-  // it was already deployed or a `createModule` lands below. `moduleAddress`
-  // answers the prediction either way.
+  // it was already deployed or a `createRecordsModule` lands below. The factory
+  // records the module only once the create has run, so `moduleAddress` answers
+  // the prediction while `recordsModule` answers zero.
   if (recordsImplementation !== null && (options.recordsDeployed ?? false)) {
     code.add(recordsModule.toLowerCase());
   }
@@ -292,20 +296,24 @@ function fakeChain(options: FakeChainOptions = {}) {
       return Promise.resolve({ drafts: predicted.drafts, ownerHistory: predicted.ownerHistory });
     },
     readHasCode: ({ address }) => Promise.resolve(code.has(address.toLowerCase())),
-    // The protocol manifest names this factory; the bootstrap read needs no
-    // publication, so the fake answers it directly.
-    modulesFactory: () => {
-      if (options.unreachable) return Promise.reject(new Error('fetch failed'));
-      return Promise.resolve(FACTORY);
-    },
-    latestImplementation: () => {
+    recordsImplementation: () => {
       if (options.unreachable) return Promise.reject(new Error('fetch failed'));
       return Promise.resolve(recordsImplementation);
     },
-    // A prediction, whether or not the proxy exists — as the contract answers.
+    // The prediction, whether or not the proxy exists — as the contract answers;
+    // zero when there is no implementation to create from.
     moduleAddress: () => {
       if (options.unreachable) return Promise.reject(new Error('fetch failed'));
-      return Promise.resolve(recordsModule);
+      return Promise.resolve(recordsImplementation === null ? null : recordsModule);
+    },
+    // The factory records the module only after its create has run.
+    recordsModule: () => {
+      if (options.unreachable) return Promise.reject(new Error('fetch failed'));
+      return Promise.resolve(
+        recordsImplementation !== null && code.has(recordsModule.toLowerCase())
+          ? recordsModule
+          : null,
+      );
     },
     record: ({ key }) => {
       if (options.unreachable) return Promise.reject(new Error('fetch failed'));
@@ -351,7 +359,7 @@ function fakeChain(options: FakeChainOptions = {}) {
             guardSafes.set(mintedGuard.toLowerCase(), SAFE);
           }
           if (functionName === 'setGuard') state.slotGuard = args[0] as Address;
-          if (functionName === 'createModule') code.add(recordsModule.toLowerCase());
+          if (functionName === 'createRecordsModule') code.add(recordsModule.toLowerCase());
           if (functionName === 'setRecord') {
             const [key, value] = args as [string, string];
             state.records[key] = value;
@@ -424,9 +432,9 @@ describe('installAuthorContracts', () => {
   });
 
   it('skips the records module when the factory approves no implementation', async () => {
-    // `latestImplementation(records)` is zero, so `createModule` would revert
-    // `NoImplementation(records)`. The drafts/owner-history install must still
-    // report `installed`; the records note is the ops instruction, not a failure.
+    // `recordsImplementation()` is zero, so `createRecordsModule` would revert
+    // `NoImplementation()`. The drafts/owner-history install must still report
+    // `installed`; the records note is the ops instruction, not a failure.
     const { seam, calls } = fakeChain();
 
     const result = await installAuthorContracts(installArgs(), seam);
@@ -434,9 +442,22 @@ describe('installAuthorContracts', () => {
     expect(result.state).toBe('installed');
     expect(result.records).toBeNull();
     expect(result.recordsNote).toContain('deploy:impl -- --kind records');
-    expect(result.recordsNote).toContain('setImplementation');
-    expect(calls.some((call) => call.functionName === 'createModule')).toBe(false);
+    expect(result.recordsNote).toContain('setRecordsImplementation');
+    expect(calls.some((call) => call.functionName === 'createRecordsModule')).toBe(false);
     expect(calls.some((call) => call.functionName === 'setRecord')).toBe(false);
+  });
+
+  it('skips the records module when the records factory is not deployed', async () => {
+    // A zero or codeless factory cannot create anything. The drafts/owner-history
+    // install must still report `installed`, with the records step noted.
+    const { seam, calls } = fakeChain({ factoryDeployed: false });
+
+    const result = await installAuthorContracts(installArgs(), seam);
+
+    expect(result.state).toBe('installed');
+    expect(result.records).toBeNull();
+    expect(result.recordsNote).toContain('has no code');
+    expect(calls.some((call) => call.functionName === 'createRecordsModule')).toBe(false);
   });
 
   it('creates, enables and writes pen_name on a solely-owned Safe, in order', async () => {
@@ -452,13 +473,13 @@ describe('installAuthorContracts', () => {
       'enableModule',
       'enableModule',
       'setGuard',
-      'createModule',
+      'createRecordsModule',
       'enableModule',
       'setRecord',
     ]);
-    const createModule = calls[5];
-    expect(createModule?.to).toBe(FACTORY);
-    expect(createModule?.args).toEqual([SAFE, RECORDS_KIND, '0x']);
+    const createRecords = calls[5];
+    expect(createRecords?.to).toBe(RECORDS_FACTORY);
+    expect(createRecords?.args).toEqual([SAFE]);
     const enableRecords = calls[6];
     expect(enableRecords?.to).toBe(SAFE);
     expect(enableRecords?.args).toEqual([RECORDS]);
@@ -492,18 +513,18 @@ describe('installAuthorContracts', () => {
       SAFE,
       SAFE,
       SAFE,
-      FACTORY,
+      RECORDS_FACTORY,
       SAFE,
       RECORDS,
     ]);
 
     const [createCall, enableCall, recordCall] = (result.safeTxs ?? []).slice(-3);
     const create = decodeFunctionData({
-      abi: S2SPublicationModulesFactoryV0_1,
+      abi: authorRecordsFactoryAbi,
       data: createCall!.data,
     });
-    expect(create.functionName).toBe('createModule');
-    expect(create.args).toEqual([SAFE, RECORDS_KIND, '0x']);
+    expect(create.functionName).toBe('createRecordsModule');
+    expect(create.args).toEqual([SAFE]);
     const enable = decodeFunctionData({ abi: safeAbi, data: enableCall!.data });
     expect(enable.functionName).toBe('enableModule');
     expect(enable.args).toEqual([RECORDS]);
@@ -596,7 +617,13 @@ describe('installAuthorContracts', () => {
       multisig.seam,
     );
 
-    expect(proposed.safeTxs?.map((call) => call.to)).toEqual([SAFE, SAFE, SAFE, FACTORY, SAFE]);
+    expect(proposed.safeTxs?.map((call) => call.to)).toEqual([
+      SAFE,
+      SAFE,
+      SAFE,
+      RECORDS_FACTORY,
+      SAFE,
+    ]);
     const last = decodeFunctionData({
       abi: safeAbi,
       data: proposed.safeTxs![proposed.safeTxs!.length - 1]!.data,
@@ -911,7 +938,7 @@ describe('installAuthorContracts', () => {
     const config = {
       bundler: {},
       paymaster: {},
-      contracts: { authorFactory: FACTORY },
+      contracts: { authorFactory: FACTORY, recordsFactory: RECORDS_FACTORY },
     } as unknown as CliConfig;
 
     const result = await installAuthorContracts(installArgs(config), seam);
@@ -1164,7 +1191,7 @@ describe('migrateAuthorContracts', () => {
     const config = {
       bundler: {},
       paymaster: {},
-      contracts: { authorFactory: FACTORY },
+      contracts: { authorFactory: FACTORY, recordsFactory: RECORDS_FACTORY },
     } as unknown as CliConfig;
 
     const result = await migrateAuthorContracts(installArgs(config), seam);
