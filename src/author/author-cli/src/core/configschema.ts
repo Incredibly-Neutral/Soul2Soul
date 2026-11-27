@@ -111,7 +111,7 @@ export interface FileConfig {
    * `AuthorFactory` deployed once and shared: every author Safe is installed
    * through it.
    */
-  contracts?: { authorFactory?: string };
+  contracts?: { authorFactory?: string; registry?: string };
 }
 
 /** One settable leaf. `path` uses `*` for "one map label" (e.g. `pinning.*.key`). */
@@ -205,6 +205,13 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
     env: ['S2S_AUTHOR_CONTRACTS_FACTORY'],
     default: '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E',
   },
+  // The handle registry. Zero until it is deployed: an address with no code is
+  // reported as "not deployed yet", never as an RPC failure.
+  {
+    path: 'contracts.registry',
+    env: ['S2S_REGISTRY_ADDRESS'],
+    default: '0x0000000000000000000000000000000000000000',
+  },
 ];
 
 /**
@@ -257,7 +264,12 @@ export const BUILTIN_FILE_CONFIG: FileConfig = {
   // `defaults.json` and the field registry, exactly as the gateway and the
   // Filecoin RPC are: a missing or replaced defaults file must not leave the
   // author contracts uninstallable.
-  contracts: { authorFactory: '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E' },
+  contracts: {
+    authorFactory: '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E',
+    // The handle registry. The zero address is the honest floor: no code at it,
+    // so `s2s author handle` says the registry is not deployed yet.
+    registry: '0x0000000000000000000000000000000000000000',
+  },
 };
 
 // ===========================================================================
@@ -520,7 +532,10 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
   const github = compact({ token: textValue(objectValue(raw.github)?.token) });
   if (github) out.github = github;
 
-  const contracts = compact({ authorFactory: textValue(objectValue(raw.contracts)?.authorFactory) });
+  const contracts = compact({
+    authorFactory: textValue(objectValue(raw.contracts)?.authorFactory),
+    registry: textValue(objectValue(raw.contracts)?.registry),
+  });
   if (contracts) out.contracts = contracts;
 
   return out;

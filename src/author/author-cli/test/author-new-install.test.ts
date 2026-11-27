@@ -95,6 +95,44 @@ vi.mock('../src/core/author-contracts', () => ({
     Promise.reject(new Error('readAuthorContracts is not used by author new')),
 }));
 
+/** The handle step after the install: recorded, never run against a chain. */
+interface RegistryCall {
+  safe: string;
+  records: string | null;
+  privateKey: string;
+  rpcUrl: string;
+  handle: string | undefined;
+}
+
+const registryState = vi.hoisted(() => ({
+  calls: [] as RegistryCall[],
+  answer: undefined as (() => { handle: string | null; handleNote?: string }) | undefined,
+}));
+
+vi.mock('../src/core/author-registry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/core/author-registry')>();
+  return {
+    ...actual,
+    registerOnInstall: (opts: {
+      safe: string;
+      records: string | null;
+      privateKey: string;
+      rpcUrl: string;
+      handle?: string;
+    }): Promise<{ handle: string | null; handleNote?: string }> => {
+      registryState.calls.push({
+        safe: opts.safe,
+        records: opts.records,
+        privateKey: opts.privateKey,
+        rpcUrl: opts.rpcUrl,
+        handle: opts.handle,
+      });
+      const answer = registryState.answer;
+      return Promise.resolve(answer ? answer() : { handle: null });
+    },
+  };
+});
+
 /** Persist calls, kept separate from the store so the test does not assume the
  * core write-back's field names — only that `author new` asked it to persist. */
 const memory = vi.hoisted(() => ({
@@ -198,6 +236,8 @@ beforeEach(() => {
   installState.calls.length = 0;
   memory.contracts.length = 0;
   installState.answer = undefined;
+  registryState.calls.length = 0;
+  registryState.answer = undefined;
   installState.safePrediction = { address: SAFE, salt: 's2s_0x', deployed: false };
 });
 
@@ -366,5 +406,85 @@ describe('author new installs the author contracts', () => {
     const record = store().authors.zomi ?? {};
     expect(String(record.privateKey).toLowerCase()).toBe(KEY.toLowerCase());
     expect(record.safe).toBe(SAFE);
+  });
+});
+
+describe('author new --handle', () => {
+  it('asks for the handle to be registered after the install, with the module it installed', async () => {
+    installState.answer = () => installResult('installed', { records: RECORDS });
+    registryState.answer = () => ({ handle: 'zomi' });
+    const sink = recorder();
+    await authorNew.run(sink.out, {
+      flags: { key: KEY, handle: 'zomi' },
+      positionals: ['zomi'],
+    });
+
+    expect(registryState.calls).toHaveLength(1);
+    expect(registryState.calls[0]).toEqual({
+      safe: SAFE,
+      records: RECORDS,
+      privateKey: KEY,
+      rpcUrl: RPC,
+      handle: 'zomi',
+    });
+    const contracts = sink.data.contracts as Record<string, unknown>;
+    expect(contracts.handle).toBe('zomi');
+    expect(sink.human).toContain('handle      : zomi');
+  });
+
+  it('leaves a refused registration as a note, never a failed command', async () => {
+    installState.answer = () => installResult('installed', { records: RECORDS });
+    registryState.answer = () => ({
+      handle: null,
+      handleNote: "the handle 'taken' was not registered: 'taken' is already registered",
+    });
+    const sink = recorder();
+    await authorNew.run(sink.out, {
+      flags: { key: KEY, handle: 'taken' },
+      positionals: ['zomi'],
+    });
+
+    const contracts = sink.data.contracts as Record<string, unknown>;
+    expect(contracts.handle).toBeNull();
+    expect(contracts.handleNote).toContain('already registered');
+    expect(sink.human).toContain("handle note : the handle 'taken' was not registered");
+    expect(sink.data.name).toBe('zomi');
+    expect(sink.data.active).toBe(true);
+  });
+
+  it('reports the handle the Safe already holds when no --handle was given', async () => {
+    installState.answer = () => installResult('already', { records: RECORDS });
+    registryState.answer = () => ({ handle: 'zomi' });
+    const sink = recorder();
+    await authorNew.run(sink.out, { flags: { key: KEY }, positionals: ['zomi'] });
+
+    expect(registryState.calls).toHaveLength(1);
+    expect(registryState.calls[0]?.handle).toBeUndefined();
+    expect((sink.data.contracts as Record<string, unknown>).handle).toBe('zomi');
+  });
+
+  it('notes an unregistered --handle when the install skipped', async () => {
+    installState.answer = () =>
+      installResult('skipped', {
+        drafts: null,
+        ownerHistory: null,
+        guard: null,
+        note: 'no records implementation',
+      });
+    registryState.answer = () => ({
+      handle: null,
+      handleNote: "the handle 'zomi' was not registered: the Safe has no records module",
+    });
+    const sink = recorder();
+    await authorNew.run(sink.out, {
+      flags: { key: KEY, handle: 'zomi' },
+      positionals: ['zomi'],
+    });
+
+    expect(registryState.calls).toHaveLength(1);
+    expect(registryState.calls[0]?.records).toBeNull();
+    const contracts = sink.data.contracts as Record<string, unknown>;
+    expect(contracts.handle).toBeNull();
+    expect(contracts.handleNote).toContain("the handle 'zomi' was not registered");
   });
 });

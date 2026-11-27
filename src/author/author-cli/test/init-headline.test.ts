@@ -36,6 +36,7 @@ function report(overrides: Partial<ContractsReport> = {}): ContractsReport {
     ownerHistory: '0xd2',
     guard: '0xd3',
     records: null,
+    handle: null,
     state: 'installed',
     txs: [],
     ...overrides,
