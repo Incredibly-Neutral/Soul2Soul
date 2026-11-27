@@ -259,6 +259,14 @@ export class S2SDealsTab extends LitElement {
   /** Bumped on every phase change, handed to <s2s-table> as its revision. */
   @state() private rowRevision = 0;
   /**
+   * Agreements Render site may visit, keyed by genesis. Every deal starts
+   * unticked and is written only once its checkbox is set; the set is in
+   * memory, so a reload starts empty again. Offers are not in this set: the
+   * sweep always visits them, since an offer's page is the one a removal has
+   * to reach.
+   */
+  @state() private selected: ReadonlySet<string> = new Set();
+  /**
    * Rows kept in the Pending Offers table after the chain stopped listing them.
    * A refused offer leaves no chain state behind, but its page may still be
    * live (an author's non-whitelisted `makeOffer` suspends an agreement and
@@ -348,6 +356,29 @@ export class S2SDealsTab extends LitElement {
         font-size: 0.78rem;
         color: var(--color-purple, #d8b4fe);
         text-decoration: underline;
+      }
+
+      /* The leading cell: one checkbox per agreement. The cells centre their
+         content, and a checkbox centres fine, so it needs no offset. */
+      .row-select {
+        margin: 0;
+        cursor: pointer;
+        accent-color: var(--color-yellow);
+      }
+
+      /* The leading header cell: its select-all checkbox and the word 'all'. */
+      .select-all {
+        display: inline-flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 0.4rem;
+        cursor: pointer;
+      }
+
+      .select-all input {
+        margin: 0;
+        cursor: pointer;
+        accent-color: var(--color-yellow);
       }
     `,
   ];
@@ -982,18 +1013,46 @@ export class S2SDealsTab extends LitElement {
 
   // ---- render calls -------------------------------------------------------
 
+  /** True when this agreement's page is part of the next Render site sweep. */
+  private isSelected(genesis: string): boolean {
+    return this.selected.has(genesis);
+  }
+
+  private setSelected(genesis: string, selected: boolean) {
+    const next = new Set(this.selected);
+    if (selected) next.add(genesis);
+    else next.delete(genesis);
+    this.selected = next;
+    this.rowRevision += 1;
+  }
+
+  /** The header checkbox: tick everything, or untick everything.
+   *  Every listed deal is the scope, not the rows a chip filter leaves on
+   *  screen: the selection decides what the site gets, not what is shown. */
+  private toggleAllSelected() {
+    const all = store.deals.every((d) => this.isSelected(d.genesis));
+    this.selected = all ? new Set() : new Set(store.deals.map((d) => d.genesis));
+    this.rowRevision += 1;
+  }
+
   /**
-   * Every genesis a sweep must visit: the deals and the offers, deduped. An
-   * offer has no agreement, so rendering it makes the action remove the page
-   * its path still holds — which is the only way a revoked manuscript's own
-   * page is ever revisited, since it is no longer a deal. A dev sweep drops
-   * encrypted items: the runner has no key. A publish or preview sweep keeps
-   * them: publish signs on Lit, preview decrypts there.
+   * Every genesis a sweep must visit: the ticked deals and all the offers,
+   * deduped. No deal is ticked until one is set, so an unticked agreement's
+   * page is left as the site holds it. An offer has no agreement, so rendering
+   * it makes the action remove the page its path still holds — which is the
+   * only way a revoked manuscript's own page is ever revisited, since it is no
+   * longer a deal — so offers are always visited. A dev sweep drops encrypted
+   * items: the runner has no key. A publish or preview sweep keeps them:
+   * publish signs on Lit, preview decrypts there.
    */
   private renderIds(mode: RenderMode): string[] {
     const seen = new Set<string>();
     const ids: string[] = [];
-    for (const item of [...store.deals, ...store.offers]) {
+    const rows = [
+      ...store.deals.filter((deal) => this.isSelected(deal.genesis)),
+      ...store.offers,
+    ];
+    for (const item of rows) {
       if (mode === 'dev' && item.encryption) continue;
       if (seen.has(item.genesis)) continue;
       seen.add(item.genesis);
@@ -1003,8 +1062,13 @@ export class S2SDealsTab extends LitElement {
   }
 
   private async bulkRender(mode: 'dev' | 'publish') {
+    const ids = this.renderIds(mode);
+    if (ids.length === 0) {
+      this.showNotification('Tick an agreement to render.', 'error');
+      return;
+    }
     try {
-      const res = await this.performRender(mode, this.renderIds(mode));
+      const res = await this.performRender(mode, ids);
       console.log(res);
       if (!res.success) {
         this.showNotification(
@@ -1167,6 +1231,10 @@ export class S2SDealsTab extends LitElement {
   private renderDealRow(deal: Deal): TemplateResult {
     return html`
       <div class="deal-card table-row" data-genesis="${deal.genesis}">
+        <div class="table-cell select-cell"><input class="row-select" type="checkbox"
+          aria-label="Render ${displayName(deal)}"
+          .checked=${this.isSelected(deal.genesis)}
+          @change=${(e: Event) => this.setSelected(deal.genesis, (e.target as HTMLInputElement).checked)}></div>
         <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${displayName(deal)}'></copy-content-id></div>
         <div class="table-cell"><pet-name value=${deal.author}></pet-name></div>
         <div class="table-cell">${deal.postType ?? ''}</div>
@@ -1194,6 +1262,9 @@ export class S2SDealsTab extends LitElement {
     }
 
     const offers = this.offerRows();
+    const allSelected =
+      store.deals.length > 0 && store.deals.every((d) => this.isSelected(d.genesis));
+    const anySelected = store.deals.some((d) => this.isSelected(d.genesis));
 
     // The dev toggle is off until the dev sweep has a reason to be exposed.
     return html`
@@ -1249,11 +1320,17 @@ export class S2SDealsTab extends LitElement {
           .chips=${this.dealsChips}
           .rowRenderer=${this.dealRowRenderer}
           .revision=${this.rowRevision}
+          .leadingHeader=${true}
+          .leadingContent=${html`<label class="select-all" title="Render every agreement">
+            <input type="checkbox" .checked=${allSelected}
+              .indeterminate=${anySelected && !allSelected}
+              @change=${() => this.toggleAllSelected()}> all
+          </label>`}
           .actionsHeader=${true}
           .actionsHeaderClass=${'hide-sm'}
           .actionsContent=${html`actions`}
           emptyText=${store.deals.length > 0 ? 'No agreements match the current filters' : 'No active agreements yet'}
-          gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
+          gridTemplate="auto 2fr 1fr 1fr 1fr 1fr 1fr auto"
           @sort=${(e: CustomEvent) => { this.dealsSort = toggleSort(this.dealsSort, e.detail.key); }}
           @chip-filter=${(e: CustomEvent) => { this.dealsChips = setChips(this.dealsChips, e.detail.key, e.detail.values); }}
         ></s2s-table>

@@ -302,11 +302,21 @@ function rowRenderButton(root: ShadowRoot, genesis: string): HTMLButtonElement |
   return null;
 }
 
-/** The text of a row's cells, in column order (id, author, type, created, ...). */
+/** The text of a row's cells, in column order (id, author, type, created, ...).
+ *  The leading select cell holds a checkbox rather than a column, so it is
+ *  left out and the indices stay the data columns'. */
 function cellTexts(root: ShadowRoot, genesis: string): string[] {
   const row = root.querySelector(`[data-genesis="${genesis}"]`);
   if (row === null) return [];
-  return [...row.querySelectorAll('.table-cell')].map((c) => (c.textContent ?? '').trim());
+  return [...row.querySelectorAll('.table-cell:not(.select-cell)')].map(
+    (c) => (c.textContent ?? '').trim(),
+  );
+}
+
+/** Tick or untick every agreement via the table header's 'all' box. */
+async function tickAllAgreements(root: ShadowRoot, el: LitElement): Promise<void> {
+  root.querySelector<HTMLInputElement>('.select-all input')!.click();
+  await flushUpdates(el);
 }
 
 /** A table's header cells, in order, as the tab labels them. */
@@ -1502,6 +1512,8 @@ describe('s2s-deals-tab', () => {
 
     const sweep = findRowButton(root, 'button[data-action="bulkrender"]');
     expect(sweep).not.toBeNull();
+    // A deal is written only when ticked: the sweep starts with no agreements.
+    await tickAllAgreements(root, el);
     sweep!.click();
     await flushUpdates(el);
 
@@ -1509,6 +1521,75 @@ describe('s2s-deals-tab', () => {
     const args = lastRenderCall();
     expect(args[0]).toBe('publish');
     expect(args[8]).toEqual(['0xDeal1', '0xShared', '0xOffer1']);
+  });
+
+  it('starts every agreement unticked, and sweeps only the ticked ones', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal'), rawDeal('0xDeal2', '0xAuthorDeal')],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    vi.mocked(renderwithLitActions).mockResolvedValue(renderResult('bafySite'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (2)'));
+
+    const boxes = [...root.querySelectorAll<HTMLInputElement>('input.row-select')];
+    expect(boxes.length).toBe(2);
+    expect(boxes.some((b) => b.checked)).toBe(false);
+    const all = root.querySelector<HTMLInputElement>('.select-all input')!;
+    expect(all.checked).toBe(false);
+    expect(all.indeterminate).toBe(false);
+
+    // One row ticked: the header box shows the partial state, not checked.
+    boxes[0].click();
+    await flushUpdates(el);
+    expect(root.querySelectorAll<HTMLInputElement>('input.row-select')[0].checked).toBe(true);
+    expect(all.checked).toBe(false);
+    expect(all.indeterminate).toBe(true);
+
+    // The sweep writes the ticked agreement. The offer is still visited: its
+    // page is what a removal has to reach.
+    findRowButton(root, 'button[data-action="bulkrender"]')!.click();
+    await flushUpdates(el);
+    expect(renderwithLitActions).toHaveBeenCalledTimes(1);
+    expect(lastRenderCall()[8]).toEqual(['0xDeal1', '0xOffer1']);
+
+    // The header box ticks everything, then clears it again.
+    all.click();
+    await flushUpdates(el);
+    expect(
+      [...root.querySelectorAll<HTMLInputElement>('input.row-select')].every((b) => b.checked),
+    ).toBe(true);
+    expect(root.querySelector<HTMLInputElement>('.select-all input')!.checked).toBe(true);
+
+    all.click();
+    await flushUpdates(el);
+    expect(
+      [...root.querySelectorAll<HTMLInputElement>('input.row-select')].some((b) => b.checked),
+    ).toBe(false);
+  });
+
+  it('does not render when no agreement is ticked and there is no offer', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('A page'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+    expect(root.querySelector<HTMLInputElement>('input.row-select')!.checked).toBe(false);
+
+    findRowButton(root, 'button[data-action="bulkrender"]')!.click();
+    await flushUpdates(el);
+
+    expect(renderwithLitActions).not.toHaveBeenCalled();
+    expect(notificationTexts().join(' | ')).toContain('Tick an agreement to render.');
   });
 
   it('hides the row render action in dev mode, while Render site stays a publish sweep', async () => {
@@ -1541,6 +1622,7 @@ describe('s2s-deals-tab', () => {
       expect(rowRenderButton(root, '0xOfferPlain')).toBeNull();
       expect(root.textContent).not.toContain('Publish');
 
+      await tickAllAgreements(root, el);
       findRowButton(root, 'button[data-action="bulkrender"]')!.click();
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
@@ -2060,6 +2142,7 @@ describe('s2s-deals-tab', () => {
       'actions',
     ]);
     expect(headerLabels(dealsTable)).toEqual([
+      'all',
       'id',
       'author',
       'type',

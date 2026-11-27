@@ -38,7 +38,9 @@
 //   the storage tab's zero-datasets case.
 // - The trailing per-table "Actions" header cell is supported via
 //   `actionsHeader` (render the cell), `actionsContent` (its markup) and
-//   `actionsHeaderClass` (extra classes, e.g. hide-sm).
+//   `actionsHeaderClass` (extra classes, e.g. hide-sm). A leading header cell
+//   before the first column is supported the same way, via `leadingHeader`,
+//   `leadingContent` and `leadingHeaderClass` (e.g. a select-all checkbox).
 // - `revision`: opaque counter; bump it to force a re-render when the host's
 //   transient per-row UI state (e.g. in-flight delete/terminate) changes
 //   without the rows array itself changing.
@@ -107,6 +109,15 @@ export class S2STable<T> extends LitElement {
 
   /** CSS grid-template-columns value for the .table grid. */
   @property({ type: String }) gridTemplate = '';
+
+  /** Render a leading header cell before the first column (e.g. select-all). */
+  @property({ type: Boolean }) leadingHeader = false;
+
+  /** Extra classes for the leading header cell. */
+  @property({ type: String }) leadingHeaderClass = '';
+
+  /** Content of the leading header cell (a select-all checkbox, ...). */
+  @property({ attribute: false }) leadingContent: TemplateResult = html``;
 
   /** Render the trailing "Actions" header cell after the columns. */
   @property({ type: Boolean }) actionsHeader = false;
@@ -372,6 +383,13 @@ export class S2STable<T> extends LitElement {
               class="table"
               style=${this.gridTemplate ? `grid-template-columns: ${this.gridTemplate};` : nothing}
             >
+              ${this.leadingHeader
+                ? html`
+                    <div class="table-header${this.leadingHeaderClass ? ' ' + this.leadingHeaderClass : ''}">
+                      ${this.leadingContent}
+                    </div>
+                  `
+                : ''}
               ${this.columns.map((col) => this.sortableHeader(col))}
               ${this.actionsHeader
                 ? html`

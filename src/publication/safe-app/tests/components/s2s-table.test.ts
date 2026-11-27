@@ -212,6 +212,20 @@ describe('s2s-table chips mode', () => {
     expect(rowIds(desc)).toEqual(['b', 'c']);
   });
 
+  it('renders a leading header cell before the columns, and only when asked', async () => {
+    const plain = await mountTable();
+    expect(plain.querySelector('.table-header')?.textContent?.trim()).toBe('ID');
+
+    const el = await mountTable({
+      leadingHeader: true,
+      leadingContent: html`<input type="checkbox">`,
+    });
+    const headers = [...el.querySelectorAll('.table-header')];
+    expect(headers.length).toBe(columns.length + 1);
+    expect(headers[0].querySelector('input[type="checkbox"]')).toBeTruthy();
+    expect(headers[1].textContent?.trim()).toBe('ID');
+  });
+
   it('dropdown mode is unchanged: no chips row, filter events still fire (regression)', async () => {
     const el = await mountTable({ filterKeys: ['kind'] });
     expect(el.querySelector('.chips-row')).toBeNull();

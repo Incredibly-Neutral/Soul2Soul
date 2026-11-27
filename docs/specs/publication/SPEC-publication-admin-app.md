@@ -62,7 +62,7 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 | path                                                                                                                           | role                                                                                                             |
 | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `components/s2s-app.ts`                                                                                                        | root element; five tabs; reads the site root via `getText(node, "contenthash_wrapped")`; boots `FilecoinStorage` |
-| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions (Preview, Publish/Remove page), Render site with a dev/publish toggle |
+| `components/s2s-deals-tab.ts`                                                                                                  | deals and offers (`getAllDealsAndOffers`), row actions (Preview, Publish/Remove page), per-row render checkboxes, Render site with a dev/publish toggle |
 | `components/s2s-whitelist-tab.ts`                                                                                              | author/dev/reviewer lists                                                                                                 |
 | `components/s2s-records-tab.ts`                                                                                                | view/edit records; config + asset build entry; alias editing                                                     |
 | `components/s2s-storage-tab.ts`                                                                                                | CID inventory + Filecoin storage/Data-Sets tables, piece delete, dataset terminate                               |
@@ -151,9 +151,14 @@ browser blocks the popup, the row keeps an “Open
 preview” link under the button. One preview runs per row at a time.
 
 **Render site:** one button, two behaviours, the same `renderwithLitActions` call with the toolbar toggle choosing
-`dev` or `publish`. A dev sweep drops encrypted items; a publish sweep keeps them. The item list is
-`store.deals` and `store.offers` (the app's cache, not the module), and the result is `console.log`ged — no root
-is set, no header refresh. Details in
+`dev` or `publish`. A dev sweep drops encrypted items; a publish sweep keeps them. The item list is the ticked
+agreements in `store.deals` plus every item in `store.offers` (the app's cache, not the module); a ticked
+agreement is rendered, an unticked one is left as the site holds it, and every offer is still visited because
+its page is what a removal has to reach. Every agreement starts unticked; the selection lives in the tab as a
+plain in-memory set, so a reload clears it and a deal that appears after a sync arrives unticked. The deals
+table's leading header cell carries an `all` checkbox that ticks or unticks the whole deal set and shows the
+partial state, and each deal row's first cell carries that row's checkbox. The result is `console.log`ged — no
+root is set, no header refresh. Details in
 [the storage child](SPEC-publication-storage.md#rendering-and-what-it-leaves-behind) and
 [the front door §render](SPEC-publication.md).
 
