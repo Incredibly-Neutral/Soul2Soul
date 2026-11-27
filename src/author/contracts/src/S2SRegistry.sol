@@ -87,9 +87,10 @@ contract S2SRegistry {
     /// @dev Skeleton hash → the timestamp before which no one may claim it.
     mapping(bytes32 => uint64) private coolingUntil;
 
-    /// @dev The last version ever assigned per handle hash. `entries[h]` is
+    /// @dev The last version ever assigned per skeleton hash. `entries[h]` is
     ///      deleted on release, so this is the only record that keeps a
-    ///      re-registration from restarting at 1 and reusing a version.
+    ///      re-registration, under any spelling, from restarting at 1 and
+    ///      reusing a version.
     mapping(bytes32 => uint32) private lastVersion;
 
     event Registered(
@@ -183,10 +184,13 @@ contract S2SRegistry {
     }
 
     /// @notice Move the owning Safe's records pointer, e.g. after the Safe
-    ///         installs a new records module.
+    ///         installs a new records module. `location` must pass the gate
+    ///         exactly as at registration, so the entry never points at a
+    ///         contract the gate would refuse.
     function setRecordsLocation(address location) external {
         bytes32 handleHash = handleOf[msg.sender];
         if (handleHash == bytes32(0)) revert NoHandle();
+        if (!IAuthorGate(authorGate).isAuthor(msg.sender, location)) revert NotAuthor();
         entries[handleHash].recordsLocation = location;
         emit RecordsLocationSet(handleHash, location);
     }

@@ -597,9 +597,14 @@ describe('S2SRegistry', () => {
     );
   });
 
-  it('setRecordsLocation moves the pointer and emits the handle hash', async () => {
+  it('setRecordsLocation accepts a location the gate accepts and emits the handle hash', async () => {
     await register(w, safeA, 'alice');
-    const newLocation = await deployModule(w, safeA.safe.address);
+    // AuthorFactory records one module per Safe, so a second real module cannot
+    // exist. The permissive gate stands in for a gate that accepts the move; the
+    // registry's check is what this test exercises.
+    const permissive = await viem.deployContract('MockPermissiveGate');
+    await asGovernor(w, 'setAuthorGate', [permissive.address]);
+    const newLocation = await viem.deployContract('MockSingleton');
     await setLocation(w, safeA, newLocation.address);
 
     const entry = await w.registry.read.entry(['alice']);
@@ -614,6 +619,20 @@ describe('S2SRegistry', () => {
     assert.equal(logs.length, 1);
     assert.equal(logs[0]!.args.handleHash, keccak256(new TextEncoder().encode('alice')));
     same(logs[0]!.args.location!, newLocation.address);
+  });
+
+  it('setRecordsLocation refuses a location the gate refuses and keeps the old pointer', async () => {
+    await register(w, safeA, 'alice');
+    const before = (await w.registry.read.entry(['alice'])).recordsLocation;
+    const other = await newAuthor(w);
+    // Bound to another Safe, so the gate says no even though it is real module
+    // proxy code.
+    await assertError(
+      w.registry.abi as any[],
+      setLocation(w, safeA, other.module.address),
+      'NotAuthor',
+    );
+    same((await w.registry.read.entry(['alice'])).recordsLocation, before);
   });
 
   // ── The gate at the registry ───────────────────────────────────

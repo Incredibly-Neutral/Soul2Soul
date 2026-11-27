@@ -138,6 +138,17 @@ contract MockRecordsStub {
 }
 
 /**
+ * @title MockPermissiveGate
+ * @notice Accepts every location, so a test can exercise a registry path that
+ *         gate-checks a location without needing a second real module.
+ */
+contract MockPermissiveGate {
+    function isAuthor(address, address) external pure returns (bool) {
+        return true;
+    }
+}
+
+/**
  * @title MockAuthorFactory
  * @notice A stand-in for `AuthorFactory` in the gate's allowlist. The gate only
  *         compares the address `module.factory()` returns; the fixture is never

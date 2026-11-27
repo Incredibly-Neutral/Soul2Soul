@@ -73,7 +73,7 @@ holds one live entry per handle:
 | `handle`          | the exact registered spelling, not the stripped one            |
 | `version`         | 1 for a first registration, +1 per registration of this skeleton |
 | `registeredAt`    | block timestamp of the live registration                        |
-| `recordsLocation` | the module named at registration; the Safe can move it          |
+| `recordsLocation` | the module named at registration; the Safe can move it to a location the gate accepts |
 
 Every rule is a byte rule on the raw UTF-8, checked in this order: 3–32 bytes, then `a-z 0-9 -`
 only (uppercase is refused, never folded), then no leading, trailing or doubled hyphen, then
@@ -92,8 +92,9 @@ Safe itself and passes the records module the gate must find enabled on it and b
 reverts `AlreadyRegistered` before it looks at the name. `release()` deletes the entry, frees every
 spelling of the skeleton and starts a **90-day cooldown** during which the name is unavailable to
 everyone, including the Safe that released it. The version is keyed by the skeleton in
-`versionOf`, so any later spelling of it gets version + 1 and a version is never reused. `setRecordsLocation` is the
-ownering Safe's only other write.
+`versionOf`, so any later spelling of it gets version + 1 and a version is never reused.
+`setRecordsLocation` is the owning Safe's only other write; it runs the same gate check, so the
+pointer cannot move to a contract the gate would refuse.
 
 Governance can `reserve`/`unreserve` skeletons, `assignReserved(handle, safe, recordsLocation)` a
 free reserved name to a gate-checked Safe, `setAuthorGate` and `transferGovernance`. All three name
