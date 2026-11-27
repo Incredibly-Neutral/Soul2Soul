@@ -17,16 +17,17 @@ One factory, `AuthorFactory`, deploys every per-author proxy: the drafts log, th
 | --------------------------------------- | -------------------------------------------- |
 | `DraftsModuleV1` (implementation)       | `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C` |
 | `OwnerHistoryModuleV1` (implementation) | `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` |
-| `AuthorFactory`                         | `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` |
 
-These are the `prod` defaults the CLI carries. `contracts.authorFactory`
-(`S2S_AUTHOR_CONTRACTS_FACTORY`) overrides the factory per environment, and the three
-implementations are whatever that factory reports.
+`AuthorFactory` has no address in this table: use the one `pnpm deploy:authorcontracts`
+printed. `contracts.authorFactory` (`S2S_AUTHOR_CONTRACTS_FACTORY`) overrides it per
+environment, and the three implementations are whatever that factory reports.
 
-The records implementation is not compiled in this package. `pnpm deploy:authorcontracts`
-deploys `S2SRecordsModuleV0_1` from the artifact `@s2s/publication-contracts` exports, with
-`(authorFactory, protocolSafe)` as its constructor arguments, then calls
-`setRecordsImplementation` on the factory.
+A factory deployed before this change has no records role: two implementations, no
+`recordsImplementation`, no `createRecordsModule`. Deploy a new `AuthorFactory` with the same
+script, which then deploys the records implementation against that new factory. The records
+implementation is not compiled in this package: `S2SRecordsModuleV0_1` comes from the artifact
+`@s2s/publication-contracts` exports, with `(authorFactory, protocolSafe)` as its constructor
+arguments, and the script calls `setRecordsImplementation` on the factory.
 
 `createDraftsModule(safe)`, `createOwnerHistoryModule(safe)` and `createRecordsModule(safe)` are
 **permissionless**, and none installs anything: deploying a proxy (and, for the history, a guard)
