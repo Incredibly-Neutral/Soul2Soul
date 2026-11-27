@@ -20,10 +20,21 @@ reads it, and the next release is judged against the last release rather than ag
 
 ## 0.1.4 — unreleased
 
-Unpinned. `pnpm update-protocol 0.1.4` creates group `s2s@0.1.4`; its id, the seven CIDs and the
-`safeTxHash` are recorded here at that run. Pinning moves no publication: each one reads the
-manifest at its own `manifest_version` record, so pinning a build to a publication is a separate
-human step. Every action bundle changes, so the pin is a fresh group and a release.
+Group `s2s@0.1.4`, id `24`. Document
+`0x80b2ba805a11bf544259f3f8ed6d3b6e3c70f1ce324e32295eb90c560f4b1006` (nonce 766), proposed and
+unfiled: a publication Safe owner approves it, then `pnpm update-protocol 0.1.4` runs again to check
+the filed document and the publication pin. All seven action CIDs differ from 0.1.3, so the group is
+fresh and the build needs a release. Filing the document moves no publication: each one reads the
+manifest at its own `manifest_version` record, so pinning this build to a publication stays a
+separate human step. Tag: the commit that records the filed pin in `config/0.1.4.json`.
+
+- `prep`: `Qmdb1wJ8AAWQbXUnNZhbADQ7a8K9sXDrbGjyKNeVPUivYo`
+- `render`: `Qmcc8ZGmy2Tyz66Q2jB7bT9LwzQFfDZ8uBCJP8BVKLXmDT`
+- `update`: `QmUtUTtHkfMsMH72tiMvYjBaZF8GnBVWAHDMqNEwvuDJQY`
+- `maintain-cache`: `QmQGUxqiAHh1Mpc8Xi22FUAirSerRQ3GmJsy3go6vUs2tE`
+- `repoint-archive`: `QmYQrvkYecoPwJzagX15r48ug1v8xVn9bNLkVzNMiRnfed`
+- `encrypt`: `QmT84SLuQWzbNrm5j1oRLj889mpSjP4jkmVFMeRUknWCcK`
+- `decrypt`: `QmZykRkdpeJBbjE3tEkrkocQNEEpzj6geGj4FfmenxnkTY`
 
 ### press (actions)
 
