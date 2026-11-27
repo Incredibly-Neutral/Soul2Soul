@@ -43,10 +43,11 @@
  * kind. A module naming a factory outside this list is refused even when its
  * code and kind are correct.
  *
- * `MODULE_PROXY_CODEHASH`: `keccak256(eth_getCode(<a deployed records module>))`
- * on Base. The module proxy is `S2SModuleProxy`; every module kind shares its
- * runtime code, so any deployed module proxy answers the same hash. Do not use
- * the publication factory's creation-code hash: that is a different value.
+ * `MODULE_PROXY_CODEHASH`: `keccak256(eth_getCode(<records module>))` for a
+ * module `AuthorFactory` created. The factory deploys OpenZeppelin's
+ * `ERC1967Proxy`, so every records module it deploys shares that proxy runtime
+ * code, and that is the value the gate compares. Do not use a creation-code
+ * hash or `S2SModuleProxy`: those are different values.
  *
  * Re-verify all four after every Safe or module release. They are immutable in
  * the gate; a change needs a new gate and `setAuthorGate` on the registry.

@@ -121,8 +121,8 @@ that case.
 `codehash` is one of the allowed Safe proxy runtime hashes; `safe.masterCopy()` is an allowed
 singleton; `recordsModule` has code; its `codehash` is the allowed module proxy hash; its
 `moduleKind()` is `keccak256("s2s.module.records")`; its `factory()` is in the allowed factory list;
-`safe.isModuleEnabled(recordsModule)`; and `recordsModule.safe() == safe`. There is no try/catch: a
-proxy that passed its hash test cannot revert on the reads above, and a call that does revert fails
+`safe.isModuleEnabled(recordsModule)`; and `recordsModule.safe() == safe`. There is no try/catch:
+the Safe proxy's own reads cannot revert after its hash check, and a module call that reverts fails
 the registration rather than being treated as a no.
 
 The Safe code hash proves the bytecode is Safe's proxy runtime code, not that the canonical tooling
@@ -138,9 +138,9 @@ proxies point at, read from `masterCopy()` of a Safe you trust or taken from Saf
 deployment. `SAFE_PROXY_CODEHASHES` is `keccak256(eth_getCode(<known Safe proxy>))` on Base, not a
 creation code hash and not a hash from another chain. `AUTHOR_FACTORIES` is the `AuthorFactory`
 address(es) whose records modules are accepted. `MODULE_PROXY_CODEHASH` is
-`keccak256(eth_getCode(<a deployed records module>))`: every module kind shares `S2SModuleProxy`'s
-runtime code, and the publication factory's creation-code hash is a different value. Re-verify all
-four after any Safe or module release.
+`keccak256(eth_getCode(<a records module AuthorFactory created>))`. The factory deploys
+OpenZeppelin's `ERC1967Proxy`, not `S2SModuleProxy`, and every records module it deploys shares that
+proxy runtime code. Re-verify all four after any Safe or module release.
 
 ## Deploying the registry
 

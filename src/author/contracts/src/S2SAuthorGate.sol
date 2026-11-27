@@ -82,10 +82,11 @@ contract S2SAuthorGate {
      * @param authorFactories The factories allowed to have deployed the records
      *        module. `AuthorFactory` is one; a module naming any other factory is
      *        refused even when its code and kind are right.
-     * @param moduleProxyCodehash The keccak256 of the module proxy's runtime
-     *        code — `S2SModuleProxy` on Base, which every module kind shares.
-     *        Read it from a deployed module proxy; the creation code hash the
-     *        publication factory publishes is not this value.
+     * @param moduleProxyCodehash The keccak256 of the runtime code of the proxy
+     *        `AuthorFactory` deploys for a records module — OpenZeppelin's
+     *        `ERC1967Proxy`, not `S2SModuleProxy`. Every records module the
+     *        factory deploys shares that runtime code. Read it from a records
+     *        module the factory created; a creation-code hash is not this value.
      */
     constructor(
         address[] memory singletons,
