@@ -32,6 +32,12 @@
 > pet name; the bio is `s2s author bio` ([the profile records](#the-author-profile-records-s2s-author-bio)).
 > See [Installing the author contracts](#installing-the-author-contracts).
 >
+> **The handle registry (2026-11-27):** an author Safe can claim one unique handle in `S2SRegistry`
+> on Base, through `s2s author handle`. The handle is the identity; the pen name and the bio stay
+> free text in the records module. `.s2s` is display only: no ENS, no DNS. See
+> [the author handle](#the-author-handle-s2s-author-handle) and
+> [SPEC-author-identity](SPEC-author-identity.md#the-handle-registry).
+>
 > **Blank-slate rule (SPEC-author-hosts):** this package reuses **only** what already lives in
 > `@s2s/soul2soul-shared`. It never imports `neutralpress`/`0xobsidian` internals; every runtime
 > adapter is written fresh for node.
@@ -62,15 +68,16 @@ Safe's draft log — `s2s drafts list` reads it, `s2s drafts append` records a v
 [SPEC-author-drafts](SPEC-author-drafts.md).
 
 ```
-s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]                      # add an author identity (activates it; installs the author contracts)
+s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--handle <handle>] [--json]   # add an author identity (activates it; installs the author contracts)
 s2s author switch    <pet-name> [--json]                                                          # make a stored author the active one
 s2s author list      [--json]                                                                     # stored authors, active one marked, pending swaps flagged
 s2s author rm        <pet-name> [--force] [--json]                                                  # forget a stored author
 s2s author info      [--json]                                                                     # author identity: pet name, then the Safe (predicted, no deployment)
 s2s author address   [--json]                                                                     # alias of `author info`, action 'author.address'; vscode + nvim call it
-s2s author init      [--json]                                                                     # deploy the Safe + install the author contracts (idempotent)
+s2s author init      [--handle <handle>] [--json]                                                 # deploy the Safe + install the author contracts (idempotent)
 s2s author migrate   [--json]                                                                     # move an installed Safe onto the modules the current factory predicts
 s2s author bio       [<text>] [--clear] [--json]                                                  # read pen name and bio; write the bio, or clear it with --clear
+s2s author handle    [<handle>] [--check | --release] [--registry <addr>] [--records <addr>] [--json] # read, register or release the Safe's .s2s handle
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins + drafts append (no offer)
 s2s author offer     <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]      # drafts append + on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + render of the publication's current version (Lit when admitted, else dev; no offer, no append)
@@ -152,6 +159,11 @@ silent no-op:
 | `--key <0x…>` | (author new) Private key to store. Without it the key is read from stdin when stdin is not a TTY (`echo 0x… \| s2s author new zomi`); with neither, a fresh phrase is generated (see below). |
 | `--mnemonic <words>` | (author new) BIP39 phrase to restore from — the key is derived at `m/44'/60'/0'/0/0`. A piped line that is not a single `0x…` word is read as a phrase too. |
 | `--clear` | (author bio) Delete the `bio` record instead of writing it; a `<text>` positional alongside it is a usage error. |
+| `--handle <handle>` | (author new, author init) Register this handle for the Safe after the install. A refused registration is a `handleNote` on the result, never a failed command. |
+| `--check` | (author handle) Report whether the name is available and why not; sends nothing. Needs a `<handle>` positional, and is a usage error with `--release`. |
+| `--release` | (author handle) Release the handle the Safe holds and start the 90-day cooldown. A Safe holding no handle sends nothing. |
+| `--registry <address>` | (author handle) Registry address to use instead of `contracts.registry`. |
+| `--records <address>` | (author handle) Records module to name at registration. It must have code; the registry gate still decides whether it belongs to this Safe. A usage error with `--release`. |
 
 ### Config file (bring-your-own infra)
 
@@ -713,6 +725,63 @@ or an address the enabled list does not carry, fails with exit `1` and a message
 `s2s author init`, and the command does not fall back to the author row for the pen name: the record
 on the Safe is the statement.
 
+### The author handle (`s2s author handle`)
+
+A handle is the author Safe's unique public name; the contract and its rules are in
+[SPEC-author-identity](SPEC-author-identity.md#the-handle-registry). The command is dispatched
+before `buildContext`, like the rest of the author store: it needs no Lit keys and no publication,
+but it does need the L2 RPC, the active author's Safe and, for a write, the Safe's key.
+
+```sh
+s2s author handle                          # status: handle, version, records location
+s2s author handle alice                    # register 'alice'
+s2s author handle alice --check            # availability and reason; sends nothing
+s2s author handle --release                # release the handle the Safe holds
+```
+
+**Registry resolution.** `--registry` wins; then `contracts.registry`, which `S2S_REGISTRY_ADDRESS`
+sets; then the shipped default, which is the zero address until a registry is deployed. An address
+with no code is reported as not deployed yet, not as an RPC failure, and the zero default says so
+by name. Registration, release and the status read all refuse before reading state when the
+registry is not deployed.
+
+**Records location.** A registration names a records module. With no `--records` the command
+resolves it the way the install and `author bio` do: the configured author factory's
+`recordsImplementation()`, then `recordsModuleAddress(safe)`, then the Safe's enabled list as the
+proof the module is installed. A missing factory, implementation, module or enabled entry fails
+with a message naming `s2s author init`. `--records` overrides the resolution, but only with an
+address that carries code; the gate makes the final call, and a refusal is named as the gate's.
+
+**Pre-flight, so nothing is sent that a read did not clear.** Registration first reads
+`nameOf(safe)`: a Safe that already holds a handle is refused by name, because `register` reverts
+`AlreadyRegistered` and `check(handle)` is caller-independent. It then asks `check(handle)` and
+refuses a taken name with the registry's sentence: invalid character, invalid length, invalid
+hyphen, reserved, skeleton taken by another spelling, cooling down, or already registered.
+`--check` is that read alone and never sends. A release reads `nameOf(safe)` first: no handle on
+the Safe sends nothing, and a positional naming a handle held by another Safe is an error naming
+the holder. A positional naming a name the Safe does not hold names the one it does.
+
+**Read-back is the proof.** A userOp hash can belong to a transaction that reverted, so after
+`register` the command re-reads `nameOf(safe)` (it must be the handle), `resolve(handle)` (it must
+be the Safe) and `entry(handle)` (the version and records location). After `release` it re-reads
+`nameOf(safe)` and requires the empty string. A read-back that disagrees fails the command and
+says the transaction may have reverted.
+
+**A multisig is a proposal.** A write from one key lands only on a Safe that key solely owns
+(threshold 1, one owner). On any other Safe the command sends nothing: the result carries
+`state: 'pending-safe'`, a `note` naming the owners' threshold, and `safeTxs` with the call the Safe
+must make on the registry (`register(handle, recordsLocation)` or `release()`), exactly as the
+install's pending calls do.
+
+**`--handle` on `author new` and `author init`.** Both run the registry step after the install,
+with the records module the install reports. The step is additive: any failure is returned as
+`handleNote` on the install block (and a pending registration as `handleSafeTxs`), never as a
+failed command, so a refused name cannot turn a successful install into `skipped`. With no
+`--handle` the step only reads `nameOf(safe)` and reports what the Safe holds; a Safe holding
+nothing says nothing. Once a name is requested, a failed registry read names itself: `the handle
+was not registered: could not read the registry <address> (...)`, and a registry with no code says
+it is not deployed yet.
+
 ### Migrating an installed Safe onto current modules
 
 `author migrate` moves a Safe that already carries an install onto the modules the current
@@ -852,7 +921,10 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
   safeTx?: { to: string; data: string };     // `pending-safe`: the last self-call the owners must propose
   safeTxs?: { to: string; data: string }[];  // `pending-safe`: every self-call, in send order
   records: string | null;             // the recorded or predicted records module: not proof it exists or is enabled
-  recordsNote?: string }              // why records is null, or what is still missing on the Safe
+  recordsNote?: string;               // why records is null, or what is still missing on the Safe
+  handle: string | null;              // the handle the Safe holds after the run, or null when it holds none
+  handleNote?: string;                // why handle is null or was not registered
+  handleSafeTxs?: { to: string; data: string }[] }  // a pending-safe handle proposal for the owners
 
 // `factory` is the author factory. `records` is that factory's recorded module or, before a create,
 // its prediction, and is never stored in the author row's `contracts` field; code at the address and
@@ -912,6 +984,18 @@ Draft = { module: string;          // the drafts module the Safe sent append to
   records: string;                 // the records module address
   penName: string | null;          // null when the key is absent
   bio: string | null }             // null when the key is absent
+
+// s2s author handle [<handle>] [--check | --release] [--json] - read, register or release
+{ action: 'author.handle' | 'author.handle.check' | 'author.handle.register' | 'author.handle.release';
+  safe: string;                    // the active author Safe
+  handle: string | null;           // bare name in JSON; the human block prints `<handle>.s2s`
+  version: number | null;          // the skeleton's last version, shared by every spelling
+  records: string | null;          // the entry's recordsLocation; null when zero or absent
+  available: boolean | null;       // --check: whether the name can be registered
+  reason: number | null;           // --check: the registry's reason code, 0..7
+  state?: 'pending-safe';          // the write is a proposal the Safe's owners must sign
+  note?: string;                   // why pending-safe, or what the owners must do
+  safeTxs?: { to: string; data: string }[] }  // pending-safe: the call(s) the Safe must make
 
 // s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins + drafts append (no offer)
 { action: 'upload'; note: string; publication: string; subdomain: string;
@@ -1224,6 +1308,7 @@ lists the env names; every one is also settable in a config file as a dotted pat
 | `S2S_RPC_L1` / `S2S_RPC_L2` | — | fallback chain | Explicit comma-separated L1/L2 RPC lists. Set **both** ⇒ they replace the derived chains; one alone heads its own chain and keeps the failover behind it. |
 | `MAINNET_RPC_URL` / `BASE_RPC_URL` | — | fallback chain | Not aliases of the two above: they take the head of their own chain (the DRPC slot of shared `buildFallbackRpcs`), so an explicit endpoint never costs the Alchemy/Infura/public fallbacks. |
 | `S2S_ENS_REGISTRY` | — | protocolInfo | Override the ENS OpenSubdomainRegistry address. |
+| `S2S_REGISTRY_ADDRESS` | `author handle` | zero address | The handle registry (`contracts.registry`). The zero default is reported as not deployed yet. |
 | `S2S_FILECOIN_CHAIN` | filecoin | `mainnet` | `mainnet` or `calibration`. |
 | `S2S_FILECOIN_RPC` | filecoin | `https://api.node.glif.io/rpc/v1` | Filecoin JSON-RPC. |
 | `S2S_FILECOIN_SESSION_KEY` | filecoin (protocol-payer) | — | Path to a `session-key.json`. Mutually exclusive with private key. |
