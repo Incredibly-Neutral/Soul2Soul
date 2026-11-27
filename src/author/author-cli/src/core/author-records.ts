@@ -271,7 +271,10 @@ export function setRecordCall(module: Address, key: string, value: string): Reco
 export interface PlanRecordsOptions {
   safe: Address;
   rpcUrl: string;
-  /** The pet name to write as `pen_name`; absent means the write is skipped. */
+  /**
+   * The pet name to write as `pen_name`; absent or empty (after trimming)
+   * means the write is skipped, in the plan and in the write alike.
+   */
   penName?: string;
   /** True when this key is the Safe's only owner, so a self-call can be sent. */
   soleOwner: boolean;
@@ -295,7 +298,13 @@ export interface WriteRecordsDeps extends RecordsReadDeps {
 }
 
 export interface RecordsPlan {
-  /** The records module the Safe has (or will have) at its predicted address. */
+  /**
+   * The records module the factory PREDICTS for this Safe, not proof that it
+   * exists. Non-null for a multisig whose owners have not proposed the create
+   * yet, and for a create that reverted; null means the factory answers no
+   * prediction (no implementation, an unreadable manifest, or a resolve error),
+   * in which case `note` says why.
+   */
   records: Address | null;
   /** The factory the create/enable calls target, when the manifest answered. */
   factory?: Address;
@@ -318,6 +327,17 @@ export function recordsUnavailableNote(factory: Address): string {
 
 function includesAddress(list: readonly Address[], address: Address): boolean {
   return list.some((entry) => entry.toLowerCase() === address.toLowerCase());
+}
+
+/**
+ * The one definition of "there is a pet name to write": non-empty after
+ * trimming. The plan and the writer both go through it, so a blank name is
+ * neither proposed to a multisig's owners nor sent by a sole owner.
+ */
+function penNameToWrite(penName: string | undefined): string | undefined {
+  if (penName === undefined) return undefined;
+  const trimmed = penName.trim();
+  return trimmed === '' ? undefined : trimmed;
 }
 
 /**
@@ -347,15 +367,16 @@ export async function planRecords(
   const module = resolved.address;
   const readOpts = { rpcUrl: opts.rpcUrl };
 
+  const penName = penNameToWrite(opts.penName);
   const hasCode = await deps.readHasCode({ address: module, ...readOpts });
   const enabled = hasCode
     ? includesAddress(await deps.readEnabled({ safe: opts.safe, ...readOpts }), module)
     : false;
   const currentPenName =
-    hasCode && enabled && opts.penName !== undefined
+    hasCode && enabled && penName !== undefined
       ? await deps.readRecord({ module, key: PEN_NAME_KEY, ...readOpts })
       : null;
-  const penNameWrite = opts.penName !== undefined && currentPenName !== opts.penName;
+  const penNameWrite = penName !== undefined && currentPenName !== penName;
 
   // A Safe this key does not solely own cannot take a self-call: hand the
   // owners only the calls still to do, in order, and send nothing.
@@ -371,7 +392,7 @@ export async function planRecords(
       described.push('enableModule');
     }
     if (penNameWrite) {
-      calls.push(setRecordCall(module, PEN_NAME_KEY, opts.penName!));
+      calls.push(setRecordCall(module, PEN_NAME_KEY, penName!));
       described.push('the pen_name write');
     }
     if (calls.length === 0) {
@@ -408,6 +429,7 @@ export async function writeRecords(
   deps: WriteRecordsDeps,
 ): Promise<{ sent: boolean; note?: string }> {
   const readOpts = { rpcUrl: opts.rpcUrl };
+  const penName = penNameToWrite(opts.penName);
   let sent = false;
 
   // Proof of deployment is code at the predicted address, never the hash of a
@@ -442,13 +464,13 @@ export async function writeRecords(
     }
   }
 
-  if (opts.penName) {
+  if (penName !== undefined) {
     const current = await deps.readRecord({ module: opts.module, key: PEN_NAME_KEY, ...readOpts });
-    if (current !== opts.penName) {
+    if (current !== penName) {
       deps.log(`writing pen_name on the records module ${opts.module}…`);
       await deps.send(opts.module, JSON.stringify(S2SRecordsModuleV0_1), 'setRecord', [
         PEN_NAME_KEY,
-        opts.penName,
+        penName,
       ]);
       sent = true;
       const after = await deps.readRecord({
@@ -456,7 +478,7 @@ export async function writeRecords(
         key: PEN_NAME_KEY,
         ...readOpts,
       });
-      if (after !== opts.penName) {
+      if (after !== penName) {
         return {
           sent,
           note: `the setRecord transaction did not write pen_name on ${opts.module} — it may have reverted; run again`,

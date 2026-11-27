@@ -110,6 +110,10 @@ interface FakeChainOptions {
   guardReadFails?: boolean;
   /** Make every read fail, as a dead RPC does. */
   unreachable?: boolean;
+  /** Make `readOwners` fail, as a flaky RPC does: the settled result must stand. */
+  ownersReadFails?: boolean;
+  /** UserOps that reject instead of landing, as a refused bundler does. */
+  sendFails?: string[];
   /** The CREATE2 addresses this factory predicts; DRAFTS/HISTORY by default. */
   predicted?: { drafts: Address; ownerHistory: Address };
   /** The guard minted with the owner-history module; GUARD by default. */
@@ -273,6 +277,9 @@ function fakeChain(options: FakeChainOptions = {}) {
     },
     readOwners: () => {
       seen.readOwners += 1;
+      if (options.ownersReadFails === true) {
+        return Promise.reject(new Error('fetch failed: ECONNRESET'));
+      }
       return Promise.resolve({ owners: state.owners, threshold: state.threshold });
     },
     readGuardFor: ({ module }) => {
@@ -325,6 +332,9 @@ function fakeChain(options: FakeChainOptions = {}) {
           args: unknown[],
         ): Promise<string> => {
           calls.push({ to, functionName, args });
+          if ((options.sendFails ?? []).includes(functionName)) {
+            return Promise.reject(new Error('userOp rejected: AA23 reverted'));
+          }
           if (reverts.has(functionName)) return Promise.resolve(hashFor(calls.length));
 
           if (functionName === 'createDraftsModule') {
@@ -539,10 +549,74 @@ describe('installAuthorContracts', () => {
 
     const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
 
-    expect(result.state).toBe('installed');
+    // The drafts/owner-history install was already settled; the records write
+    // does not upgrade that. The write itself is what `txs` reports.
+    expect(result.state).toBe('already');
     expect(result.records).toBe(RECORDS);
+    expect(result.txs).toHaveLength(2);
     expect(calls.map((call) => call.functionName)).toEqual(['enableModule', 'setRecord']);
     expect(calls[0]?.args).toEqual([RECORDS]);
+  });
+
+  it('keeps a settled Safe at `already` when its owners cannot be read', async () => {
+    // The ownership read only decides whether the records step may send. A
+    // failure there must not demote a finished drafts/owner-history install.
+    const { seam, calls } = fakeChain({
+      drafts: [DRAFTS],
+      history: [HISTORY],
+      enabled: [DRAFTS, HISTORY],
+      slotGuard: GUARD,
+      recordsImplementation: RECORDS_IMPL,
+      ownersReadFails: true,
+    });
+
+    const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    expect(result.state).toBe('already');
+    expect(result.records).toBeNull();
+    expect(result.recordsNote).toContain("the Safe's owners could not be read");
+    expect(calls).toHaveLength(0);
+  });
+
+  it('proposes no pen_name write when the pet name is blank', async () => {
+    const sole = fakeChain({ recordsImplementation: RECORDS_IMPL });
+    const result = await installAuthorContracts({ ...installArgs(), penName: '   ' }, sole.seam);
+
+    expect(result.state).toBe('installed');
+    expect(sole.state.records['pen_name']).toBeUndefined();
+    expect(sole.calls.some((call) => call.functionName === 'setRecord')).toBe(false);
+
+    const multisig = fakeChain({
+      owners: [PRIVATE_KEY_ADDRESS, OTHER_SAFE],
+      threshold: 2,
+      recordsImplementation: RECORDS_IMPL,
+    });
+    const proposed = await installAuthorContracts(
+      { ...installArgs(), penName: '' },
+      multisig.seam,
+    );
+
+    expect(proposed.safeTxs?.map((call) => call.to)).toEqual([SAFE, SAFE, SAFE, FACTORY, SAFE]);
+    const last = decodeFunctionData({
+      abi: safeAbi,
+      data: proposed.safeTxs![proposed.safeTxs!.length - 1]!.data,
+    });
+    expect(last.functionName).toBe('enableModule');
+  });
+
+  it('keeps the resolved records address when the run stops after the plan', async () => {
+    // The records kind was resolved before the enable loop; a refused userOp
+    // there must not erase it. The outer catch reports what it had found.
+    const { seam } = fakeChain({
+      recordsImplementation: RECORDS_IMPL,
+      sendFails: ['enableModule'],
+    });
+
+    const result = await installAuthorContracts({ ...installArgs(), penName: 'zomi' }, seam);
+
+    expect(result.state).toBe('pending-safe');
+    expect(result.records).toBe(RECORDS);
+    expect(result.recordsNote).toContain('the records module was not confirmed');
   });
 
   it('sends nothing for records on a second run — pen_name already matches', async () => {
