@@ -211,6 +211,9 @@ export async function runAuthorBio(
   const rpcUrl = requireRpc(config);
   const module = await requireRecords(author.safe, rpcUrl, deps);
 
+  /** A `--clear` that found nothing to delete: no userOp may be sent. */
+  let alreadyAbsent = false;
+
   if (trimmed !== undefined) {
     out.log(`writing the bio on the records module ${module}…`);
     await sendRecordCall(module, 'setRecord', [BIO_KEY, trimmed], author, config, rpcUrl, deps);
@@ -221,13 +224,21 @@ export async function runAuthorBio(
       );
     }
   } else if (clear) {
-    out.log(`clearing the bio on the records module ${module}…`);
-    await sendRecordCall(module, 'deleteRecord', [BIO_KEY], author, config, rpcUrl, deps);
-    const after = await deps.readRecord({ module, key: BIO_KEY, rpcUrl });
-    if (after !== null) {
-      throw new CliError(
-        `the deleteRecord transaction did not clear the bio on ${module} — it may have reverted; run again`,
-      );
+    // `deleteRecord` reverts `KeyNotFound`, so an absent bio must not be sent:
+    // the record is read first, and only a present one is deleted.
+    const current = await deps.readRecord({ module, key: BIO_KEY, rpcUrl });
+    if (current === null) {
+      alreadyAbsent = true;
+      out.log(`the bio on the records module ${module} is already absent — nothing to clear`);
+    } else {
+      out.log(`clearing the bio on the records module ${module}…`);
+      await sendRecordCall(module, 'deleteRecord', [BIO_KEY], author, config, rpcUrl, deps);
+      const after = await deps.readRecord({ module, key: BIO_KEY, rpcUrl });
+      if (after !== null) {
+        throw new CliError(
+          `the deleteRecord transaction did not clear the bio on ${module} — it may have reverted; run again`,
+        );
+      }
     }
   }
 
@@ -250,7 +261,9 @@ export async function runAuthorBio(
     `bio         : ${values.bio ?? '(absent)'}`,
   ];
   if (action === 'author.bio.set') lines.push('              (bio set)');
-  if (action === 'author.bio.clear') lines.push('              (bio cleared)');
+  if (action === 'author.bio.clear') {
+    lines.push(alreadyAbsent ? '              (bio already absent)' : '              (bio cleared)');
+  }
   out.result(result, lines.join('\n'));
 }
 

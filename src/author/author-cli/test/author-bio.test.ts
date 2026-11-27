@@ -4,8 +4,9 @@
 // The chain seam, the store, the config and the runner are faked
 // (`AuthorBioDeps`), so what is under test is the command's decisions: which
 // record key is read, which call is sent and with what args, what the read-back
-// must say, and the four ways it refuses (empty, over cap, `--clear` with a
-// value, a module that `author init` has not installed).
+// must say, when nothing is sent at all (a `--clear` with no bio present), and
+// the four ways it refuses (empty, over cap, `--clear` with a value, a module
+// that `author init` has not installed).
 // ============================================================================
 
 import type { Address, Hex } from 'viem';
@@ -199,6 +200,22 @@ describe('s2s author bio (write)', () => {
     expect(sent[0]?.args).toEqual([BIO_KEY]);
     expect(state.records[BIO_KEY]).toBeUndefined();
     expect(sink.results[0]).toMatchObject({ action: 'author.bio.clear', bio: null });
+  });
+
+  it('sends nothing when --clear finds the bio already absent', async () => {
+    // `deleteRecord` reverts `KeyNotFound`, so the read decides: an absent bio
+    // is reported as cleared without a userOp.
+    const { deps, sent, opened } = fakeDeps({ records: { [PEN_NAME_KEY]: 'zomi' } });
+    const sink = capture();
+
+    await runAuthorBio(sink.out, parseArgs(['--clear'], BIO_ARGS), deps);
+
+    expect(sent).toHaveLength(0);
+    expect(opened).toHaveLength(0);
+    expect(sink.results[0]).toMatchObject({ action: 'author.bio.clear', bio: null });
+    expect(sink.human[0]).toContain('bio         : (absent)');
+    expect(sink.human[0]).toContain('(bio already absent)');
+    expect(sink.logs.join('\n')).toContain('already absent');
   });
 
   it('refuses an empty bio before touching the chain', async () => {
