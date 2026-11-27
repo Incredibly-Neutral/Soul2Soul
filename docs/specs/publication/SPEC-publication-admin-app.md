@@ -32,6 +32,7 @@ links, tests and the e2e helper key off them.
 - Web Components (Custom Elements + Shadow DOM + `adoptedStyleSheets`), no framework.
 - Embedded via `@safe-global/safe-apps-sdk` (+ `safe-apps-provider`), `allowedDomains: [/app\.safe\.global$/]`.
 - `window.ethers` is **ethers v6**, set in `main.ts`.
+- The message-signing provider is the injected EIP-1193 one: `window.ethereum` when present, otherwise the first provider announced over EIP-6963.
 - Imports the lean shared entry `@s2s/soul2soul-shared/safe-app`; types and cid-view machinery compile
   into the bundle and are, for practical purposes, this package's code.
 - Two-phase render everywhere: paint from the localStorage cache, then fetch, update the store, and

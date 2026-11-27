@@ -808,6 +808,17 @@ describe('read paths (direct contract reads, no sends)', () => {
 });
 
 describe('evmSetup / evmRead / signWithSigner', () => {
+  /** A window whose EIP-6963 events are backed by a real EventTarget. */
+  function discoveryWindow(target: EventTarget, ethereum: unknown) {
+    return {
+      ethers: eth,
+      ethereum,
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      dispatchEvent: target.dispatchEvent.bind(target),
+    };
+  }
+
   it('evmSetup returns a provider + contract for a known chainId', () => {
     const si = new SafeIntegration();
     const { provider, contract } = si.evmSetup('0xContract', [], 8453);
@@ -834,5 +845,49 @@ describe('evmSetup / evmRead / signWithSigner', () => {
     const sig = await si.signWithSigner('hello');
     expect(eth.browserProviderCalls).toEqual(['0xETHEREUM']);
     expect(sig).toBe('signed:hello');
+  });
+
+  it('signs with the first EIP-6963 announced provider when window.ethereum is missing', async () => {
+    const target = new EventTarget();
+    const freedomProvider = { request: vi.fn() };
+    let requests = 0;
+    target.addEventListener('eip6963:requestProvider', () => {
+      requests += 1;
+      target.dispatchEvent(
+        new CustomEvent('eip6963:announceProvider', {
+          detail: {
+            info: { name: 'Freedom', rdns: 'baby.freedom.browser' },
+            provider: freedomProvider,
+          },
+        }),
+      );
+    });
+    (globalThis as any).window = discoveryWindow(target, undefined);
+
+    const si = new SafeIntegration();
+    await expect(si.signWithSigner('hello')).resolves.toBe('signed:hello');
+    // Second signature reuses the resolved provider: no second discovery.
+    await expect(si.signWithSigner('again')).resolves.toBe('signed:again');
+
+    expect(eth.browserProviderCalls).toEqual([freedomProvider, freedomProvider]);
+    expect(requests).toBe(1);
+  });
+
+  it('rejects with an actionable EIP-6963 error, not ethers INVALID_ARGUMENT, when no provider exists', async () => {
+    const target = new EventTarget();
+    (globalThis as any).window = discoveryWindow(target, undefined);
+
+    const si = new SafeIntegration();
+    const error = await si.signWithSigner('hello').then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toMatch(/EIP-6963/);
+    expect(error?.message).toMatch(/window\.ethereum/);
+    expect(error?.message).not.toMatch(/INVALID_ARGUMENT/);
+    // ethers never saw a null provider.
+    expect(eth.browserProviderCalls).toEqual([]);
   });
 });
