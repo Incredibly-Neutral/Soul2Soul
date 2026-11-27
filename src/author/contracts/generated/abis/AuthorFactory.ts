@@ -1,4 +1,4 @@
-export type Abi_AuthorContractsFactory = [
+export type Abi_AuthorFactory = [
   {
     "inputs": [
       {
@@ -10,10 +10,68 @@ export type Abi_AuthorContractsFactory = [
         "internalType": "address",
         "name": "_ownerHistoryImplementation",
         "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_protocolSafe",
+        "type": "address"
       }
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "kind",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "declared",
+        "type": "bytes32"
+      }
+    ],
+    "name": "ImplementationKindMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "gate",
+        "type": "address"
+      }
+    ],
+    "name": "ImplementationNotGated",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "module",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "reason",
+        "type": "bytes"
+      }
+    ],
+    "name": "InitializerFailed",
+    "type": "error"
   },
   {
     "inputs": [],
@@ -22,7 +80,39 @@ export type Abi_AuthorContractsFactory = [
   },
   {
     "inputs": [],
+    "name": "NoImplementation",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "NotAContract",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "NotUUPS",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OnlyDeployer",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAddress",
     "type": "error"
   },
   {
@@ -120,6 +210,63 @@ export type Abi_AuthorContractsFactory = [
     "type": "event"
   },
   {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "version",
+        "type": "uint256"
+      }
+    ],
+    "name": "RecordsImplementationDeployed",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "safe",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "moduleProxy",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "RecordsModuleCreated",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "RECORDS_KIND",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -156,6 +303,25 @@ export type Abi_AuthorContractsFactory = [
       {
         "internalType": "address",
         "name": "guard",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "safe",
+        "type": "address"
+      }
+    ],
+    "name": "createRecordsModule",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "moduleProxy",
         "type": "address"
       }
     ],
@@ -299,12 +465,74 @@ export type Abi_AuthorContractsFactory = [
   {
     "inputs": [
       {
+        "internalType": "uint256",
+        "name": "version",
+        "type": "uint256"
+      }
+    ],
+    "name": "getRecordsImplementationByVersion",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "address",
         "name": "module",
         "type": "address"
       }
     ],
     "name": "guardFor",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "kind",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "isApproved",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "kind",
+        "type": "bytes32"
+      }
+    ],
+    "name": "latestImplementation",
     "outputs": [
       {
         "internalType": "address",
@@ -361,6 +589,83 @@ export type Abi_AuthorContractsFactory = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "protocolSafe",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "recordsImplementation",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "recordsImplementationCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "recordsModule",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "safe",
+        "type": "address"
+      }
+    ],
+    "name": "recordsModuleAddress",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -382,12 +687,25 @@ export type Abi_AuthorContractsFactory = [
       }
     ],
     "name": "setOwnerHistoryImplementation",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_implementation",
+        "type": "address"
+      }
+    ],
+    "name": "setRecordsImplementation",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   }
 ];
-export const Abi_AuthorContractsFactory: Abi_AuthorContractsFactory = [
+export const Abi_AuthorFactory: Abi_AuthorFactory = [
   {
     "inputs": [
       {
@@ -399,10 +717,68 @@ export const Abi_AuthorContractsFactory: Abi_AuthorContractsFactory = [
         "internalType": "address",
         "name": "_ownerHistoryImplementation",
         "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_protocolSafe",
+        "type": "address"
       }
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "kind",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "declared",
+        "type": "bytes32"
+      }
+    ],
+    "name": "ImplementationKindMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "gate",
+        "type": "address"
+      }
+    ],
+    "name": "ImplementationNotGated",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "module",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "reason",
+        "type": "bytes"
+      }
+    ],
+    "name": "InitializerFailed",
+    "type": "error"
   },
   {
     "inputs": [],
@@ -411,7 +787,39 @@ export const Abi_AuthorContractsFactory: Abi_AuthorContractsFactory = [
   },
   {
     "inputs": [],
+    "name": "NoImplementation",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "NotAContract",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "NotUUPS",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OnlyDeployer",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAddress",
     "type": "error"
   },
   {
@@ -509,6 +917,63 @@ export const Abi_AuthorContractsFactory: Abi_AuthorContractsFactory = [
     "type": "event"
   },
   {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "version",
+        "type": "uint256"
+      }
+    ],
+    "name": "RecordsImplementationDeployed",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "safe",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "moduleProxy",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "RecordsModuleCreated",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "RECORDS_KIND",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -545,6 +1010,25 @@ export const Abi_AuthorContractsFactory: Abi_AuthorContractsFactory = [
       {
         "internalType": "address",
         "name": "guard",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "safe",
+        "type": "address"
+      }
+    ],
+    "name": "createRecordsModule",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "moduleProxy",
         "type": "address"
       }
     ],
@@ -688,12 +1172,74 @@ export const Abi_AuthorContractsFactory: Abi_AuthorContractsFactory = [
   {
     "inputs": [
       {
+        "internalType": "uint256",
+        "name": "version",
+        "type": "uint256"
+      }
+    ],
+    "name": "getRecordsImplementationByVersion",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "address",
         "name": "module",
         "type": "address"
       }
     ],
     "name": "guardFor",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "kind",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "isApproved",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "kind",
+        "type": "bytes32"
+      }
+    ],
+    "name": "latestImplementation",
     "outputs": [
       {
         "internalType": "address",
@@ -750,6 +1296,83 @@ export const Abi_AuthorContractsFactory: Abi_AuthorContractsFactory = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "protocolSafe",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "recordsImplementation",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "recordsImplementationCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "recordsModule",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "safe",
+        "type": "address"
+      }
+    ],
+    "name": "recordsModuleAddress",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -771,6 +1394,19 @@ export const Abi_AuthorContractsFactory: Abi_AuthorContractsFactory = [
       }
     ],
     "name": "setOwnerHistoryImplementation",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_implementation",
+        "type": "address"
+      }
+    ],
+    "name": "setRecordsImplementation",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

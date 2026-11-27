@@ -61,9 +61,13 @@ async function deployHistory() {
   // The factory deploys both module kinds; the drafts implementation is a
   // constructor argument here and nothing in this suite proxies onto it.
   const draftsImplementation = await viem.deployContract('DraftsModuleV1');
-  const factory = await viem.deployContract('AuthorContractsFactory', [
+  // The third argument is the protocol Safe the records implementation would
+  // compare itself against. Nothing here deploys a records module, and the
+  // factory never treats it as an authority, so any address is enough.
+  const factory = await viem.deployContract('AuthorFactory', [
     draftsImplementation.address,
     implementation.address,
+    mockSafe.address,
   ]);
 
   // Era 0 opens in this transaction, so its start block is this one.

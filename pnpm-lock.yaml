@@ -293,6 +293,9 @@ importers:
       '@openzeppelin/contracts-upgradeable':
         specifier: ^4.9.6
         version: 4.9.6
+      '@s2s/publication-contracts':
+        specifier: workspace:*
+        version: link:../../publication/contracts
       dotenv:
         specifier: ^16.6.1
         version: 16.6.1
