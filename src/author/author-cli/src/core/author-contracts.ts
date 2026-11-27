@@ -14,6 +14,11 @@
 //                     enableModule(ownerHistory) — `onlySelf`, so the Safe must
 //                     be both sender and target of those userOps
 //   4. the guard      the Safe's own setGuard(guard) — `onlySelf` too
+//   5. records        the protocol factory's createModule(safe, recordsKind), the
+//                     Safe's enableModule(records), then setRecord('pen_name')
+//                     through the Safe (see `author-records.ts`). Its own step,
+//                     its own report: a records failure never changes the state
+//                     the four steps above reached.
 //
 // Why the modules are enabled: an enabled module is how a gate discovers a role.
 // The publication's `canPublish`/`hasAgreement` gates read the author Safe's enabled
@@ -87,6 +92,14 @@ import {
 import { safeAbi } from '@s2s/soul2soul-shared';
 
 import type { SafeRunnerHandle } from '../adapters/tx-runner';
+import {
+  planRecords,
+  writeRecords,
+  resolveRecords,
+  defaultRecordsSeam,
+  type RecordsPlan,
+  type RecordsSeam,
+} from './author-records';
 import { describeError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import {
@@ -243,9 +256,19 @@ export interface InstallResult extends AuthorContracts {
   safeTx?: SafeCall;
   /**
    * when 'pending-safe': every self-call the owners must propose, in send order
-   * (`enableModule` for each module, then `setGuard`). `safeTx` is the last one.
+   * (`enableModule` for each module, then `setGuard`, then the records calls).
+   * `safeTx` is the last one.
    */
   safeTxs?: SafeCall[];
+  /**
+   * The records module on the Safe (the protocol's generic string records
+   * module), or null when the factory has no implementation for that kind, the
+   * manifest is unreadable, or the create did not land. Reported separately
+   * from the drafts/owner-history state: a records failure never changes `state`.
+   */
+  records: Address | null;
+  /** Why `records` is null or not yet on the Safe, when there is a reason. */
+  recordsNote?: string;
 }
 
 /** What a migration run did, on top of the resulting install. */
@@ -875,7 +898,7 @@ export async function readOwnerHistory(
  * Safe deployment and the runner are the only calls that leave the process, so
  * faking them fakes the decision logic without a chain or a bundler.
  */
-export interface AuthorContractsSeam {
+export interface AuthorContractsSeam extends RecordsSeam {
   readContracts(opts: ReadAuthorContractsOptions): Promise<AuthorContracts>;
   /** What the Safe has enabled, classified by ERC-165 role. */
   readEnabled(opts: ReadSafeOptions): Promise<EnabledAuthorModules>;
@@ -911,6 +934,7 @@ export interface AuthorContractsSeam {
 }
 
 export const defaultAuthorContractsSeam: AuthorContractsSeam = {
+  ...defaultRecordsSeam,
   readContracts: readAuthorContracts,
   readEnabled: readEnabledAuthorModules,
   readGuard: readSafeGuard,
@@ -1077,6 +1101,8 @@ export interface InstallAuthorContractsOptions {
   rpcUrl: string;
   privateKey: `0x${string}`;
   out: CliOut;
+  /** The pet name to write into the records module as `pen_name`. */
+  penName?: string;
 }
 
 /**
@@ -1109,7 +1135,7 @@ export async function installAuthorContracts(
     } catch {
       // A dead RPC as well: report the state we know (nothing).
     }
-    return { ...empty(current), state: 'skipped', txs: [], note: BUNDLER_NOTE };
+    return { ...empty(current), state: 'skipped', txs: [], records: null, note: BUNDLER_NOTE };
   }
 
   // Deploy the Safe if it is not live yet, then read the indexes. Either
@@ -1124,13 +1150,14 @@ export async function installAuthorContracts(
         ...empty(),
         state: 'skipped',
         txs: [],
+        records: null,
         note: `the author Safe ${safe} is not deployed${ensured.txHash ? ` (deployment ${ensured.txHash} submitted)` : ''} — run again once it is on chain`,
       };
     }
     index = await seam.readContracts({ factory, safe, rpcUrl });
     enabled = await seam.readEnabled({ safe, rpcUrl });
   } catch (err) {
-    return { ...empty(), state: 'skipped', txs: [], note: unreachableNote(rpcUrl, err) };
+    return { ...empty(), state: 'skipped', txs: [], records: null, note: unreachableNote(rpcUrl, err) };
   }
 
   let runner: Pick<SafeRunnerHandle, 'genericTx'> | undefined;
@@ -1169,6 +1196,7 @@ export async function installAuthorContracts(
         ...index,
         state: 'pending-safe',
         txs: [],
+        records: null,
         note: `the Safe already carries a guard this package did not install (${slotGuard}) — this package never replaces a guard; remove it through the Safe first if the owner-history guard is wanted`,
       };
     }
@@ -1189,6 +1217,7 @@ export async function installAuthorContracts(
           ...current,
           state: 'pending-safe',
           txs,
+          records: null,
           note: 'the drafts module transaction did not change the factory index — it may have reverted; run again',
         };
       }
@@ -1205,6 +1234,7 @@ export async function installAuthorContracts(
           ...current,
           state: 'pending-safe',
           txs,
+          records: null,
           note: 'the owner-history module transaction did not change the factory index — it may have reverted; run again',
         };
       }
@@ -1224,6 +1254,7 @@ export async function installAuthorContracts(
         ownerHistory: historyModule,
         state: 'pending-safe',
         txs,
+        records: null,
         note: 'the modules are submitted; run again to install the guard',
       };
     }
@@ -1236,37 +1267,131 @@ export async function installAuthorContracts(
     if (!includesAddress(enabled.modules, historyModule)) toEnable.push(historyModule);
     const needsGuard = proof === null;
 
-    if (toEnable.length === 0 && !needsGuard) {
-      return {
-        factory,
-        drafts: enabled.drafts,
-        ownerHistory: enabled.ownerHistory,
-        guard,
-        state: 'already',
-        txs: [],
+    // Ownership decides whether anything below is a send or a proposal, and the
+    // records step needs the same answer — so it is read once, here.
+    const owners = await seam.readOwners({ safe, rpcUrl });
+    const sole = solelyOwned(owners, eoa);
+
+    /**
+     * 5. the records module. Planned before the exits below, so a Safe that is
+     * otherwise finished still gets its records module; written after the
+     * enables and the guard, so the Safe is usable first. Its report is its own:
+     * a factory with no records implementation, an unreadable manifest or a
+     * reverted write leaves the drafts/owner-history state as it was.
+     */
+    const recordsDeps = {
+      resolve: (o: { safe: Address; rpcUrl: string }) => resolveRecords(o, seam),
+      readRecord: (o: { module: Address; key: string; rpcUrl: string }) => seam.record(o),
+      readEnabled: async (o: { safe: Address; rpcUrl: string }) =>
+        (await seam.readEnabled(o)).modules,
+      readHasCode: (o: { address: Address; rpcUrl: string }) => seam.readHasCode(o),
+      send,
+      log: (message: string) => out.log(message),
+    };
+    let recordsPlan: RecordsPlan;
+    try {
+      recordsPlan = await planRecords(
+        { safe, rpcUrl, soleOwner: sole, penName: opts.penName },
+        recordsDeps,
+      );
+    } catch (err) {
+      recordsPlan = {
+        records: null,
+        note: `the records module was not installed: ${describeError(err)}`,
       };
+    }
+    const records = recordsPlan.records;
+    let recordsNote = recordsPlan.note;
+
+    /** The sole-owner write, at the point the chain order allows it. */
+    const writeRecordsNow = async (): Promise<{ sent: boolean }> => {
+      if (
+        recordsPlan.records === null ||
+        recordsPlan.factory === undefined ||
+        recordsPlan.needed !== true
+      ) {
+        return { sent: false };
+      }
+      try {
+        const outcome = await writeRecords(
+          {
+            safe,
+            factory: recordsPlan.factory,
+            module: recordsPlan.records,
+            rpcUrl,
+            penName: opts.penName,
+          },
+          recordsDeps,
+        );
+        if (outcome.note) recordsNote = outcome.note;
+        return { sent: outcome.sent };
+      } catch (err) {
+        recordsNote = `the records module was not installed: ${describeError(err)}`;
+        return { sent: false };
+      }
+    };
+
+    if (toEnable.length === 0 && !needsGuard) {
+      if (sole) {
+        // The Safe is finished but its records module may still be missing:
+        // that write is the only thing this run may send.
+        const written = await writeRecordsNow();
+        return {
+          factory,
+          drafts: enabled.drafts,
+          ownerHistory: enabled.ownerHistory,
+          guard,
+          records,
+          ...(recordsNote ? { recordsNote } : {}),
+          state: written.sent ? 'installed' : 'already',
+          txs,
+        };
+      }
+      // Not this key's to send. Fall through only when the owners still have a
+      // records call to propose; otherwise there is nothing left to report.
+      if (!recordsPlan.calls || recordsPlan.calls.length === 0) {
+        return {
+          factory,
+          drafts: enabled.drafts,
+          ownerHistory: enabled.ownerHistory,
+          guard,
+          records,
+          ...(recordsNote ? { recordsNote } : {}),
+          state: 'already',
+          txs,
+        };
+      }
     }
 
     // A multisig (or a Safe this key does not solely own) cannot take a self-call
     // from one signer: create what is permissionless (done above), then hand the
-    // owners every call to propose — the enables and, if it is still to do, the
-    // guard.
-    const owners = await seam.readOwners({ safe, rpcUrl });
-    if (!solelyOwned(owners, eoa)) {
+    // owners every call to propose — the enables, the guard if it is still to
+    // do, and the records calls (create, enable, pen_name), in that order.
+    if (!sole) {
       const calls: SafeCall[] = toEnable.map((module) => enableModuleSafeTx(safe, module));
       if (needsGuard) calls.push(guardSafeTx(safe, guard));
-      const what = needsGuard ? 'enable the modules and install the guard' : 'enable the modules';
+      if (recordsPlan.calls) calls.push(...recordsPlan.calls);
+      const what = [
+        toEnable.length > 0 ? 'enable the modules' : null,
+        needsGuard ? 'install the guard' : null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(' and ');
       const proposal: InstallResult = {
         ...current,
         ownerHistory: historyModule,
+        records,
+        ...(recordsNote ? { recordsNote } : {}),
         state: 'pending-safe',
         txs,
-        note: `the Safe needs owner signatures (${String(owners.threshold)}-of-${String(owners.owners.length)}) to ${what} — propose the Safe transactions in safeTxs`,
+        note: `the Safe needs owner signatures (${String(owners.threshold)}-of-${String(owners.owners.length)}) for ${
+          what || 'the records calls'
+        } — propose the Safe transactions in safeTxs${recordsNote ? `; ${recordsNote}` : ''}`,
       };
       const lastCall = calls[calls.length - 1];
       if (lastCall !== undefined) {
         proposal.safeTxs = calls;
-        proposal.safeTx = needsGuard ? guardSafeTx(safe, guard) : lastCall;
+        proposal.safeTx = lastCall;
       }
       return proposal;
     }
@@ -1284,6 +1409,8 @@ export async function installAuthorContracts(
         return {
           ...current,
           ownerHistory: historyModule,
+          records,
+          ...(recordsNote ? { recordsNote } : {}),
           state: 'pending-safe',
           txs,
           note: `the enableModule transaction did not enable ${stillOff.join(', ')} on the Safe — it may have reverted; run again`,
@@ -1303,12 +1430,18 @@ export async function installAuthorContracts(
         return {
           ...current,
           ownerHistory: historyModule,
+          records,
+          ...(recordsNote ? { recordsNote } : {}),
           state: 'pending-safe',
           txs,
           note: `the setGuard transaction did not install the guard (the Safe's guard slot is ${installed ?? 'empty'}) — it may have reverted; run again`,
         };
       }
     }
+
+    // 5. the records module, now that the Safe is usable. Its own note, never a
+    //    new state: the drafts/owner-history install above already succeeded.
+    await writeRecordsNow();
 
     // Record what the Safe enabled, not what the index claims: this is the list
     // a gate reads, and the one `rememberAuthorContracts` stores.
@@ -1318,6 +1451,8 @@ export async function installAuthorContracts(
       drafts: finalEnabled.drafts,
       ownerHistory: finalEnabled.ownerHistory,
       guard,
+      records,
+      ...(recordsNote ? { recordsNote } : {}),
       state: 'installed',
       txs,
     };
@@ -1328,6 +1463,7 @@ export async function installAuthorContracts(
       ...index,
       state: txs.length > 0 ? 'pending-safe' : 'skipped',
       txs,
+      records: null,
       note: `installing the author contracts stopped: ${describeError(err)}`,
     };
   }
