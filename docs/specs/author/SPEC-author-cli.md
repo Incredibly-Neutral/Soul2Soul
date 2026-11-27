@@ -558,23 +558,26 @@ Both commands run the same sequence, in order:
    proof needs no factory to agree and survives `contracts.authorFactory` pointing somewhere else. A
    Safe that passes this read carries the install; the run reports `already` for the
    drafts/owner-history install and sends nothing for it, whatever the permissionless index has
-   accumulated since. If one module is missing while the guard is proven, only that module's
-   `enableModule` is sent.
+   accumulated since. If one module is missing while the guard is proven, only that module's create
+   and `enableModule` are sent.
 3. **Whatever the list lacks:** `createDraftsModule(safe)` and
    `createOwnerHistoryModule(safe)` on the factory for the missing role. Both are permissionless
    (`createDraftsModule` / `createOwnerHistoryModule` in
    [SPEC-author-drafts](SPEC-author-drafts.md) and
    [SPEC-author-owner-history](SPEC-author-owner-history.md)) — anyone can add an entry for any
    Safe — so the index is read as "what still needs creating", never as evidence of an install.
-4. **One userOp per call, and only for what is missing:** `enableModule(drafts)`, then
-   `enableModule(history)`, then `setGuard(guard)` with the guard `createOwnerHistoryModule`
-   returned, then the records calls `createModule(safe, recordsKind, "0x")`,
-   `enableModule(records)` and `setRecord("pen_name", …)`. There is no batch: each call is its own
-   userOp, sent in that order and read back before the next is sent. `enableModule` is **not**
-   idempotent — Safe 1.4.1 reverts `GS102` (`modules[module].next != 0`) when the module is already
-   enabled — so the calls are built from the addresses step 2 did not find, and a re-sent
-   `enableModule` reverts. On a Safe this key does not solely own, those same calls are returned in
-   `safeTxs` and none of them is sent.
+4. **One userOp per call, and only for what is missing:** the permissionless creates
+   `createDraftsModule(safe)` and `createOwnerHistoryModule(safe)` go first, when the role is
+   missing. Then the self-calls: `enableModule(drafts)`, `enableModule(history)`, `setGuard(guard)`
+   with the guard `createOwnerHistoryModule` returned, then the records calls
+   `createModule(safe, recordsKind, "0x")`, `enableModule(records)` and `setRecord("pen_name", …)`.
+   There is no batch: each call is its own userOp, sent in that order and read back before the next
+   is sent. `enableModule` is **not** idempotent — Safe 1.4.1 reverts `GS102`
+   (`modules[module].next != 0`) when the module is already enabled — so the calls are built from
+   the addresses step 2 did not find, and a re-sent `enableModule` reverts. On a Safe this key does
+   not solely own, the two creates are still sent, because anyone may make them; only the
+   self-calls — the enables, `setGuard`, `createModule` and `setRecord` — are returned in
+   `safeTxs`, and none of those is sent.
 
 **The profile records module comes from the protocol's module factory.** The profile is held in the
 protocol's generic records module, kind `S2S_MODULE_KIND_RECORDS`
@@ -596,11 +599,13 @@ with the same name sends nothing, and an existing record is therefore never over
 re-run. A key from the env or a file has no author row and no pet name: no write is attempted. The
 bio is not touched by the install.
 
-**The records step is additive.** It does not change what `installed`, `already`, `pending-safe` and
-`skipped` mean for the drafts module, the owner-history module and the guard: a Safe that carries
-those three reports `installed` or `already` whatever the records step did. `records` is the
-factory's prediction either way, not proof: it is non-null for a multisig whose owners have not
-proposed the create, and for a create that reverted. Code at the address plus the Safe's enabled
+**The records step is additive, except on a multisig.** A records failure never turns a successful
+sole-owner install into `skipped`, and never moves a settled sole-owner run off `already`: the
+verdict is about the drafts module, the owner-history module and the guard. On a Safe this key does
+not solely own, records calls the owners still have to propose join `safeTxs`, so a settled Safe
+with them outstanding reports `pending-safe`, because the owners must propose the calls. `records`
+is the factory's prediction either way, not proof: it is non-null for a multisig whose owners have
+not proposed the create, and for a create that reverted. Code at the address plus the Safe's enabled
 list are the proof, and `recordsNote` says when either is missing. The step is done when the
 address has code, the enabled list carries it and, when there is a pet name, `pen_name` reads back.
 
@@ -631,7 +636,8 @@ the Safe". Neither replaces the other.
 
 **Idempotency, and what a second or a blocked run says.** A second run of either command reports
 `already` for the drafts/owner-history install and sends nothing for it; a records step that is
-still missing is the one thing it may still write. On a **multisig** author Safe one CLI
+still missing is the one thing it may still write, or propose where the key does not solely own the
+Safe. On a **multisig** author Safe one CLI
 key cannot complete the install — the enables, the guard and the records calls are Safe self-calls —
 so the permissionless `createDraftsModule` / `createOwnerHistoryModule` calls still run, the rest is
 returned in `safeTxs` and nothing is sent, and the command stops at `pending-safe`, printing the
