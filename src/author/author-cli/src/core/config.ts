@@ -113,7 +113,11 @@ export interface CliConfig {
    * Protocol contracts this CLI installs through: the author factory, deployed
    * once and shared by every author Safe.
    */
-  contracts: { authorFactory: string | undefined };
+  /**
+   * Protocol contracts this CLI installs through and reads names from: the
+   * author factory, and the handle registry (zero until it is deployed).
+   */
+  contracts: { authorFactory: string | undefined; registry: string | undefined };
   /** Pinning providers, in the order they were added (custom labels first). */
   pinning: PinningEntry[];
   /** IPFS endpoints, primary first. */
@@ -635,7 +639,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
     },
     ens: { registry: file.ens?.registry },
     github: { token: file.github?.token },
-    contracts: { authorFactory: file.contracts?.authorFactory },
+    contracts: {
+      authorFactory: file.contracts?.authorFactory,
+      registry: file.contracts?.registry,
+    },
     pinning,
     ipfs: { entries, primary: entries[0] },
     rpc: resolveRpcs(env, file),

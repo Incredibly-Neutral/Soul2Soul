@@ -1071,7 +1071,7 @@ function disablePairs(
 }
 
 /** Whether this key is the Safe's only owner at threshold 1 — the only shape that can take a self-call. */
-function solelyOwned(owners: SafeOwners, eoa: Address): boolean {
+export function solelyOwned(owners: SafeOwners, eoa: Address): boolean {
   return (
     owners.threshold === 1 &&
     owners.owners.length === 1 &&

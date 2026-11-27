@@ -1,5 +1,5 @@
 // ============================================================================
-// The author-store command table: new / switch / list / rm / bio.
+// The author-store command table: new / switch / list / rm / bio / handle.
 //
 // Kept in its own module (not `index.ts`) because it is the dispatch table
 // `cli.ts` consults *before* `buildContext` — importing `index.ts` would drag
@@ -13,6 +13,7 @@ import { authorSwitch } from './author-switch';
 import { authorList } from './author-list';
 import { authorRm } from './author-rm';
 import { authorBio } from './author-bio';
+import { authorHandle } from './author-handle';
 
 /** `s2s author` — author identities; no context needed. */
 export const authorStoreCommands: readonly StoreCommandSpec[] = [
@@ -21,6 +22,7 @@ export const authorStoreCommands: readonly StoreCommandSpec[] = [
   authorList,
   authorRm,
   authorBio,
+  authorHandle,
 ];
 
 export function findAuthorStoreCommand(name: string): StoreCommandSpec | undefined {

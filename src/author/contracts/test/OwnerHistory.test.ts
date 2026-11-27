@@ -923,18 +923,23 @@ describe('OwnerHistoryModuleV1', () => {
     // Every history proxy the factory made has a guard in its index.
     assert.notEqual(await d.factory.read.guardFor([histories.at(-1)!]), zeroAddress);
 
-    // Moving either implementation stays the deployer's alone.
+    // Moving either implementation stays the deployer's alone. The two writes
+    // are awaited one at a time: viem starts a write when the promise is
+    // created, so an eager pair can reject the second before the first has been
+    // awaited and surface as an unhandled rejection instead of a test failure.
     assert.equal(chk(await d.factory.read.deployer()), addr(d.deployer));
-    for (const write of [
+    await assertReverts(
       d.factory.write.setDraftsImplementation([chk(d.stranger.account.address)], {
         account: d.stranger.account,
       }),
+      selectorOf('OnlyDeployer'),
+    );
+    await assertReverts(
       d.factory.write.setOwnerHistoryImplementation([chk(d.stranger.account.address)], {
         account: d.stranger.account,
       }),
-    ]) {
-      await assertReverts(write, selectorOf('OnlyDeployer'));
-    }
+      selectorOf('OnlyDeployer'),
+    );
     assert.equal(chk(await d.factory.read.draftsImplementation()), chk(d.draftsImplementation.address));
     assert.equal(chk(await d.factory.read.ownerHistoryImplementation()), chk(d.implementation.address));
   });

@@ -28,6 +28,7 @@
     "compile": "hardhat compile",
     "test": "hardhat test",
     "deploy:authorcontracts": "tsx scripts/deploy-author-contracts.ts",
+    "deploy:registry": "tsx scripts/deploy-registry.ts",
     "clean": "rm -rf artifacts cache generated"
   },
   "dependencies": {

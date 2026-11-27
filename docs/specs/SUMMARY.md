@@ -74,6 +74,14 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
   written by the Safe alone, plaintext
   CIDs, no publication, no deal. The same `genesis` reaches the publication module only when the author
   makes an offer, and that is an explicit copy of a CID, not a shared row.
+- **`S2SRegistry` + `S2SAuthorGate`** (author side, in `src/author/contracts`, deployed on Base by
+  `pnpm deploy:registry`, non-upgradeable with no owner): one unique handle per author Safe,
+  `.s2s` display only, no ENS. `resolve(handle)` and `nameOf(safe)` are the mapping in both
+  directions; the gate accepts a Safe by proxy code hash and singleton and requires a records
+  module from an allowed factory, enabled, recorded by that factory for the Safe and bound to it. A
+  release starts a 90-day cooldown for every spelling of the skeleton, and versions continue on the
+  skeleton, so a version is never reused. `recordsLocation` is the records module named at
+  registration.
 - **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, in `src/author/contracts`, deployed on
 Base behind the same factory; the per-Safe proxy and guard are installed by the CLI, and the Safe's
 batch of `enableModule`×2 and `setGuard` is the one transaction the CLI cannot sign for a multisig) — one module per

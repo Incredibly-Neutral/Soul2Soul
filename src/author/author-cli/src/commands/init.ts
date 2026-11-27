@@ -16,9 +16,12 @@
 import type { Address } from 'viem';
 
 import type { CliContext } from '../core/context';
+import { flagString } from '../lib/args';
 import type { CommandSpec } from '../lib/command';
 import { initAuthorSafe, type AuthorSafeInitResult } from '../core/author-safe';
 import { installAuthorContracts, type InstallState } from '../core/author-contracts';
+import { registerOnInstall } from '../core/author-registry';
+import { describeError } from '../lib/errors';
 import { rememberAuthorContracts, rememberAuthorSafe } from '../core/authors';
 import type { CliOut } from '../lib/out';
 
@@ -32,6 +35,12 @@ export interface ContractsReport {
   records: string | null;
   /** Why `records` is null or not yet enabled, when there is a reason. */
   recordsNote?: string;
+  /** The handle the Safe holds after the run, or null when it holds none. */
+  handle: string | null;
+  /** Why `handle` is null or was not registered, when there is a reason. */
+  handleNote?: string;
+  /** The Safe self-calls the owners must propose to register the handle. */
+  handleSafeTxs?: { to: string; data: string }[];
   state: InstallState;
   txs: string[];
   /** Why the install is `skipped` or `pending-safe`, as core reported it. */
@@ -50,6 +59,7 @@ async function installContracts(
   out: CliOut,
   ctx: CliContext,
   safe: Address,
+  handle?: string,
 ): Promise<ContractsReport> {
   const rpcUrl = ctx.rpcs.L2[0];
   if (!rpcUrl) {
@@ -62,10 +72,15 @@ async function installContracts(
       ownerHistory: null,
       guard: null,
       records: null,
+      handle: null,
+      ...(handle !== undefined
+        ? { handleNote: `the handle '${handle}' was not registered: no L2 RPC configured` }
+        : {}),
       state: 'skipped',
       txs: [],
     };
   }
+  let report: ContractsReport;
   try {
     const result = await installAuthorContracts({
       config: ctx.config,
@@ -111,13 +126,14 @@ async function installContracts(
       out.log(calls > 0 ? `${note} — the calls to propose are below` : note);
     }
 
-    return {
+    report = {
       factory: result.factory,
       drafts: result.drafts,
       ownerHistory: result.ownerHistory,
       guard: result.guard,
       records: result.records,
       ...(result.recordsNote ? { recordsNote: result.recordsNote } : {}),
+      handle: null,
       state: result.state,
       txs: result.txs,
       ...(result.note ? { note: result.note } : {}),
@@ -133,11 +149,39 @@ async function installContracts(
       ownerHistory: null,
       guard: null,
       records: null,
+      handle: null,
+      ...(handle !== undefined
+        ? { handleNote: `the handle '${handle}' was not registered: ${message}` }
+        : {}),
       state: 'skipped',
       txs: [],
       note: message,
     };
   }
+
+  // The handle is an addition after the install, never a new way to fail: its
+  // own try means nothing it throws can rewrite a successful install as
+  // skipped. With no `--handle` it only reports what the Safe already holds.
+  let handleReport: Awaited<ReturnType<typeof registerOnInstall>>;
+  try {
+    handleReport = await registerOnInstall({
+      config: ctx.config,
+      safe,
+      records: report.records === null ? null : (report.records as Address),
+      privateKey: ctx.config.privateKey as string,
+      rpcUrl,
+      ...(handle !== undefined ? { handle } : {}),
+    });
+  } catch (err) {
+    handleReport =
+      handle === undefined
+        ? { handle: null }
+        : {
+            handle: null,
+            handleNote: `the handle '${handle}' was not registered: ${describeError(err)}`,
+          };
+  }
+  return { ...report, ...handleReport };
 }
 
 /** Every call a multisig's owners must propose, in order. */
@@ -168,6 +212,13 @@ export function initContractsLines(report: ContractsReport): string[] {
   lines.push(`guard       : ${report.guard ?? '(none)'}`);
   lines.push(`records     : ${report.records ?? '(none)'}`);
   if (report.recordsNote) lines.push(`records note: ${report.recordsNote}`);
+  lines.push(`handle      : ${report.handle ?? '(none)'}`);
+  if (report.handleNote) lines.push(`handle note : ${report.handleNote}`);
+  for (const [index, call] of (report.handleSafeTxs ?? []).entries()) {
+    lines.push(`              propose Safe call ${String(index + 1)} for the handle:`);
+    lines.push(`              to   ${call.to}`);
+    lines.push(`              data ${call.data}`);
+  }
   if (report.txs.length > 0) lines.push(`contract txs: ${report.txs.join(', ')}`);
   const calls = proposedCalls(report);
   if (report.state === 'pending-safe' && calls.length > 0) {
@@ -204,8 +255,14 @@ export function initHeadline(result: AuthorSafeInitResult): string {
 export const authorInit: CommandSpec = {
   name: 'init',
   summary: 'Deploy the author Safe and install the author contracts (idempotent).',
-  flags: {},
-  async run(ctx) {
+  flags: {
+    handle: {
+      type: 'string',
+      summary: 'register this handle after the install (a failure is a note, not a failure)',
+      value: '<handle>',
+    },
+  },
+  async run(ctx, args) {
     const result = await initAuthorSafe(ctx);
     // Keep the store current: `author list` / `switch` report the Safe offline.
     rememberAuthorSafe(ctx.config.author, result.address, (message) => {
@@ -214,7 +271,12 @@ export const authorInit: CommandSpec = {
 
     // The install is an addition, never a new way to fail: the Safe is the
     // command's one requirement, and it is deployed by now.
-    const contracts = await installContracts(ctx.out, ctx, result.address);
+    const contracts = await installContracts(
+      ctx.out,
+      ctx,
+      result.address,
+      flagString(args.flags, 'handle'),
+    );
 
     // A given Safe has no salt and is never deployed by this CLI, so neither
     // "already deployed" nor a salt line can be claimed for it.
