@@ -969,6 +969,7 @@ describe('store command registry', () => {
       'switch',
       'list',
       'rm',
+      'bio',
     ]);
     for (const command of authorStoreCommands) {
       expect(findAuthorStoreCommand(command.name)).toBe(command);

@@ -30,6 +30,7 @@ const FACTORY = '0x00000000000000000000000000000000000000f1';
 const DRAFTS = '0x00000000000000000000000000000000000000d1';
 const OWNER_HISTORY = '0x00000000000000000000000000000000000000d2';
 const GUARD = '0x00000000000000000000000000000000000000d3';
+const RECORDS = '0x00000000000000000000000000000000000000d4';
 const RPC = 'http://127.0.0.1:0/test-rpc';
 
 interface InstallCall {
@@ -37,6 +38,7 @@ interface InstallCall {
   safe: string;
   rpcUrl: string;
   configKey: string | undefined;
+  penName: string | undefined;
 }
 
 /** The argument shape `installAuthorContracts` is called with (as we call it). */
@@ -46,6 +48,7 @@ interface InstallOpts {
   rpcUrl: string;
   privateKey: string;
   out: CliOut;
+  penName?: string;
 }
 
 /** The shape the mocked install answers with (mirrors `InstallResult`). */
@@ -54,6 +57,8 @@ interface InstallResultLike {
   drafts: string | null;
   ownerHistory: string | null;
   guard: string | null;
+  records: string | null;
+  recordsNote?: string;
   state: 'installed' | 'already' | 'pending-safe' | 'skipped';
   txs: string[];
   note?: string;
@@ -76,6 +81,7 @@ vi.mock('../src/core/author-contracts', () => ({
       safe: opts.safe,
       rpcUrl: opts.rpcUrl,
       configKey: opts.config.privateKey,
+      penName: opts.penName,
     });
     const answer = installState.answer;
     if (!answer) return Promise.reject(new Error('test did not set an install answer'));
@@ -174,6 +180,7 @@ function installResult(
     drafts: pending ? null : DRAFTS,
     ownerHistory: pending ? null : OWNER_HISTORY,
     guard: pending ? null : GUARD,
+    records: null,
     state,
     txs: state === 'installed' ? ['0xtx1'] : [],
     ...extra,
@@ -217,6 +224,7 @@ describe('author new installs the author contracts', () => {
       safe: SAFE,
       rpcUrl: RPC,
       configKey: KEY,
+      penName: 'zomi',
     });
 
     const contracts = sink.data.contracts as Record<string, unknown>;
@@ -233,6 +241,26 @@ describe('author new installs the author contracts', () => {
     expect(sink.human).toContain('contracts   : installed');
     // A supplied key is never echoed back, whatever the install did.
     expect(sink.data).not.toHaveProperty('privateKey');
+  });
+
+  it('reports the records module and writes the filed pet name as pen_name', async () => {
+    installState.answer = () =>
+      installResult('installed', {
+        records: RECORDS,
+        recordsNote: 'the module factory has no approved records implementation',
+      });
+    const sink = recorder();
+    await authorNew.run(sink.out, { flags: { key: KEY }, positionals: ['zomi'] });
+
+    // The pet name this command filed, not whatever config holds.
+    expect(installState.calls[0]?.penName).toBe('zomi');
+    const contracts = sink.data.contracts as Record<string, unknown>;
+    expect(contracts.records).toBe(RECORDS);
+    expect(contracts.recordsNote).toContain('no approved records implementation');
+    expect(sink.human).toContain(`records     : ${RECORDS}`);
+    expect(sink.human).toContain(
+      'records note: the module factory has no approved records implementation',
+    );
   });
 
   it('records the contracts so author list can report them offline', async () => {
