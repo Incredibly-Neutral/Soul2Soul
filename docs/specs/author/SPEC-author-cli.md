@@ -28,8 +28,8 @@
 > **The author contracts are installed by the CLI (2026-11-06):** the drafts module, the owner
 > history module and its guard are deployed on Base, and putting them on an author Safe is this
 > binary's job — `author new` installs after the key is filed, `author init` is the recovery path.
-> The same install adds the protocol's records module and writes `pen_name` when it knows the pet
-> name; the bio is `s2s author bio` ([the profile records](#the-author-profile-records-s2s-author-bio)).
+> The same install adds the author factory's records module and writes `pen_name` when it knows the
+> pet name; the bio is `s2s author bio` ([the profile records](#the-author-profile-records-s2s-author-bio)).
 > See [Installing the author contracts](#installing-the-author-contracts).
 >
 > **Blank-slate rule (SPEC-author-hosts):** this package reuses **only** what already lives in
@@ -527,19 +527,25 @@ The author contracts are deployed once on Base — `src/author/contracts`, from
 `scripts/deploy-author-contracts.ts` — and the **per-Safe install is this binary's job**. `author
 new` runs it after the key is filed (always after, so no network failure can lose the key);
 `author init` is the recovery and idempotent path for an author that already exists, e.g. a key
-filed before the contracts were deployed. The same run installs the protocol's records module and
-writes `pen_name` when it knows the pet name; the bio is `s2s author bio`
+filed before the contracts were deployed. The same run installs the records module from the author
+factory and writes `pen_name` when it knows the pet name; the bio is `s2s author bio`
 ([below](#the-author-profile-records-s2s-author-bio)).
 
 | contract | address (Base, `prod`) |
 |---|---|
 | `DraftsModuleV1` (implementation) | `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C` |
 | `OwnerHistoryModuleV1` (implementation) | `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` |
-| `AuthorContractsFactory` | `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` |
+| `AuthorFactory` | `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` |
 
 That table is a record of the deploy, not the authority: the factory is selected by the
 `contracts.authorFactory` config key (`S2S_AUTHOR_CONTRACTS_FACTORY`), so an environment can point
-at its own copy, and both implementations are whatever that factory reports.
+at its own copy, and every implementation is whatever that factory reports.
+
+**The shipped default `0xC70e…` is a deployment of the previous factory, and it has no records
+role.** `pnpm deploy:authorcontracts` in `src/author/contracts` (needs `PROTOCOL_PRIVATE_KEY` and
+`PROTOCOL_SAFE_ADDRESS`) deploys `DraftsModuleV1`, `OwnerHistoryModuleV1`, `AuthorFactory`, then the
+records implementation from `@s2s/publication-contracts`, and calls `setRecordsImplementation`. The
+default and `.env` must be updated after that run.
 
 Both commands run the same sequence, in order:
 
@@ -549,8 +555,8 @@ Both commands run the same sequence, in order:
    address on the Safe's enabled-module list is asked `supportsInterface` for `0xefb74036`
    (drafts) and `0xee855023` (owner history). `s2s drafts list` reads the drafts role by the same
    probe, and falls back to the factory index when no enabled module answers it. The profile records
-   module is the exception: it is found at its kind address on the protocol's module factory, not by
-   a role probe (see below). `enableModule` is
+   module is the exception: it is found at the address the author factory records or predicts for the
+   Safe, not by a role probe (see below). `enableModule` is
    `onlySelf`, so an entry on that list is the Safe's own statement that it adopted the module; the
    factory index is a lead. The guard is read from its slot — `getStorageAt(safe, 0x4a204f…34c8)` →
    `G`, then `G.module()` → `M`, `G.safe() == safe`, `M.safe() == safe` — because a guard is not an
@@ -570,28 +576,40 @@ Both commands run the same sequence, in order:
    `createDraftsModule(safe)` and `createOwnerHistoryModule(safe)` go first, when the role is
    missing. Then the self-calls: `enableModule(drafts)`, `enableModule(history)`, `setGuard(guard)`
    with the guard `createOwnerHistoryModule` returned, then the records calls
-   `createModule(safe, recordsKind, "0x")`, `enableModule(records)` and `setRecord("pen_name", …)`.
+   `createRecordsModule(safe)`, `enableModule(records)` and `setRecord("pen_name", …)`.
    There is no batch: each call is its own userOp, sent in that order and read back before the next
    is sent. `enableModule` is **not** idempotent — Safe 1.4.1 reverts `GS102`
    (`modules[module].next != 0`) when the module is already enabled — so the calls are built from
    the addresses step 2 did not find, and a re-sent `enableModule` reverts. On a Safe this key does
    not solely own, the two creates are still sent, because anyone may make them; only the
-   self-calls — the enables, `setGuard`, `createModule` and `setRecord` — are returned in
+   self-calls — the enables, `setGuard`, `createRecordsModule` and `setRecord` — are returned in
    `safeTxs`, and none of those is sent.
 
-**The profile records module comes from the protocol's module factory.** The profile is held in the
-protocol's generic records module, kind `S2S_MODULE_KIND_RECORDS`
-(`keccak256("s2s.module.records")`, `0x32af023b…48bf`), at `moduleAddress(authorSafe, kind)` on the
-module factory the protocol manifest names (`moduleFactory`, the `publication_factory` record). The
-address is read from that factory and nowhere else; `moduleAddress` answers the same value before
-and after a create. The factory's `latestImplementation(kind)` must be non-zero first: zero means
-the kind is not deployable, `createModule` would revert `NoImplementation(kind)`, and the run skips
-the step with `recordsNote` saying so and `records` null. `createModule(safe, kind, "0x")` accepts
-only that Safe, or the protocol safe on its behalf, so it goes out as a Safe self-call; the records
-implementation's `initialize` is passed no seed records. The fix for a zero implementation is
-upstream, not this command's: `pnpm deploy:impl -- --kind records`, then the protocol safe's
-`setImplementation` on that factory; `s2s author init` then installs the module and writes the pen
-name.
+**The profile records module comes from the author factory.** The profile is held in a records
+module of kind `keccak256("s2s.module.records")` (`0x32af023b…48bf`), the kind `AuthorFactory`
+creates modules for and approves for upgrade. The CLI resolves one address, `contracts.authorFactory`
+(`S2S_AUTHOR_CONTRACTS_FACTORY`, else the shipped `DEFAULT_AUTHOR_CONTRACTS_FACTORY`), and nothing
+else: it no longer reads the publication manifest or the protocol module factory. A factory with no
+code is reported as not deployed, and the drafts and owner-history install is unchanged.
+
+The factory carries the records role beside drafts and owner history. `recordsImplementation()`
+holds the implementation its deployer set with `setRecordsImplementation`, which is `onlyDeployer`
+and reads `factory()`, `moduleKind()` and `proxiableUUID()` from the candidate before accepting it.
+`RECORDS_KIND` is `keccak256("s2s.module.records")`, and `latestImplementation(bytes32)` and
+`isApproved(bytes32, address)` answer for the records kind: zero and false for any other.
+`createRecordsModule(safe)` is permissionless and idempotent: it records one module per Safe in
+`recordsModule` and returns that module on every later call. `recordsModule(safe)` answers only the
+recorded module, so zero means no create has run for this Safe. `recordsModuleAddress(safe)` answers
+the recorded module, else the CREATE2 prediction, else zero. Zero `recordsImplementation()` means
+nothing can be created: `createRecordsModule` would revert `NoImplementation()`, and the run skips
+the step with `recordsNote` saying so and `records` null.
+
+`createRecordsModule` deploys an `ERC1967Proxy` with an empty initializer, then calls
+`initialize(safe, "")` itself, because `S2SRecordsModuleV0_1` requires the factory as `msg.sender`.
+The create is permissionless on the contract, but the CLI still sends it as a Safe self-call, so the
+Safe is the sender. The fix for a zero implementation is upstream, not this command's:
+`pnpm deploy:authorcontracts` deploys a factory and sets a records implementation on it; `s2s author
+init` then installs the module and writes the pen name.
 
 **The install writes the pen name.** `pen_name` is `setRecord("pen_name", <pet name>)`, sent after
 the module is enabled, when the pet name (trimmed) differs from the record's current value. A re-run
@@ -604,9 +622,10 @@ sole-owner install into `skipped`, and never moves a settled sole-owner run off 
 verdict is about the drafts module, the owner-history module and the guard. On a Safe this key does
 not solely own, records calls the owners still have to propose join `safeTxs`, so a settled Safe
 with them outstanding reports `pending-safe`, because the owners must propose the calls. `records`
-is the factory's prediction either way, not proof: it is non-null for a multisig whose owners have
-not proposed the create, and for a create that reverted. Code at the address plus the Safe's enabled
-list are the proof, and `recordsNote` says when either is missing. The step is done when the
+is the factory's recorded module or, before a create, its prediction. It is not proof: it is
+non-null for a multisig whose owners have not proposed the create, and for a create that reverted.
+Code at the address plus the Safe's enabled list are the proof, and `recordsNote` says when either
+is missing. The step is done when the
 address has code, the enabled list carries it and, when there is a pet name, `pen_name` reads back.
 
 **A sent userOp is not an install.** `genericTx` resolves with a transaction hash that may have
@@ -618,7 +637,7 @@ and the guard is in the slot*, read back; `pending-safe` means the Safe has not 
 yet.
 
 Every call is its own userOp. The drafts and owner-history creates are permissionless; the enables,
-`setGuard`, `createModule` and `setRecord` are self-calls, so the Safe is the sender.
+`setGuard`, `createRecordsModule` and `setRecord` are self-calls, so the Safe is the sender.
 
 **`enableModule` is part of the install, and the reason it is safe is that the modules have no
 powers to use.** An enabled module may call `execTransactionFromModule`, i.e. execute anything as
@@ -680,11 +699,11 @@ is the only way to remove a bio. A set writes with `setRecord` and reads back; `
 `bio` null, and the result carries no transaction hash. A key that is absent reads as `null`, so an
 empty string and no record are never the same answer.
 
-The command resolves the records module the way the install does, on every run: the protocol
-manifest names the factory, the factory's `latestImplementation(kind)` says the kind is deployable,
-`moduleAddress(authorSafe, kind)` predicts the module, and the Safe's enabled list is the proof it
-is installed. Nothing is read from the author row's `contracts` field. A Safe with no deployable
-kind, or a predicted address the enabled list does not carry, fails with exit `1` and a message naming
+The command resolves the records module the way the install does, on every run: the configured
+`AuthorFactory` answers `recordsImplementation()`, `recordsModuleAddress(authorSafe)` names the
+recorded module or predicts it, and the Safe's enabled list is the proof it is installed. Nothing is
+read from the author row's `contracts` field. A factory with no code or no records implementation,
+or an address the enabled list does not carry, fails with exit `1` and a message naming
 `s2s author init`, and the command does not fall back to the author row for the pen name: the record
 on the Safe is the statement.
 
@@ -693,8 +712,8 @@ on the Safe is the statement.
 `author migrate` moves a Safe that already carries an install onto the modules the current
 factory predicts, and keeps the Safe. It is how a module generation is replaced: modules are
 never upgraded in place, and the old ones stay on chain. The records module is not part of a
-migration: its address is the protocol module factory's answer for the kind, and it does not move
-with the author contracts factory.
+migration: its address is recorded by the author factory on the first create and does not move with
+the drafts or owner-history implementations.
 
 The order is fixed, and the first write only happens once the slot guard is proved:
 
@@ -826,13 +845,13 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
   note?: string;                      // why not installed / what the owners must do
   safeTx?: { to: string; data: string };     // `pending-safe`: the last self-call the owners must propose
   safeTxs?: { to: string; data: string }[];  // `pending-safe`: every self-call, in send order
-  records: string | null;             // the factory's prediction for the records kind: not proof it exists or is enabled
+  records: string | null;             // the recorded or predicted records module: not proof it exists or is enabled
   recordsNote?: string }              // why records is null, or what is still missing on the Safe
 
-// `factory` is the author contracts factory. `records` is the protocol module factory's prediction
-// and is never stored in the author row's `contracts` field; code at the address and the Safe's
-// enabled list are the proof, and `recordsNote` says when either is missing. A records failure never
-// changes `state`.
+// `factory` is the author factory. `records` is that factory's recorded module or, before a create,
+// its prediction, and is never stored in the author row's `contracts` field; code at the address and
+// the Safe's enabled list are the proof, and `recordsNote` says when either is missing. A records
+// failure never changes `state`.
 
 // The drafts append a write action ran. Never on `preview`: a preview is not a version.
 Draft = { module: string;          // the drafts module the Safe sent append to
