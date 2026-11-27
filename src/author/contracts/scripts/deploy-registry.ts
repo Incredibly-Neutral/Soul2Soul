@@ -238,6 +238,15 @@ async function main() {
   }
   const moduleProxyCodehash = moduleProxyInput.toLowerCase() as `0x${string}`;
 
+  const seeds = listFromEnv('RESERVED_HANDLES');
+  const badSeed = seeds
+    .map((seed) => [seed, handleProblem(seed)] as const)
+    .find(([, problem]) => problem);
+  if (badSeed) {
+    console.error(`❌ RESERVED_HANDLES entry "${badSeed[0]}" ${badSeed[1]}. Nothing was deployed.`);
+    process.exit(1);
+  }
+
   const governanceInput = process.env.GOVERNANCE_ADDRESS;
   if (!governanceInput || !isAddress(governanceInput)) {
     console.error('❌ GOVERNANCE_ADDRESS not set or not an address (there is no default)');
@@ -329,14 +338,6 @@ async function main() {
     process.exit(1);
   }
 
-  const seeds = listFromEnv('RESERVED_HANDLES');
-  const badSeed = seeds
-    .map((seed) => [seed, handleProblem(seed)] as const)
-    .find(([, problem]) => problem);
-  if (badSeed) {
-    console.error(`❌ RESERVED_HANDLES entry "${badSeed[0]}" ${badSeed[1]}. Nothing was sent.`);
-    process.exit(1);
-  }
   if (seeds.length > 0) {
     const data = encodeFunctionData({ abi: REGISTRY_ABI, functionName: 'reserve', args: [seeds] });
     if (account.address === governance) {
