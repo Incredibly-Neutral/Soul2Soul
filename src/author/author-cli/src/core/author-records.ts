@@ -340,12 +340,12 @@ export function factoryNotDeployedNote(factory: Address): string {
 }
 
 /**
- * Why the factory cannot create anything: its deployer has set no
- * implementation. Only that deployer can fix it, so the CLI names the ops step
- * rather than pretending it can repair this.
+ * Why the factory cannot create anything: no records implementation is set.
+ * A factory deploy sets it, so the CLI names that deploy rather than
+ * pretending it can repair this.
  */
 export function recordsUnavailableNote(factory: Address): string {
-  return `the author factory ${factory} has no records implementation set — run \`pnpm deploy:impl -- --kind records --factory ${factory}\`, then the factory deployer's \`setRecordsImplementation\`; the drafts and owner-history install is unchanged`;
+  return `the author factory ${factory} has no records implementation set — run \`pnpm deploy:authorcontracts\` in src/author/contracts (needs PROTOCOL_SAFE_ADDRESS); the drafts and owner-history install is unchanged`;
 }
 
 function includesAddress(list: readonly Address[], address: Address): boolean {

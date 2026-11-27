@@ -439,8 +439,8 @@ describe('installAuthorContracts', () => {
 
     expect(result.state).toBe('installed');
     expect(result.records).toBeNull();
-    expect(result.recordsNote).toContain('deploy:impl -- --kind records');
-    expect(result.recordsNote).toContain('setRecordsImplementation');
+    expect(result.recordsNote).toContain('deploy:authorcontracts');
+    expect(result.recordsNote).toContain('PROTOCOL_SAFE_ADDRESS');
     expect(calls.some((call) => call.functionName === 'createRecordsModule')).toBe(false);
     expect(calls.some((call) => call.functionName === 'setRecord')).toBe(false);
   });
