@@ -176,6 +176,8 @@ let records: ReturnType<typeof makeRecordsStub>;
 let pub: ReturnType<typeof makePubStub>;
 let other: { NAME: ReturnType<typeof vi.fn> };
 let factory: ReturnType<typeof makeFactoryStub>;
+/** A minimal usable EIP-1193 provider: ethers requires `request`. */
+let injected: { request: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
   // Deterministic DRPC URLs regardless of the local root .env.
@@ -201,7 +203,8 @@ beforeEach(() => {
   eth.codeResults = {};
   for (const k of Object.keys(eth.directCalls)) delete eth.directCalls[k];
 
-  (globalThis as any).window = { ethers: eth, ethereum: '0xETHEREUM' };
+  injected = { request: vi.fn() };
+  (globalThis as any).window = { ethers: eth, ethereum: injected };
 
   sdk.opts.length = 0;
   sdk.getInfo.mockReset();
@@ -808,6 +811,17 @@ describe('read paths (direct contract reads, no sends)', () => {
 });
 
 describe('evmSetup / evmRead / signWithSigner', () => {
+  /** A window whose EIP-6963 events are backed by a real EventTarget. */
+  function discoveryWindow(target: EventTarget, ethereum: unknown) {
+    return {
+      ethers: eth,
+      ethereum,
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      dispatchEvent: target.dispatchEvent.bind(target),
+    };
+  }
+
   it('evmSetup returns a provider + contract for a known chainId', () => {
     const si = new SafeIntegration();
     const { provider, contract } = si.evmSetup('0xContract', [], 8453);
@@ -832,7 +846,67 @@ describe('evmSetup / evmRead / signWithSigner', () => {
   it('signWithSigner uses a BrowserProvider over window.ethereum and signs', async () => {
     const si = new SafeIntegration();
     const sig = await si.signWithSigner('hello');
-    expect(eth.browserProviderCalls).toEqual(['0xETHEREUM']);
+    expect(eth.browserProviderCalls).toEqual([injected]);
     expect(sig).toBe('signed:hello');
+  });
+
+  it('ignores a non-provider window.ethereum and signs through the EIP-6963 announcement', async () => {
+    const target = new EventTarget();
+    const announced = { request: vi.fn() };
+    target.addEventListener('eip6963:requestProvider', () => {
+      target.dispatchEvent(
+        new CustomEvent('eip6963:announceProvider', { detail: { provider: announced } }),
+      );
+    });
+    // `{}` has no request(): ethers would throw INVALID_ARGUMENT on it.
+    (globalThis as any).window = discoveryWindow(target, {});
+
+    const si = new SafeIntegration();
+    await expect(si.signWithSigner('hello')).resolves.toBe('signed:hello');
+    expect(eth.browserProviderCalls).toEqual([announced]);
+  });
+
+  it('signs with the first EIP-6963 announced provider when window.ethereum is missing', async () => {
+    const target = new EventTarget();
+    const freedomProvider = { request: vi.fn() };
+    let requests = 0;
+    target.addEventListener('eip6963:requestProvider', () => {
+      requests += 1;
+      target.dispatchEvent(
+        new CustomEvent('eip6963:announceProvider', {
+          detail: {
+            info: { name: 'Freedom', rdns: 'baby.freedom.browser' },
+            provider: freedomProvider,
+          },
+        }),
+      );
+    });
+    (globalThis as any).window = discoveryWindow(target, undefined);
+
+    const si = new SafeIntegration();
+    await expect(si.signWithSigner('hello')).resolves.toBe('signed:hello');
+    // Second signature reuses the resolved provider: no second discovery.
+    await expect(si.signWithSigner('again')).resolves.toBe('signed:again');
+
+    expect(eth.browserProviderCalls).toEqual([freedomProvider, freedomProvider]);
+    expect(requests).toBe(1);
+  });
+
+  it('rejects with an actionable EIP-6963 error, not ethers INVALID_ARGUMENT, when no provider exists', async () => {
+    const target = new EventTarget();
+    (globalThis as any).window = discoveryWindow(target, undefined);
+
+    const si = new SafeIntegration();
+    const error = await si.signWithSigner('hello').then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toMatch(/EIP-6963/);
+    expect(error?.message).toMatch(/window\.ethereum/);
+    expect(error?.message).not.toMatch(/INVALID_ARGUMENT/);
+    // ethers never saw a null provider.
+    expect(eth.browserProviderCalls).toEqual([]);
   });
 });

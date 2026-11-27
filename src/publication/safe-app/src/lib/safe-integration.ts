@@ -57,6 +57,89 @@ function moduleWrapper(
   return existing;
 }
 
+/**
+ * The slice of the EIP-6963 `eip6963:announceProvider` detail this app reads.
+ * The provider itself is opaque: it is handed to ethers, never inspected or
+ * picked by wallet name.
+ */
+interface Eip6963AnnouncementDetail {
+  provider?: unknown;
+}
+
+/** How long EIP-6963 discovery waits for an announcement before giving up. */
+const EIP6963_DISCOVERY_MS = 400;
+
+const NO_INJECTED_PROVIDER =
+  'No injected EIP-1193 provider found: window.ethereum is undefined and no wallet answered ' +
+  'EIP-6963 discovery. Open this app in a wallet that injects a provider or announces one over ' +
+  'EIP-6963 (for example the Freedom browser), then reload.';
+
+/**
+ * Providers already resolved on this page, keyed by `window`. A reload gets a
+ * fresh window and re-discovers; the first publish pays the discovery cost and
+ * every later render reuses the answer.
+ */
+const signerProviderCache = new WeakMap<object, Promise<unknown>>();
+
+function hasInjectedProvider(): boolean {
+  // ethers' BrowserProvider rejects anything without `request`; a truthy
+  // non-provider here would fail every publish and skip EIP-6963 for the page.
+  return typeof window.ethereum?.request === 'function';
+}
+
+/**
+ * Ask every EIP-6963 wallet to announce itself and take the first provider that
+ * answers. Wallets announce on load, but the app may mount after that, so the
+ * request event asks for a re-announcement. First announcement wins.
+ */
+function discoverEip6963Provider(): Promise<unknown> {
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout>;
+
+    function settle(provider: unknown) {
+      window.removeEventListener('eip6963:announceProvider', onAnnounce as EventListener);
+      clearTimeout(timer);
+      resolve(provider);
+    }
+
+    function onAnnounce(event: Event) {
+      const provider = (event as CustomEvent<Eip6963AnnouncementDetail>).detail?.provider;
+      if (provider !== null && provider !== undefined) settle(provider);
+    }
+
+    window.addEventListener('eip6963:announceProvider', onAnnounce as EventListener);
+    timer = setTimeout(() => settle(null), EIP6963_DISCOVERY_MS);
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+  });
+}
+
+function findSignerProvider(): Promise<unknown> {
+  if (hasInjectedProvider()) return Promise.resolve(window.ethereum);
+
+  return discoverEip6963Provider().then((provider) => {
+    if (provider === null || provider === undefined) throw new Error(NO_INJECTED_PROVIDER);
+    return provider;
+  });
+}
+
+/**
+ * The EIP-1193 provider that signs Lit Actions auth messages: the injected one
+ * when present, otherwise the first EIP-6963 announcement.
+ */
+function signerProvider(): Promise<unknown> {
+  if (typeof window === 'undefined') return Promise.reject(new Error(NO_INJECTED_PROVIDER));
+
+  const key = window;
+  const cached = signerProviderCache.get(key);
+  if (cached) return cached;
+
+  const pending = findSignerProvider();
+  signerProviderCache.set(key, pending);
+  // A failed discovery is not cached: the next publish may retry.
+  pending.catch(() => signerProviderCache.delete(key));
+  return pending;
+}
+
 export class SafeIntegration {
   private safeSdk: SafeAppsSDK | null = null;
   public recordsModule: EthersContract | null = null;
@@ -769,7 +852,7 @@ export class SafeIntegration {
   }
 
   async signWithSigner(message: string): Promise<string> {
-    const provider = new window.ethers.BrowserProvider(window.ethereum);
+    const provider = new window.ethers.BrowserProvider(await signerProvider());
     const signer = await provider.getSigner();
     console.log('signer address', await signer.getAddress());
     return await signer.signMessage(message);

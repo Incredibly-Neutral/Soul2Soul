@@ -36,99 +36,62 @@ separate human step. Tag: the commit that records the filed pin in `config/0.1.4
 - `encrypt`: `QmT84SLuQWzbNrm5j1oRLj889mpSjP4jkmVFMeRUknWCcK`
 - `decrypt`: `QmZykRkdpeJBbjE3tEkrkocQNEEpzj6geGj4FfmenxnkTY`
 
-### press (actions)
+### press
 
-- `preview` runs the render stage on Lit, the only runtime with `Lit.Actions.Decrypt`, so a gated
-  body decrypts; `dev` stays on the runner
+- Preview renders encrypted manuscripts and leaves the page unsigned, on a publication whose pinned
+  action supports it
   ([eb536eb](https://github.com/Incredibly-Neutral/Soul2Soul/commit/eb536eb)).
-- `render` honors the `unsigned` input: the run skips only the PKP key read and the signing, keeps
-  the whole colophon, and uploads the page with no `proofValue`, while absent or false keeps the
-  signing attempt
-  ([eb536eb](https://github.com/Incredibly-Neutral/Soul2Soul/commit/eb536eb)).
-- The manifest advertises `capabilities.unsignedRender`, and the shared layer refuses a preview on a
-  publication whose pinned render action predates the input
-  ([eb536eb](https://github.com/Incredibly-Neutral/Soul2Soul/commit/eb536eb)).
-- `preview` decrypts through `canPreview`: a listed reviewer, the manuscript's author with nothing
-  offered, or an owner of the publication Safe while the manuscript is under an offer or an
-  agreement, and `publish` keeps `canRead`
+- Preview opens for a listed reviewer, the manuscript's author, or an owner of the publication Safe,
+  and an offered manuscript can be previewed instead of reading as revoked
   ([e38240b](https://github.com/Incredibly-Neutral/Soul2Soul/commit/e38240b)).
-- A preview no longer treats an offered genesis as revoked, because the revoke check reads
-  `hasOffer` and revokes only when neither an agreement nor an offer holds
-  ([e38240b](https://github.com/Incredibly-Neutral/Soul2Soul/commit/e38240b)).
-- The manifest advertises `capabilities.offerPreview` beside `unsignedRender`, and the two arrive
-  together so one pin enables the whole preview
-  ([e38240b](https://github.com/Incredibly-Neutral/Soul2Soul/commit/e38240b)).
-- A failed template or partial fetch, an empty page and a failed signature fail the render instead
-  of returning the input page, and encrypted collection items survive private-field filters until
-  decryption
+- A missing template, partial or signature now fails the page instead of publishing the input
   ([1a9135d](https://github.com/Incredibly-Neutral/Soul2Soul/commit/1a9135d)).
-- The date sort reads a timestamp in number, digit-string or ISO form, so a published body's
-  `creationDate` and `modifiedDate` sort instead of all landing in the missing group
+- Collections sort by date correctly, and a publication can choose ascending or descending order
   ([3decea6](https://github.com/Incredibly-Neutral/Soul2Soul/commit/3decea6),
-  [2a66269](https://github.com/Incredibly-Neutral/Soul2Soul/commit/2a66269)).
-- A collection may declare `sortDirection`, ascending by default, and the render honours it
-  ([0c2eb88](https://github.com/Incredibly-Neutral/Soul2Soul/commit/0c2eb88)).
-- The render action caches identical reads for one invocation, so an encrypted collection no longer
-  spends the fifty-request session on repeated module reads, and `maintain-cache` runs even when
-  every render job failed
-  ([4cecb8d](https://github.com/Incredibly-Neutral/Soul2Soul/commit/4cecb8d)).
-- A bulk build's pages reach `update` four at a time, three while one removal is pending and two
-  while two are, and each batch writes the root the next starts from
-  ([fb7c0ac](https://github.com/Incredibly-Neutral/Soul2Soul/commit/fb7c0ac)).
-- `update` fails closed: an inconclusive destination read is asked once more, then confirmed by
-  `files/stat`, and the job is refused when neither says the path is empty
-  ([a8ddc4a](https://github.com/Incredibly-Neutral/Soul2Soul/commit/a8ddc4a)).
-- `update` takes the stale root txt names from the root listing, with `assets/txt` only as fallback,
-  and skips the `/assets` and txt `rm`s on a fresh tree
-  ([e503f31](https://github.com/Incredibly-Neutral/Soul2Soul/commit/e503f31)).
-- A revoke removes the path the publication's own template renders, not the assumed `/{slug}`, so a
-  post at `/posts/{slug}/` no longer stays live after a revoke
+  [2a66269](https://github.com/Incredibly-Neutral/Soul2Soul/commit/2a66269),
+  [0c2eb88](https://github.com/Incredibly-Neutral/Soul2Soul/commit/0c2eb88)).
+- A bulk build fits the request budget, and a page whose current content cannot be confirmed is
+  refused instead of overwritten
+  ([4cecb8d](https://github.com/Incredibly-Neutral/Soul2Soul/commit/4cecb8d),
+  [fb7c0ac](https://github.com/Incredibly-Neutral/Soul2Soul/commit/fb7c0ac),
+  [a8ddc4a](https://github.com/Incredibly-Neutral/Soul2Soul/commit/a8ddc4a),
+  [e503f31](https://github.com/Incredibly-Neutral/Soul2Soul/commit/e503f31)).
+- Revoking a manuscript removes its page wherever the publication's template placed it
   ([1c269c3](https://github.com/Incredibly-Neutral/Soul2Soul/commit/1c269c3),
   [77e0054](https://github.com/Incredibly-Neutral/Soul2Soul/commit/77e0054)).
-- A page names the publication as an Organization, its ENS name plus a CAIP-10 record for the Safe
-  that owns the name, and leaves the render signer on the proof's `verificationMethod`
+- The colophon names the publication, its ENS name and its Safe address
   ([60a9761](https://github.com/Incredibly-Neutral/Soul2Soul/commit/60a9761)).
-- `update-protocol` reads the test publication from `TEST_PUBLICATION` in `.env`, takes no
-  `--publication` flag, and says the pin is printed as calldata rather than proposed
-  ([51fe2e9](https://github.com/Incredibly-Neutral/Soul2Soul/commit/51fe2e9)).
 
-### publication (safe-app)
+### publication
 
-- A row carries one render, Preview, and the per-row Dev button is gone while the toolbar's Render
-  site keeps its dev or publish toggle
-  ([e38240b](https://github.com/Incredibly-Neutral/Soul2Soul/commit/e38240b)).
-- Render site writes only the agreements ticked in the table, one checkbox per row plus a
-  select-all, and a reload starts with everything unticked; offers are always visited because a
-  removal has to reach their page
+- Render site renders only the agreements you select, with a checkbox per row and a select-all
   ([1a63ea5](https://github.com/Incredibly-Neutral/Soul2Soul/commit/1a63ea5)).
-- The app requires `capabilities.offerPreview` for an offer row, since a preview is the only render
-  an offer gets
+- A row has one Preview action, and offers preview too
   ([e38240b](https://github.com/Incredibly-Neutral/Soul2Soul/commit/e38240b)).
-- A preview tab shows a placeholder the moment it opens and keeps a failure as text in the tab
-  instead of closing it
+- A preview tab says it is rendering and keeps its failure visible
   ([deb9e5f](https://github.com/Incredibly-Neutral/Soul2Soul/commit/deb9e5f)).
-- A publish render moves the header and its preview link to the new root, and rows awaiting publish
-  survive a tab switch
+- After a publish render the header follows the new site root, and rows awaiting publish survive a
+  tab switch
   ([111efaf](https://github.com/Incredibly-Neutral/Soul2Soul/commit/111efaf)).
-- The render sweep is labelled Render site, and the Whitelists tab gains a Reviewers list that
-  proposes the module's `setReviewer`
+- The render sweep is labelled Render site, and reviewers can be added in the Whitelists tab
   ([7122c9d](https://github.com/Incredibly-Neutral/Soul2Soul/commit/7122c9d)).
 
 ### author (cli)
 
-- A folder is one signed collection manuscript: member pages carry the bundle's genesis as their
-  identifier, and one decrypt expands them
+- A folder can be published as one collection manuscript
   ([c3a4898](https://github.com/Incredibly-Neutral/Soul2Soul/commit/c3a4898)).
-- `s2s upload|offer|preview|publish|revoke <note>` resolve to the same commands as
-  `s2s author <verb>`, through one registry
+- Shorter commands: `s2s publish <note>` works the same as `s2s author publish <note>`
   ([08d4298](https://github.com/Incredibly-Neutral/Soul2Soul/commit/08d4298)).
 
 ### repo
 
-- The build strips action comments through esbuild's parser, so a comment that looks like code no
-  longer breaks a bundle; every action CID changes, so this needs a fresh group
+- The build strips action comments through the parser, so a comment cannot break a bundle; every
+  action CID changes, so this needs a fresh group
   ([685dcb9](https://github.com/Incredibly-Neutral/Soul2Soul/commit/685dcb9)).
-- The repo is Apache-2.0, in a LICENSE file and every package
+- The release command names its test publication once, in `.env`, and prints the pin for the Safe
+  owners instead of proposing it
+  ([51fe2e9](https://github.com/Incredibly-Neutral/Soul2Soul/commit/51fe2e9)).
+- The repo is Apache-2.0
   ([0b0fd97](https://github.com/Incredibly-Neutral/Soul2Soul/commit/0b0fd97)).
 
 ## 0.1.3 — 2026-11-19
