@@ -82,7 +82,9 @@ const NO_INJECTED_PROVIDER =
 const signerProviderCache = new WeakMap<object, Promise<unknown>>();
 
 function hasInjectedProvider(): boolean {
-  return window.ethereum !== null && window.ethereum !== undefined;
+  // ethers' BrowserProvider rejects anything without `request`; a truthy
+  // non-provider here would fail every publish and skip EIP-6963 for the page.
+  return typeof window.ethereum?.request === 'function';
 }
 
 /**
@@ -127,13 +129,14 @@ function findSignerProvider(): Promise<unknown> {
 function signerProvider(): Promise<unknown> {
   if (typeof window === 'undefined') return Promise.reject(new Error(NO_INJECTED_PROVIDER));
 
-  const cached = signerProviderCache.get(window);
+  const key = window;
+  const cached = signerProviderCache.get(key);
   if (cached) return cached;
 
   const pending = findSignerProvider();
-  signerProviderCache.set(window, pending);
+  signerProviderCache.set(key, pending);
   // A failed discovery is not cached: the next publish may retry.
-  pending.catch(() => signerProviderCache.delete(window));
+  pending.catch(() => signerProviderCache.delete(key));
   return pending;
 }
 

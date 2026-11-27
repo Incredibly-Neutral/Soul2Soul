@@ -176,6 +176,8 @@ let records: ReturnType<typeof makeRecordsStub>;
 let pub: ReturnType<typeof makePubStub>;
 let other: { NAME: ReturnType<typeof vi.fn> };
 let factory: ReturnType<typeof makeFactoryStub>;
+/** A minimal usable EIP-1193 provider: ethers requires `request`. */
+let injected: { request: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
   // Deterministic DRPC URLs regardless of the local root .env.
@@ -201,7 +203,8 @@ beforeEach(() => {
   eth.codeResults = {};
   for (const k of Object.keys(eth.directCalls)) delete eth.directCalls[k];
 
-  (globalThis as any).window = { ethers: eth, ethereum: '0xETHEREUM' };
+  injected = { request: vi.fn() };
+  (globalThis as any).window = { ethers: eth, ethereum: injected };
 
   sdk.opts.length = 0;
   sdk.getInfo.mockReset();
@@ -843,8 +846,24 @@ describe('evmSetup / evmRead / signWithSigner', () => {
   it('signWithSigner uses a BrowserProvider over window.ethereum and signs', async () => {
     const si = new SafeIntegration();
     const sig = await si.signWithSigner('hello');
-    expect(eth.browserProviderCalls).toEqual(['0xETHEREUM']);
+    expect(eth.browserProviderCalls).toEqual([injected]);
     expect(sig).toBe('signed:hello');
+  });
+
+  it('ignores a non-provider window.ethereum and signs through the EIP-6963 announcement', async () => {
+    const target = new EventTarget();
+    const announced = { request: vi.fn() };
+    target.addEventListener('eip6963:requestProvider', () => {
+      target.dispatchEvent(
+        new CustomEvent('eip6963:announceProvider', { detail: { provider: announced } }),
+      );
+    });
+    // `{}` has no request(): ethers would throw INVALID_ARGUMENT on it.
+    (globalThis as any).window = discoveryWindow(target, {});
+
+    const si = new SafeIntegration();
+    await expect(si.signWithSigner('hello')).resolves.toBe('signed:hello');
+    expect(eth.browserProviderCalls).toEqual([announced]);
   });
 
   it('signs with the first EIP-6963 announced provider when window.ethereum is missing', async () => {
